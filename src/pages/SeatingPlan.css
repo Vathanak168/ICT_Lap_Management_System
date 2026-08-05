@@ -1,0 +1,286 @@
+.seating-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  animation: fadeIn var(--transition-normal) forwards;
+}
+
+.seating-layout {
+  display: grid;
+  grid-template-columns: 1fr 350px;
+  gap: var(--spacing-6);
+  flex: 1;
+  min-height: 0;
+}
+
+.desks-grid {
+  display: flex;
+  justify-content: center;
+  gap: 3rem;
+  padding: var(--spacing-8);
+  background-color: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2xl);
+  box-shadow: inset 0 2px 10px rgba(0,0,0,0.02);
+  overflow-y: auto;
+  position: relative;
+}
+
+/* Subtle grid pattern background for the "blueprint" look */
+.desks-grid::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: 
+    linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px);
+  background-size: 20px 20px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.lab-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  flex: 1;
+  max-width: 50%;
+  z-index: 1;
+}
+
+.desk-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(80px, 1fr));
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+  border: 1px solid rgba(0,0,0,0.05);
+  border-radius: var(--radius-xl);
+  background-color: rgba(255,255,255,0.4);
+  backdrop-filter: blur(4px);
+}
+
+.teacher-group {
+  grid-template-columns: minmax(80px, 1fr);
+  justify-content: start;
+  background-color: var(--color-primary-light);
+  border: 1px dashed var(--color-primary);
+}
+
+.spacer {
+  visibility: hidden;
+}
+
+/* Desk Item styling - premium object look */
+.desk-item {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-3);
+  cursor: pointer;
+  transition: all var(--transition-bounce);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-height: 90px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02), inset 0 -2px 0 rgba(0,0,0,0.05);
+  position: relative;
+  overflow: hidden;
+}
+
+.desk-item:hover {
+  border-color: var(--color-primary);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-md), 0 10px 20px rgba(79, 70, 229, 0.1);
+}
+
+.desk-item.selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary), var(--shadow-lg);
+  transform: translateY(-2px) scale(1.02);
+}
+
+.desk-item.has-issue {
+  background-color: var(--color-danger-light);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.desk-item.has-issue:hover {
+  box-shadow: var(--shadow-md), 0 10px 20px rgba(239, 68, 68, 0.15);
+}
+
+.desk-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border-light);
+  padding-bottom: var(--spacing-2);
+}
+
+.pc-number {
+  font-weight: 700;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  letter-spacing: 0.05em;
+}
+
+.desk-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+.student-name {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-main);
+}
+
+.desk-password {
+  font-size: 0.7rem;
+  color: #b45309; /* amber 700 */
+  font-family: monospace;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  background: var(--color-warning-light);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.empty-seat {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Desk Details Panel */
+.desk-details-panel {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-surface);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.empty-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  height: 100%;
+  color: var(--color-text-muted);
+  gap: var(--spacing-4);
+  padding: var(--spacing-8);
+}
+
+.panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  padding: var(--spacing-6);
+}
+
+.panel-content h2 {
+  font-size: var(--font-size-xl);
+  letter-spacing: -0.02em;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: var(--spacing-1) var(--spacing-4);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bg-danger { background-color: var(--color-danger-light); color: var(--color-danger); border: 1px dashed rgba(239,68,68,0.5); }
+.bg-success { background-color: var(--color-success-light); color: var(--color-success); border: 1px dashed rgba(16,185,129,0.5); }
+
+.assignment-section {
+  border-top: 1px solid var(--color-border-light);
+  padding-top: var(--spacing-5);
+}
+
+.assignment-section h3 {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--spacing-4);
+}
+
+.student-profile-mini {
+  background-color: var(--color-background);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+  margin-bottom: var(--spacing-5);
+}
+
+.student-profile-mini .avatar {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, var(--color-primary-light), #e0e7ff);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary);
+  box-shadow: inset 0 2px 4px rgba(255,255,255,0.5);
+}
+
+.student-profile-mini h4 {
+  font-size: var(--font-size-base);
+  margin-bottom: 2px;
+}
+
+.password-generator {
+  background-color: var(--color-surface);
+  padding: var(--spacing-5);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.password-generator label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  display: block;
+  margin-bottom: var(--spacing-3);
+}
+
+.password-display {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--color-background);
+  padding: var(--spacing-2) var(--spacing-2) var(--spacing-2) var(--spacing-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-light);
+}
+
+.password-display .pwd {
+  font-size: var(--font-size-xl);
+  font-family: monospace;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--color-primary);
+}
+
+.w-full { width: 100%; }
+.mt-4 { margin-top: var(--spacing-4); }
+.mb-3 { margin-bottom: var(--spacing-3); }

@@ -1,0 +1,130 @@
+.gradebook-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  animation: fadeIn var(--transition-normal) forwards;
+}
+
+.gradebook-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--color-surface);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-border);
+}
+
+.toolbar {
+  padding: var(--spacing-5) var(--spacing-6);
+  border-bottom: 1px solid var(--color-border-light);
+  background-color: var(--color-surface);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.excel-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.excel-table th, .excel-table td {
+  border-bottom: 1px solid var(--color-border-light);
+  border-right: 1px solid var(--color-border-light);
+  padding: 0;
+  transition: background-color var(--transition-fast);
+}
+
+.excel-table th:last-child, .excel-table td:last-child {
+  border-right: none;
+}
+
+.excel-table th {
+  padding: var(--spacing-4) var(--spacing-3);
+  background-color: var(--color-surface-hover);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.excel-table td.text-center {
+  padding: var(--spacing-3) var(--spacing-2);
+}
+
+.excel-table td.font-medium {
+  padding: var(--spacing-3) var(--spacing-6);
+  color: var(--color-text-main);
+}
+
+.highlight-col {
+  background-color: rgba(79, 70, 229, 0.03);
+}
+
+.cell-input-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.cell-input {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  text-align: center;
+  font-size: var(--font-size-base);
+  padding: var(--spacing-4) var(--spacing-2);
+  outline: none;
+  font-weight: 500;
+  color: var(--color-text-main);
+  transition: all var(--transition-fast);
+}
+
+.cell-input:focus {
+  background-color: var(--color-surface);
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+  border-radius: var(--radius-sm);
+  z-index: 2;
+  position: relative;
+}
+
+.cell-input:disabled {
+  background-color: transparent;
+  color: var(--color-text-main);
+}
+
+.font-bold {
+  font-weight: 700;
+}
+
+.text-primary {
+  color: var(--color-primary);
+}
+
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  background-color: var(--color-background);
+  color: var(--color-text-muted);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.rank-1 { background: linear-gradient(135deg, #fef08a, #eab308); color: #713f12; box-shadow: 0 4px 10px rgba(234, 179, 8, 0.3); } /* Gold */
+.rank-2 { background: linear-gradient(135deg, #f1f5f9, #cbd5e1); color: #334155; box-shadow: 0 4px 10px rgba(148, 163, 184, 0.3); } /* Silver */
+.rank-3 { background: linear-gradient(135deg, #ffedd5, #f97316); color: #7c2d12; box-shadow: 0 4px 10px rgba(249, 115, 22, 0.3); } /* Bronze */

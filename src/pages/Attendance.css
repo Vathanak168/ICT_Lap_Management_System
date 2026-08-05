@@ -1,0 +1,84 @@
+.attendance-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.date-selector {
+  margin-bottom: var(--spacing-4);
+  padding-bottom: var(--spacing-4);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.current-date input[type="date"] {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-main);
+  background-color: var(--color-surface);
+  transition: all var(--transition-fast);
+}
+
+.current-date input[type="date"]:focus {
+  border-color: var(--color-text-muted);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--color-text-muted);
+}
+
+.attendance-table th {
+  text-align: center;
+}
+
+.attendance-table th:nth-child(1),
+.attendance-table th:nth-child(2),
+.attendance-table td:nth-child(1),
+.attendance-table td:nth-child(2) {
+  text-align: left;
+}
+
+.status-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  transition: all var(--transition-fast);
+  background-color: var(--color-background);
+}
+
+.status-btn.present.selected {
+  background-color: var(--color-success);
+  border-color: var(--color-success);
+  color: white;
+}
+
+.status-btn.absent.selected {
+  background-color: var(--color-danger);
+  border-color: var(--color-danger);
+  color: white;
+}
+
+.status-btn.excused.selected {
+  background-color: var(--color-warning);
+  border-color: var(--color-warning);
+  color: white;
+}
+
+.status-btn.late.selected {
+  background-color: #64748b; /* Slate 500 */
+  border-color: #64748b;
+  color: white;
+}
+
+.status-btn:not(.selected):hover {
+  border-color: #a3a3a3;
+  background-color: var(--color-surface-hover);
+}

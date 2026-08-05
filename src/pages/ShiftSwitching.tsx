@@ -1,0 +1,298 @@
+import { useState, useEffect } from 'react';
+import { Search, ArrowLeftRight, UserPlus, Users, Trash2 } from 'lucide-react';
+import { initDB } from '../store/db';
+import type { Student, ClassRecord } from '../store/db';
+
+const ShiftSwitching = () => {
+  const [students, setStudents] = useState<Student[]>([]);
+  const [classes, setClasses] = useState<ClassRecord[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [selectedAlternateClassId, setSelectedAlternateClassId] = useState('');
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    const db = await initDB();
+    const allStudents = await db.getAll('students');
+    const allClasses = await db.getAll('classes');
+    setStudents(allStudents);
+    setClasses(allClasses);
+  };
+
+  const handleRegister = async () => {
+    if (!selectedStudentId || !selectedAlternateClassId) {
+      alert('សូមជ្រើសរើសសិស្ស និងថ្នាក់បម្រុង');
+      return;
+    }
+
+    const student = students.find(s => s.id === selectedStudentId);
+    if (!student) return;
+
+    if (student.class === selectedAlternateClassId) {
+      alert('ថ្នាក់បម្រុងមិនអាចដូចគ្នានឹងថ្នាក់បច្ចុប្បន្នទេ!');
+      return;
+    }
+
+    if (window.confirm(`តើអ្នកពិតជាចង់កំណត់សិស្ស ${student.name} ជាសិស្សប្តូរវេនមែនទេ?`)) {
+      try {
+        const db = await initDB();
+        const tx = db.transaction('students', 'readwrite');
+        
+        const updatedStudent = {
+          ...student,
+          isShiftSwitching: true,
+          alternateClassId: selectedAlternateClassId
+        };
+        
+        await tx.store.put(updatedStudent);
+        await tx.done;
+        
+        setSelectedStudentId('');
+        setSelectedAlternateClassId('');
+        loadData();
+      } catch (error: any) {
+        alert('មានបញ្ហាក្នុងការរក្សាទុកទិន្នន័យ។ សូមពិនិត្យមើលថាតើអ្នកបាន Run SQL ដោះស្រាយ Column ថ្មីនៅក្នុង Supabase ឬនៅ? Error: ' + error.message);
+      }
+    }
+  };
+
+  const handleSwitchShift = async (student: Student) => {
+    if (!student.alternateClassId) return;
+
+    const targetClass = classes.find(c => c.id === student.alternateClassId);
+    if (!targetClass) {
+      alert('រកមិនឃើញថ្នាក់បម្រុងទេ!');
+      return;
+    }
+
+    if (window.confirm(`តើអ្នកចង់ប្តូរសិស្ស ${student.name} ទៅកាន់ថ្នាក់ ${targetClass.name} មែនទេ?`)) {
+      const db = await initDB();
+      const tx = db.transaction('students', 'readwrite');
+      
+      // Swap current class and alternate class
+      const oldClass = student.class;
+      const updatedStudent = {
+        ...student,
+        class: student.alternateClassId,
+        alternateClassId: oldClass,
+        shift: targetClass.shift // Update shift to match new class
+      };
+      
+      await tx.store.put(updatedStudent);
+      await tx.done;
+      
+      loadData();
+    }
+  };
+
+  const handleRemoveStatus = async (student: Student) => {
+    if (window.confirm(`តើអ្នកចង់ដកសិស្ស ${student.name} ពីបញ្ជីសិស្សប្តូរវេនមែនទេ?`)) {
+      const db = await initDB();
+      const tx = db.transaction('students', 'readwrite');
+      
+      const updatedStudent = {
+        ...student,
+        isShiftSwitching: false,
+        alternateClassId: ''
+      };
+      
+      await tx.store.put(updatedStudent);
+      await tx.done;
+      
+      loadData();
+    }
+  };
+
+  const getClassName = (classId: string) => {
+    const cls = classes.find(c => c.id === classId);
+    return cls ? cls.name : 'Unknown';
+  };
+
+  const getShiftName = (shift?: string) => {
+    if (shift === 'Morning') return 'ព្រឹក';
+    if (shift === 'Afternoon') return 'រសៀល';
+    if (shift === 'Evening') return 'យប់';
+    return shift || 'Unknown';
+  };
+
+  // Only show students who are shift switchers
+  const shiftSwitchers = students.filter(s => s.isShiftSwitching);
+  
+  // Filter for search
+  const filteredSwitchers = shiftSwitchers.filter(s => 
+    s.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    s.studentId.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Eligible students for the dropdown (not already a switcher)
+  const eligibleStudents = students.filter(s => !s.isShiftSwitching);
+
+  // Helper to extract grade from class name (e.g. "8A1" -> "8")
+  const getGrade = (className: string) => {
+    const match = className.match(/^(\d+)/);
+    return match ? match[1] : '';
+  };
+
+  // Determine eligible alternate classes based on selected student
+  const selectedStudent = students.find(s => s.id === selectedStudentId);
+  const eligibleAlternateClasses = classes.filter(c => {
+    if (!selectedStudent) return true; // Show all if no student selected
+    
+    // 1. Must not be the student's current class
+    if (c.id === selectedStudent.class) return false;
+    
+    // 2. Must be the same grade
+    const studentClassObj = classes.find(cl => cl.id === selectedStudent.class);
+    if (!studentClassObj) return false;
+    
+    return getGrade(c.name) === getGrade(studentClassObj.name);
+  });
+
+  return (
+    <div className="flex flex-col w-full pb-10">
+      
+      {/* Top Panel: Registration */}
+      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6">
+        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
+          <span>ចុះឈ្មោះសិស្សប្តូរវេន (Register Shift-Switching Student)</span>
+        </div>
+        <div className="p-4 flex flex-col md:flex-row gap-4 items-end">
+          <div className="flex-1 w-full">
+            <label className="text-xs font-bold text-gray-800 uppercase tracking-wide block mb-1.5">ជ្រើសរើសសិស្ស *</label>
+            <select 
+              className="w-full bg-white border border-gray-300 text-gray-800 text-sm rounded-sm px-3 py-2 outline-none focus:border-[#48b5c9] focus:ring-1 focus:ring-[#48b5c9] transition-all"
+              value={selectedStudentId}
+              onChange={(e) => setSelectedStudentId(e.target.value)}
+            >
+              <option value="">-- ជ្រើសរើសសិស្ស --</option>
+              {eligibleStudents.map(s => (
+                <option key={s.id} value={s.id}>{s.studentId} - {s.name} ({getClassName(s.class)})</option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="flex-1 w-full">
+            <label className="text-xs font-bold text-gray-800 uppercase tracking-wide block mb-1.5">ជ្រើសរើសថ្នាក់បម្រុង *</label>
+            <select 
+              className="w-full bg-white border border-gray-300 text-gray-800 text-sm rounded-sm px-3 py-2 outline-none focus:border-[#48b5c9] focus:ring-1 focus:ring-[#48b5c9] transition-all"
+              value={selectedAlternateClassId}
+              onChange={(e) => setSelectedAlternateClassId(e.target.value)}
+              disabled={!selectedStudentId}
+            >
+              <option value="">-- ជ្រើសរើសថ្នាក់ --</option>
+              {eligibleAlternateClasses.map(c => (
+                <option key={c.id} value={c.id}>{c.name} ({getShiftName(c.shift)})</option>
+              ))}
+            </select>
+          </div>
+          
+          <button 
+            className="bg-[#48b5c9] hover:bg-[#3aa3b7] text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-all h-[38px] w-full md:w-auto justify-center"
+            onClick={handleRegister}
+          >
+            <UserPlus size={16} /> បន្ថែម
+          </button>
+        </div>
+      </div>
+
+      {/* Middle Panel: Filter */}
+      <div className="flex flex-col gap-1.5 mb-4 max-w-xs">
+        <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ស្វែងរក (Search)</label>
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <Search size={16} className="text-gray-400" />
+          </div>
+          <input 
+            type="text"
+            placeholder="អត្តលេខ ឈ្មោះ..."
+            className="w-full bg-white border border-gray-300 text-gray-800 text-sm rounded-sm pl-9 pr-3 py-2 outline-none focus:border-[#48b5c9] focus:ring-1 focus:ring-[#48b5c9] transition-all"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+      </div>
+
+      {/* Bottom Panel: Table */}
+      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6">
+        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
+          <span>បញ្ជីសិស្សប្តូរវេន (Shift-Switching Students)</span>
+          <span className="text-xs font-medium bg-white/20 px-2 py-0.5 rounded">សរុប {filteredSwitchers.length} នាក់</span>
+        </div>
+        <div className="overflow-x-auto p-0">
+          <table className="w-full text-left border-collapse min-w-[800px]">
+            <thead className="bg-[#f8f9fa] text-gray-800 sticky top-0 z-10 border-b border-gray-300">
+              <tr>
+                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">អត្តលេខ</th>
+                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ឈ្មោះសិស្ស</th>
+                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ភេទ</th>
+                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ថ្នាក់បច្ចុប្បន្ន</th>
+                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ថ្នាក់បម្រុង</th>
+                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider text-right">សកម្មភាព</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredSwitchers.map(s => (
+                <tr key={s.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100">
+                  <td className="px-5 py-3 font-mono text-sm text-gray-600">{s.studentId}</td>
+                  <td className="px-5 py-3 font-bold text-gray-800 flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-orange-50 flex items-center justify-center text-orange-600">
+                      <Users size={16} />
+                    </div>
+                    {s.name}
+                  </td>
+                  <td className="px-5 py-3 text-sm text-gray-600">{s.gender}</td>
+                  <td className="px-5 py-3">
+                    <span className="bg-blue-50 text-blue-800 text-xs px-2.5 py-1 rounded-sm font-medium border border-blue-200 block w-max">
+                      {getClassName(s.class)} ({getShiftName(s.shift)})
+                    </span>
+                  </td>
+                  <td className="px-5 py-3">
+                    <span className="bg-gray-100 text-gray-800 text-xs px-2.5 py-1 rounded-sm font-medium border border-gray-200 block w-max">
+                      {getClassName(s.alternateClassId!)}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <button 
+                        onClick={() => handleSwitchShift(s)}
+                        className="bg-orange-100 text-orange-700 hover:bg-orange-200 hover:text-orange-800 px-3 py-1.5 rounded-sm text-xs font-bold transition-colors flex items-center gap-1.5"
+                      >
+                        <ArrowLeftRight size={14} /> ប្តូរវេន
+                      </button>
+                      <button 
+                        onClick={() => handleRemoveStatus(s)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-sm transition-colors ml-2"
+                        title="ដកចេញពីបញ្ជីប្តូរវេន"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filteredSwitchers.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <div className="flex flex-col items-center justify-center p-12 text-gray-500">
+                      <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                        <ArrowLeftRight size={24} className="text-gray-400" />
+                      </div>
+                      <p className="text-base font-medium">មិនមានសិស្សប្តូរវេនទេ</p>
+                      <p className="text-sm mt-1">សូមជ្រើសរើសសិស្សនៅខាងលើដើម្បីចាប់ផ្តើម។</p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+    </div>
+  );
+};
+
+export default ShiftSwitching;

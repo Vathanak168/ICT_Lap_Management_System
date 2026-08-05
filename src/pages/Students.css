@@ -1,0 +1,108 @@
+.students-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.students-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--color-surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.table-toolbar {
+  padding: var(--spacing-4) var(--spacing-5);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--color-surface);
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  background-color: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
+  width: 320px;
+  transition: all var(--transition-fast);
+}
+
+.search-box:focus-within {
+  background-color: var(--color-surface);
+  border-color: #a3a3a3;
+  box-shadow: 0 0 0 1px #a3a3a3;
+}
+
+.search-box input {
+  border: none;
+  background: transparent;
+  width: 100%;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-main);
+  outline: none;
+}
+
+.search-box input::placeholder {
+  color: #a3a3a3;
+}
+
+.font-medium {
+  font-weight: 500;
+  color: var(--color-text-main);
+}
+
+.badge-password {
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+  font-family: monospace;
+  letter-spacing: 1px;
+  padding: 2px 8px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: var(--font-size-xs);
+  border: 1px solid rgba(217, 119, 6, 0.2);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: var(--spacing-2);
+}
+
+.status-dot.active { background-color: var(--color-success); }
+.status-dot.dropped { background-color: var(--color-danger); }
+
+.action-buttons {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.btn-icon-small {
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  color: var(--color-text-muted);
+}
+
+.btn-icon-small:hover {
+  background-color: var(--color-surface-hover);
+  color: var(--color-text-main);
+}
+
+.text-blue:hover { color: var(--color-text-main); }
+.text-red:hover { color: var(--color-danger); background-color: var(--color-danger-light); }

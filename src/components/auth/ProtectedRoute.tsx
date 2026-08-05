@@ -1,0 +1,39 @@
+import React from 'react';
+import { Navigate, Outlet } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import { Loader2 } from 'lucide-react';
+
+interface ProtectedRouteProps {
+  allowedRoles?: ('admin' | 'teacher')[];
+}
+
+const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allowedRoles }) => {
+  const { session, isLoading, role } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-10 h-10 text-[#2a5298] animate-spin" />
+          <p className="text-gray-500 font-khmer">កំពុងផ្ទុកទិន្នន័យ...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    // TEMPORARY: Allow bypassing login for development before Supabase is connected
+    // return <Navigate to="/login" replace />;
+    console.warn('Dev Mode: Bypassing authentication');
+  }
+
+  if (session && allowedRoles && role && !allowedRoles.includes(role)) {
+    // User doesn't have the required role, redirect to dashboard or unauthorized page
+    return <Navigate to="/" replace />;
+  }
+
+  // Authorized, render child routes
+  return <Outlet />;
+};
+
+export default ProtectedRoute;
