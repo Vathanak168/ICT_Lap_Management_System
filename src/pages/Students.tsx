@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Search, UserPlus, MoreVertical, Edit2, Trash2, KeyRound, Download, Eye, User, Users, ArrowLeftRight } from 'lucide-react';
 import { initDB } from '../store/db';
 import type { Student, ClassRecord } from '../store/db';
+import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
@@ -17,28 +18,65 @@ const Students = () => {
   
   const [showModal, setShowModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   
   const [currentStudent, setCurrentStudent] = useState<Partial<Student>>({
     studentId: '', name: '', englishName: '', gender: 'M', class: '', shift: 'Morning', status: 'Active'
   });
 
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const { activeYear } = useAcademicYear();
+  
+  const loadRequestRef = useRef(0);
 
   useEffect(() => {
-    loadData();
+    // Reset state on year change
+    if (!activeYear) {
+      setStudents([]);
+      setClasses([]);
+      setFilterClass('All');
+      setShowModal(false);
+      setActiveMenuId(null);
+      return;
+    }
+    
+    // Auto reset filters when year changes
+    setFilterClass('All');
+    setShowModal(false);
+    setActiveMenuId(null);
+
+    void fetchData(activeYear);
     
     // Click outside to close menu
     const handleClickOutside = () => setActiveMenuId(null);
     document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, []);
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [activeYear]);
 
-  const loadData = async () => {
-    const db = await initDB();
-    const allStudents = await db.getAll('students');
-    const allClasses = await db.getAll('classes');
-    setClasses(allClasses);
-    setStudents(allStudents);
+  const fetchData = async (targetYear: string) => {
+    if (!targetYear) return;
+    
+    const requestId = ++loadRequestRef.current;
+    
+    try {
+      const db = await initDB();
+      const [allStudents, allClasses] = await Promise.all([
+        db.getAll<Student>('students', targetYear),
+        db.getAll<ClassRecord>('classes', targetYear)
+      ]);
+
+      if (requestId !== loadRequestRef.current) return;
+      
+      setClasses(allClasses);
+      setStudents(allStudents);
+    } catch (error) {
+      if (requestId === loadRequestRef.current) {
+        console.error('Failed to load students:', error);
+      }
+    }
   };
 
   const handleSave = async () => {
@@ -47,50 +85,113 @@ const Students = () => {
       return;
     }
     
-    const db = await initDB();
-    const newStudent: Student = {
-      ...(currentStudent as Student),
-      id: currentStudent.id || Date.now().toString(),
-    };
+    if (!activeYear) return;
+    const targetYear = activeYear;
     
-    const tx = db.transaction('students', 'readwrite');
-    await tx.store.put(newStudent);
-    await tx.done;
+    // Uniqueness check for studentId in the current academic year
+    const isDuplicate = students.some(
+      s => s.studentId.trim().toLowerCase() === currentStudent.studentId?.trim().toLowerCase() && 
+      s.id !== currentStudent.id
+    );
     
-    setShowModal(false);
-    loadData();
+    if (isDuplicate) {
+      alert(`អត្តលេខ ${currentStudent.studentId} មានរួចហើយនៅក្នុងឆ្នាំសិក្សានេះ!`);
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const db = await initDB();
+      
+      if (currentStudent.id) {
+        // Edit mode: Use partial update to prevent overwriting PC, Password, etc.
+        await db.update('students', currentStudent.id, {
+          studentId: currentStudent.studentId.trim(),
+          name: currentStudent.name.trim(),
+          englishName: (currentStudent.englishName || '').trim(),
+          gender: currentStudent.gender,
+          class: currentStudent.class,
+          shift: currentStudent.shift,
+          status: currentStudent.status
+        });
+      } else {
+        // Add mode: Use full put
+        const newStudent: Student = {
+          ...(currentStudent as Student),
+          id: crypto.randomUUID(),
+          academicYear: targetYear,
+          studentId: currentStudent.studentId.trim(),
+          name: currentStudent.name.trim(),
+          englishName: (currentStudent.englishName || '').trim(),
+          pcNumber: null,
+          password: null,
+          isShiftSwitching: false,
+          alternateClassId: ''
+        };
+        await db.put('students', newStudent);
+      }
+      
+      setShowModal(false);
+      await fetchData(targetYear);
+    } catch (error: any) {
+      console.error('Failed to save student:', error);
+      alert('មានកំហុសក្នុងការរក្សាទុក៖ ' + error.message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('តើអ្នកពិតជាចង់លុបទិន្នន័យសិស្សនេះមែនទេ?')) {
-      const db = await initDB();
-      const tx = db.transaction('students', 'readwrite');
-      await tx.store.delete(id);
-      await tx.done;
-      loadData();
+    if (!activeYear) return;
+    const targetYear = activeYear;
+
+    if (window.confirm('តើអ្នកពិតជាចង់លុបទិន្នន័យសិស្សនេះមែនទេ? (លុបហើយមិនអាចយកមកវិញបានទេ)')) {
+      setIsSaving(true);
+      try {
+        const db = await initDB();
+        await db.delete('students', id);
+        await fetchData(targetYear);
+      } catch (error) {
+        console.error('Failed to delete student:', error);
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
   
   const handleResetPassword = async (student: Student) => {
+    if (!activeYear) return;
+    const targetYear = activeYear;
+
     if (window.confirm(`តើអ្នកចង់ Reset Password របស់សិស្ស ${student.name} មែនទេ?`)) {
-      const db = await initDB();
-      const tx = db.transaction('students', 'readwrite');
-      const updatedStudent = { ...student, status: 'ResetRequired' as const };
-      await tx.store.put(updatedStudent);
-      await tx.done;
-      loadData();
-      // Show toast ideally
+      setIsSaving(true);
+      try {
+        const db = await initDB();
+        await db.update('students', student.id, { 
+          status: 'ResetRequired', 
+          password: null // Actually clear the password
+        });
+        await fetchData(targetYear);
+      } catch (error) {
+        console.error('Failed to reset password:', error);
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
 
   const openEditModal = (student: Student) => {
-    setCurrentStudent(student);
+    setCurrentStudent({ ...student });
     setShowModal(true);
   };
+
+  // Pre-compute map for fast lookups
+  const classNameMap = useMemo(() => {
+    return new Map(classes.map(c => [c.id, c.name]));
+  }, [classes]);
   
   const getClassName = (classId: string) => {
-    const c = classes.find(cls => cls.id === classId);
-    return c ? c.name : classId;
+    return classNameMap.get(classId) || classId;
   };
   
   const translateShift = (shift: string) => {
@@ -102,12 +203,15 @@ const Students = () => {
     }
   };
 
-  const filteredStudents = students.filter(s => {
-    const matchClass = filterClass === 'All' || s.class === filterClass;
-    const matchSearch = s.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                        s.studentId.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchClass && matchSearch;
-  });
+  const filteredStudents = useMemo(() => {
+    const term = searchTerm.toLowerCase();
+    return students.filter(s => {
+      const matchClass = filterClass === 'All' || s.class === filterClass;
+      const matchSearch = s.name.toLowerCase().includes(term) || 
+                          s.studentId.toLowerCase().includes(term);
+      return matchClass && matchSearch;
+    });
+  }, [students, filterClass, searchTerm]);
 
   return (
     <div className="flex flex-col w-full pb-10">
@@ -153,58 +257,87 @@ const Students = () => {
           <div className="flex flex-wrap items-center gap-3 mt-4 xl:mt-0">
             <button 
               className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
-              disabled={!students.some(s => !s.englishName)}
+              disabled={isProcessing || isSaving || !activeYear || !students.some(s => !s.englishName)}
               onClick={async () => {
+                if (!activeYear) return;
+                const targetYear = activeYear;
                 if (!window.confirm('តើអ្នកចង់បកប្រែឈ្មោះសិស្សដែលមិនទាន់មានឈ្មោះអង់គ្លេសដោយស្វ័យប្រវត្តិមែនទេ? (ទិន្នន័យនឹងត្រូវរក្សាទុកក្នុង Database)')) return;
-                const db = await initDB();
-                const tx = db.transaction('students', 'readwrite');
-                const newStudents = [...students];
-                let translatedCount = 0;
-                for (let i = 0; i < newStudents.length; i++) {
-                  if (!newStudents[i].englishName) {
-                    newStudents[i] = { ...newStudents[i], englishName: translateKhmerToEnglish(newStudents[i].name) };
-                    await tx.store.put(newStudents[i]);
-                    translatedCount++;
+                setIsProcessing(true);
+                try {
+                  const db = await initDB();
+                  const targetStudents = students.filter(s => !s.englishName);
+                  let translatedCount = 0;
+                  
+                  // Use loop of partial updates instead of putMany to avoid full overwrites
+                  for (const s of targetStudents) {
+                     await db.update('students', s.id, {
+                        englishName: translateKhmerToEnglish(s.name)
+                     });
+                     translatedCount++;
                   }
+                  
+                  if (translatedCount > 0) {
+                    await fetchData(targetYear);
+                    alert(`បានបកប្រែនិងរក្សាទុកឈ្មោះសិស្សចំនួន ${translatedCount} នាក់ជោគជ័យ!`);
+                  }
+                } catch (error) {
+                  console.error('Translation failed:', error);
+                  alert('មានកំហុសពេលបកប្រែ');
+                } finally {
+                  setIsProcessing(false);
                 }
-                await tx.done;
-                setStudents(newStudents);
-                alert(`បានបកប្រែនិងរក្សាទុកឈ្មោះសិស្សចំនួន ${translatedCount} នាក់ជោគជ័យ! លោកអ្នកអាចកែប្រែឈ្មោះទាំងនេះបានបើសិនជាវាមិនត្រឹមត្រូវ។`);
               }}
             >
-              បកប្រែទាំងអស់
+              {isProcessing ? 'កំពុងដំណើរការ...' : 'បកប្រែទាំងអស់'}
             </button>
             <button 
               className="bg-white border border-red-200 text-red-600 hover:bg-red-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
-              disabled={!students.some(s => s.englishName)}
+              disabled={isProcessing || isSaving || !activeYear || !students.some(s => s.englishName)}
               onClick={async () => {
+                if (!activeYear) return;
+                const targetYear = activeYear;
                 if (!window.confirm('តើអ្នកពិតជាចង់លុបទិន្នន័យបកប្រែទាំងអស់ចេញមែនទេ? (សកម្មភាពនេះមិនអាចត្រលប់វិញបានទេ)')) return;
-                const db = await initDB();
-                const tx = db.transaction('students', 'readwrite');
-                const newStudents = [...students];
-                for (let i = 0; i < newStudents.length; i++) {
-                  if (newStudents[i].englishName) {
-                    newStudents[i] = { ...newStudents[i], englishName: '' };
-                    await tx.store.put(newStudents[i]);
+                setIsProcessing(true);
+                try {
+                  const db = await initDB();
+                  const targetStudents = students.filter(s => !!s.englishName);
+                  
+                  for (const s of targetStudents) {
+                     await db.update('students', s.id, { englishName: '' });
                   }
+                  
+                  if (targetStudents.length > 0) {
+                    await fetchData(targetYear);
+                  }
+                } catch (error) {
+                  console.error('Delete translation failed:', error);
+                } finally {
+                  setIsProcessing(false);
                 }
-                await tx.done;
-                setStudents(newStudents);
               }}
             >
               លុបការបកប្រែ
             </button>
             <button 
-              className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors"
+              className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
               onClick={() => setShowImportModal(true)}
+              disabled={isProcessing || isSaving || !activeYear}
             >
               <Download size={16} /> Import Excel
             </button>
             <button 
-              className="bg-[#48b5c9] hover:bg-[#3aa3b7] hover:shadow-md text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-all border border-transparent"
+              className="bg-[#48b5c9] hover:bg-[#3aa3b7] hover:shadow-md text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-all border border-transparent disabled:opacity-50"
+              disabled={!activeYear || isProcessing || isSaving}
               onClick={() => {
+                const initialClass = classes.length > 0 ? classes[0] : null;
                 setCurrentStudent({
-                  studentId: '', name: '', englishName: '', gender: 'M', class: classes.length > 0 ? classes[0].id : '', shift: 'Morning', status: 'Active'
+                  studentId: '', 
+                  name: '', 
+                  englishName: '', 
+                  gender: 'M', 
+                  class: initialClass?.id || '', 
+                  shift: initialClass?.shift || 'Morning', 
+                  status: 'Active'
                 });
                 setShowModal(true);
               }}
@@ -216,12 +349,12 @@ const Students = () => {
       </div>
 
       {/* Bottom Panel: Table */}
-      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6">
+      <div className={`bg-white border border-gray-200 shadow-sm rounded-sm mb-6 ${isSaving ? 'opacity-60 pointer-events-none' : ''}`}>
         <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
           <span>បញ្ជីឈ្មោះសិស្ស (List of Students)</span>
           <span className="text-xs font-medium bg-white/20 px-2 py-0.5 rounded">សរុប {filteredStudents.length} នាក់ (សកម្ម {students.filter(s => s.status === 'Active').length})</span>
         </div>
-        <div className="overflow-x-auto p-0">
+        <div className="overflow-x-auto p-0 min-h-[350px]">
           <table className="w-full text-left border-collapse min-w-[800px]">
             <thead className="bg-[#f8f9fa] text-gray-800 sticky top-0 z-10 border-b border-gray-300">
               <tr>
@@ -234,7 +367,9 @@ const Students = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredStudents.map((student) => (
+              {filteredStudents.map((student, index) => {
+                const isNearBottom = index >= filteredStudents.length - 2 && filteredStudents.length > 5;
+                return (
                 <tr key={student.id} className="hover:bg-gray-50/50 transition-colors">
                   <td className="border-b border-gray-100 px-5 py-4 text-sm font-medium text-gray-500">{student.studentId}</td>
                   <td className="border-b border-gray-100 px-5 py-4 font-bold text-gray-800 flex items-center gap-3">
@@ -271,7 +406,7 @@ const Students = () => {
                     </button>
 
                     {activeMenuId === student.id && (
-                      <div className="absolute right-8 top-10 w-48 bg-white border border-gray-200 rounded-sm shadow-lg py-1 z-20 text-left">
+                      <div className={`absolute right-8 ${isNearBottom ? 'bottom-8' : 'top-10'} w-48 bg-white border border-gray-200 rounded-sm shadow-lg py-1 z-[99] text-left`}>
                         <button className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
                           <Eye size={16} /> ព័ត៌មានលម្អិត
                         </button>
@@ -283,14 +418,14 @@ const Students = () => {
                         </button>
                         <button 
                           className="w-full text-left px-4 py-2 text-sm text-yellow-600 hover:bg-yellow-50 flex items-center gap-2"
-                          onClick={() => { setActiveMenuId(null); handleResetPassword(student); }}
+                          onClick={() => { setActiveMenuId(null); void handleResetPassword(student); }}
                         >
                           <KeyRound size={16} /> Reset Password
                         </button>
                         <div className="h-px bg-gray-200 my-1"></div>
                         <button 
                           className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                          onClick={() => { setActiveMenuId(null); handleDelete(student.id); }}
+                          onClick={() => { setActiveMenuId(null); void handleDelete(student.id); }}
                         >
                           <Trash2 size={16} /> លុបគណនី
                         </button>
@@ -298,7 +433,8 @@ const Students = () => {
                     )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {filteredStudents.length === 0 && (
                 <tr>
                   <td colSpan={6}>
@@ -327,15 +463,17 @@ const Students = () => {
           <div>
             <label className="block text-sm font-medium text-primary mb-1">អត្តលេខសិស្ស</label>
             <Input 
-              value={currentStudent.studentId} 
+              value={currentStudent.studentId || ''} 
               onChange={(e) => setCurrentStudent({...currentStudent, studentId: e.target.value})}
+              disabled={isSaving}
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-primary mb-1">ឈ្មោះពេញ (ខ្មែរ)</label>
             <Input 
-              value={currentStudent.name} 
+              value={currentStudent.name || ''} 
               onChange={(e) => setCurrentStudent({...currentStudent, name: e.target.value})}
+              disabled={isSaving}
             />
           </div>
           <div>
@@ -344,14 +482,16 @@ const Students = () => {
               value={currentStudent.englishName || ''} 
               onChange={(e) => setCurrentStudent({...currentStudent, englishName: e.target.value})}
               placeholder="Ex: Keo Piseth"
+              disabled={isSaving}
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-primary mb-1">ភេទ</label>
             <select 
-              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white"
-              value={currentStudent.gender}
+              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white disabled:opacity-50"
+              value={currentStudent.gender || 'M'}
               onChange={(e) => setCurrentStudent({...currentStudent, gender: e.target.value as 'M'|'F'})}
+              disabled={isSaving}
             >
               <option value="M">ប្រុស</option>
               <option value="F">ស្រី</option>
@@ -360,12 +500,13 @@ const Students = () => {
           <div>
             <label className="block text-sm font-medium text-primary mb-1">ថ្នាក់</label>
             <select 
-              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white"
-              value={currentStudent.class}
+              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white disabled:opacity-50"
+              value={currentStudent.class || ''}
               onChange={(e) => {
                 const cls = classes.find(c => c.id === e.target.value);
                 setCurrentStudent({...currentStudent, class: e.target.value, shift: cls ? cls.shift : 'Morning'});
               }}
+              disabled={isSaving}
             >
               <option value="">ជ្រើសរើសថ្នាក់...</option>
               {classes.map(c => (
@@ -376,9 +517,10 @@ const Students = () => {
           <div>
             <label className="block text-sm font-medium text-primary mb-1">ស្ថានភាពគណនី</label>
             <select 
-              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white"
-              value={currentStudent.status}
-              onChange={(e) => setCurrentStudent({...currentStudent, status: e.target.value as any})}
+              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white disabled:opacity-50"
+              value={currentStudent.status || 'Active'}
+              onChange={(e) => setCurrentStudent({...currentStudent, status: e.target.value as Student['status']})}
+              disabled={isSaving}
             >
               <option value="Active">សកម្ម (Active)</option>
               <option value="Inactive">អសកម្ម (Inactive)</option>
@@ -387,8 +529,10 @@ const Students = () => {
           </div>
           
           <div className="pt-4 flex justify-end gap-3 border-t border-border mt-6">
-            <Button variant="secondary" onClick={() => setShowModal(false)}>បោះបង់</Button>
-            <Button variant="primary" onClick={handleSave}>រក្សាទុក</Button>
+            <Button variant="secondary" onClick={() => setShowModal(false)} disabled={isSaving}>បោះបង់</Button>
+            <Button variant="primary" onClick={() => void handleSave()} disabled={isSaving}>
+               {isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក'}
+            </Button>
           </div>
         </div>
       </Modal>

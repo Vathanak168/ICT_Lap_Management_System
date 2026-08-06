@@ -10,7 +10,8 @@ import {
   Home,
   ShieldAlert,
   ArrowLeftRight,
-  User
+  User,
+  AppWindow
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -25,8 +26,10 @@ const Sidebar = () => {
     { name: 'វត្តមាន', path: '/attendance', icon: <CheckSquare size={20} /> },
     { name: 'ប្លង់តុ', path: '/seating', icon: <Monitor size={20} /> },
     { name: 'ពិន្ទុ', path: '/grades', icon: <Table size={20} /> },
+    { name: 'កាលវិភាគមេរៀន', path: '/lesson-plan', icon: <BookOpen size={20} /> },
     { name: 'កំណត់ហេតុ', path: '/lesson-log', icon: <BookOpen size={20} /> },
     { name: 'បញ្ហាកុំព្យូទ័រ', path: '/issues', icon: <Wrench size={20} /> },
+    { name: 'Mini App', path: '/miniapps', icon: <AppWindow size={20} /> },
   ];
 
   if (role === 'admin') {

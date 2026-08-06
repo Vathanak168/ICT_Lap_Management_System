@@ -1,41 +1,90 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { DownloadCloud, UploadCloud, Trash2, ShieldAlert, FileSpreadsheet } from 'lucide-react';
 import { exportDatabase, importDatabase, clearDatabase } from '../utils/backup';
 import { initDB } from '../store/db';
+import type { Student } from '../store/db';
 import { exportToExcel } from '../utils/excel';
 import { PageHeader } from '../components/ui/PageHeader';
+import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { useAuth } from '../contexts/AuthContext';
+
+type Operation = 'backup' | 'restore' | 'excel' | 'clear' | 'api' | null;
+
+const getLocalDate = () => {
+  const dateObj = new Date();
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const Settings = () => {
+  const { activeYear } = useAcademicYear();
+  const { role } = useAuth();
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [loading, setLoading] = useState(false);
+  const [operation, setOperation] = useState<Operation>(null);
   const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
   
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const reloadTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   // Gemini API Key State
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('GEMINI_API_KEY') || '');
+  const [apiKey, setApiKey] = useState(() => {
+    try {
+      return localStorage.getItem('GEMINI_API_KEY') || '';
+    } catch {
+      return '';
+    }
+  });
   const [showApiKey, setShowApiKey] = useState(false);
 
-  const handleSaveApiKey = () => {
-    localStorage.setItem('GEMINI_API_KEY', apiKey);
-    showMessage('រក្សាទុក API Key ជោគជ័យ!', 'success');
-  };
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    };
+  }, []);
 
   const showMessage = (text: string, type: 'success' | 'error') => {
     setMessage({ text, type });
-    setTimeout(() => setMessage(null), 3000);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setMessage(null), 3000);
+  };
+
+  const handleSaveApiKey = () => {
+    setOperation('api');
+    try {
+      localStorage.setItem('GEMINI_API_KEY', apiKey);
+      showMessage('រក្សាទុក API Key ជោគជ័យ!', 'success');
+    } catch (error) {
+      console.error('Failed to save API key:', error);
+      showMessage('មានបញ្ហាក្នុងការរក្សាទុក (Storage Error)', 'error');
+    } finally {
+      setOperation(null);
+    }
   };
 
   const handleExportBackup = async () => {
-    setLoading(true);
-    const success = await exportDatabase();
-    if (success) {
-      showMessage('ទាញយកទិន្នន័យបម្រុង (Backup) ជោគជ័យ!', 'success');
-    } else {
+    if (operation) return;
+    setOperation('backup');
+    try {
+      const success = await exportDatabase();
+      if (success) {
+        showMessage('ទាញយកទិន្នន័យបម្រុង (Backup) ជោគជ័យ!', 'success');
+      } else {
+        throw new Error('Export returned false');
+      }
+    } catch (error) {
+      console.error('Backup failed:', error);
       showMessage('មានបញ្ហាក្នុងការទាញយកទិន្នន័យបម្រុង', 'error');
+    } finally {
+      setOperation(null);
     }
-    setLoading(false);
   };
 
   const handleImportClick = () => {
+    if (operation) return;
     fileInputRef.current?.click();
   };
 
@@ -43,53 +92,90 @@ const Settings = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setLoading(true);
-    const success = await importDatabase(file);
-    if (success) {
-      showMessage('បញ្ចូលទិន្នន័យ (Restore) ជោគជ័យ!', 'success');
-      // Optionally reload the page to apply changes
-      setTimeout(() => window.location.reload(), 1500);
-    } else {
-      showMessage('ឯកសារមិនត្រឹមត្រូវ ឬមានបញ្ហា', 'error');
-    }
-    setLoading(false);
+    if (operation) return;
+    setOperation('restore');
     
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+    try {
+      const success = await importDatabase(file);
+      if (success) {
+        showMessage('បញ្ចូលទិន្នន័យ (Restore) ជោគជ័យ! ប្រព័ន្ធនឹង Restart...', 'success');
+        if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+        reloadTimerRef.current = setTimeout(() => window.location.reload(), 1500);
+      } else {
+        throw new Error('Import returned false');
+      }
+    } catch (error) {
+      console.error('Restore failed:', error);
+      showMessage('ឯកសារមិនត្រឹមត្រូវ ឬមានបញ្ហាក្នុងការ Restore', 'error');
+    } finally {
+      setOperation(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
   const handleExportStudentsExcel = async () => {
-    const db = await initDB();
-    const students = await db.getAll('students');
+    if (operation || !activeYear) return;
+    setOperation('excel');
     
-    const formattedData = students.map((s, i) => ({
-      'ល.រ': i + 1,
-      'អត្តលេខ': s.studentId,
-      'ឈ្មោះសិស្ស': s.name,
-      'ភេទ': s.gender === 'M' ? 'ប្រុស' : 'ស្រី',
-      'ថ្នាក់': s.class,
-      'វេន': s.shift,
-      'លេខកុំព្យូទ័រ': s.pcNumber || '---',
-      'លេខសម្ងាត់': s.password || '---',
-      'ស្ថានភាព': s.status === 'Active' ? 'កំពុងសិក្សា' : 'ឈប់'
-    }));
+    try {
+      const db = await initDB();
+      const students = await db.getAll<Student>('students', activeYear);
+      
+      const formattedData = students.map((s, i) => {
+        let statusDisplay = 'អសកម្ម';
+        if (s.status === 'Active') statusDisplay = 'កំពុងសិក្សា';
+        else if (s.status === 'ResetRequired') statusDisplay = 'ត្រូវប្តូរលេខកូដ';
+        
+        return {
+          'ល.រ': i + 1,
+          'អត្តលេខ': s.studentId,
+          'ឈ្មោះសិស្ស': s.name,
+          'ភេទ': s.gender === 'M' ? 'ប្រុស' : 'ស្រី',
+          'ថ្នាក់': s.class,
+          'វេន': s.shift,
+          'លេខកុំព្យូទ័រ': s.pcNumber || '---',
+          'ស្ថានភាព': statusDisplay
+          // Password removed intentionally for security
+        };
+      });
 
-    exportToExcel(formattedData, `Students_List_${new Date().toISOString().split('T')[0]}`);
+      exportToExcel(formattedData, `Students_List_${getLocalDate()}`);
+      showMessage('ទាញយកឯកសារ Excel ជោគជ័យ', 'success');
+    } catch (error) {
+      console.error('Excel export failed:', error);
+      showMessage('បរាជ័យក្នុងការទាញយក Excel', 'error');
+    } finally {
+      setOperation(null);
+    }
   };
 
   const handleClearData = async () => {
+    if (role !== 'admin') {
+      showMessage('សិទ្ធិមិនគ្រប់គ្រាន់ (Unauthorized)', 'error');
+      return;
+    }
+    
+    if (operation) return;
+    
     if (window.confirm('តើអ្នកពិតជាចង់លុបទិន្នន័យទាំងអស់មែនទេ? សកម្មភាពនេះមិនអាចទាញមកវិញបានទេ!')) {
       if (window.confirm('សូមបញ្ជាក់ម្តងទៀត (បាទ/ចាស = លុប)')) {
-        setLoading(true);
-        const success = await clearDatabase();
-        if (success) {
-          alert('ទិន្នន័យត្រូវបានលុបដោយជោគជ័យ!');
-          window.location.reload();
-        } else {
+        setOperation('clear');
+        try {
+          const success = await clearDatabase();
+          if (success) {
+            alert('ទិន្នន័យត្រូវបានលុបដោយជោគជ័យ!');
+            window.location.reload();
+          } else {
+            throw new Error('Clear returned false');
+          }
+        } catch (error) {
+          console.error('Clear data failed:', error);
           showMessage('មានបញ្ហាក្នុងការលុបទិន្នន័យ', 'error');
+        } finally {
+          setOperation(null);
         }
-        setLoading(false);
       }
     }
   };
@@ -117,7 +203,7 @@ const Settings = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         
         {/* Backup Card */}
-        <section className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col transition-all hover:shadow-md">
+        <section className={`bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col transition-all hover:shadow-md ${operation === 'backup' || operation === 'restore' ? 'opacity-60 pointer-events-none' : ''}`}>
           <div className="w-12 h-12 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center mb-4">
             <DownloadCloud size={24} />
           </div>
@@ -128,19 +214,19 @@ const Settings = () => {
             <button 
               className="w-full flex items-center justify-center gap-2 bg-white border-2 border-gray-200 hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50 text-gray-700 px-4 py-2.5 rounded-lg text-sm font-bold transition-all" 
               onClick={handleExportBackup}
-              disabled={loading}
+              disabled={!!operation}
             >
               <DownloadCloud size={18} />
-              <span>ទាញយកទិន្នន័យ (Backup)</span>
+              <span>{operation === 'backup' ? 'កំពុងទាញយក...' : 'ទាញយកទិន្នន័យ (Backup)'}</span>
             </button>
             
             <button 
               className="w-full flex items-center justify-center gap-2 bg-white border-2 border-gray-200 hover:border-green-500 hover:text-green-600 hover:bg-green-50 text-gray-700 px-4 py-2.5 rounded-lg text-sm font-bold transition-all" 
               onClick={handleImportClick}
-              disabled={loading}
+              disabled={!!operation}
             >
               <UploadCloud size={18} />
-              <span>បញ្ចូលទិន្នន័យ (Restore)</span>
+              <span>{operation === 'restore' ? 'កំពុងបញ្ចូល...' : 'បញ្ចូលទិន្នន័យ (Restore)'}</span>
             </button>
             <input 
               type="file" 
@@ -153,7 +239,7 @@ const Settings = () => {
         </section>
 
         {/* Excel Export Card */}
-        <section className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col transition-all hover:shadow-md">
+        <section className={`bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col transition-all hover:shadow-md ${operation === 'excel' ? 'opacity-60 pointer-events-none' : ''}`}>
           <div className="w-12 h-12 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center mb-4">
             <FileSpreadsheet size={24} />
           </div>
@@ -162,14 +248,19 @@ const Settings = () => {
           
           <div className="flex flex-col gap-3">
             <button 
-              className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm hover:shadow-md" 
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm hover:shadow-md disabled:opacity-50" 
               onClick={handleExportStudentsExcel}
+              disabled={!!operation || !activeYear}
             >
               <FileSpreadsheet size={18} />
-              <span>បញ្ជីសិស្ស (Students)</span>
+              <span>{operation === 'excel' ? 'កំពុងដំណើរការ...' : 'បញ្ជីសិស្ស (Students)'}</span>
             </button>
             
-            <button className="w-full flex items-center justify-center gap-2 bg-white border-2 border-gray-200 hover:border-emerald-500 hover:text-emerald-600 hover:bg-emerald-50 text-gray-700 px-4 py-2.5 rounded-lg text-sm font-bold transition-all">
+            <button 
+              className="w-full flex items-center justify-center gap-2 bg-white border-2 border-gray-200 hover:border-emerald-500 hover:text-emerald-600 hover:bg-emerald-50 text-gray-700 px-4 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50"
+              onClick={() => showMessage('មុខងារនេះមិនទាន់រួចរាល់ទេ', 'error')}
+              disabled={!!operation}
+            >
               <FileSpreadsheet size={18} />
               <span>តារាងពិន្ទុ (Grades)</span>
             </button>
@@ -195,17 +286,20 @@ const Settings = () => {
                 placeholder="AIzaSy..."
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
+                disabled={!!operation}
               />
               <button 
-                className="bg-white border-2 border-gray-200 hover:border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-lg text-sm font-bold transition-colors shrink-0"
+                className="bg-white border-2 border-gray-200 hover:border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-lg text-sm font-bold transition-colors shrink-0 disabled:opacity-50"
                 onClick={() => setShowApiKey(!showApiKey)}
+                disabled={!!operation}
               >
                 {showApiKey ? 'លាក់' : 'បង្ហាញ'}
               </button>
             </div>
             <button 
-              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-[#2a5298] to-[#3a72c4] hover:from-[#1e3c72] hover:to-[#2a5298] text-white px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm hover:shadow-md"
+              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-[#2a5298] to-[#3a72c4] hover:from-[#1e3c72] hover:to-[#2a5298] text-white px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm hover:shadow-md disabled:opacity-50"
               onClick={handleSaveApiKey}
+              disabled={!!operation}
             >
               រក្សាទុក Key
             </button>
@@ -213,24 +307,26 @@ const Settings = () => {
         </section>
 
         {/* Danger Zone Card */}
-        <section className="bg-red-50 rounded-xl shadow-sm border border-red-200 p-6 flex flex-col transition-all hover:shadow-md">
-          <div className="w-12 h-12 rounded-lg bg-red-100 text-red-600 flex items-center justify-center mb-4">
-            <Trash2 size={24} />
-          </div>
-          <h2 className="text-lg font-bold text-red-700 mb-2 border-b border-red-200 pb-3">Danger Zone</h2>
-          <p className="text-sm text-red-600/80 mb-6 flex-1">លុបទិន្នន័យទាំងអស់ចេញពីប្រព័ន្ធនេះ។ សូមប្រាកដថាអ្នកបានធ្វើ Backup ទិន្នន័យរួចរាល់ជាមុនសិន។ សកម្មភាពនេះមិនអាចទាញមកវិញបានទេ!</p>
-          
-          <div className="flex flex-col gap-3">
-            <button 
-              className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm hover:shadow-md hover:ring-4 ring-red-600/20" 
-              onClick={handleClearData} 
-              disabled={loading}
-            >
-              <Trash2 size={18} />
-              <span>លុបទិន្នន័យទាំងអស់ (Clear All Data)</span>
-            </button>
-          </div>
-        </section>
+        {role === 'admin' && (
+          <section className={`bg-red-50 rounded-xl shadow-sm border border-red-200 p-6 flex flex-col transition-all hover:shadow-md ${operation === 'clear' ? 'opacity-60 pointer-events-none' : ''}`}>
+            <div className="w-12 h-12 rounded-lg bg-red-100 text-red-600 flex items-center justify-center mb-4">
+              <Trash2 size={24} />
+            </div>
+            <h2 className="text-lg font-bold text-red-700 mb-2 border-b border-red-200 pb-3">Danger Zone</h2>
+            <p className="text-sm text-red-600/80 mb-6 flex-1">លុបទិន្នន័យទាំងអស់ចេញពីប្រព័ន្ធនេះ។ សូមប្រាកដថាអ្នកបានធ្វើ Backup ទិន្នន័យរួចរាល់ជាមុនសិន។ សកម្មភាពនេះមិនអាចទាញមកវិញបានទេ!</p>
+            
+            <div className="flex flex-col gap-3">
+              <button 
+                className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm hover:shadow-md hover:ring-4 ring-red-600/20 disabled:opacity-50" 
+                onClick={handleClearData} 
+                disabled={!!operation}
+              >
+                <Trash2 size={18} />
+                <span>{operation === 'clear' ? 'កំពុងលុប...' : 'លុបទិន្នន័យទាំងអស់ (Clear All Data)'}</span>
+              </button>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

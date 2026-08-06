@@ -128,3 +128,13 @@
 .rank-1 { background: linear-gradient(135deg, #fef08a, #eab308); color: #713f12; box-shadow: 0 4px 10px rgba(234, 179, 8, 0.3); } /* Gold */
 .rank-2 { background: linear-gradient(135deg, #f1f5f9, #cbd5e1); color: #334155; box-shadow: 0 4px 10px rgba(148, 163, 184, 0.3); } /* Silver */
 .rank-3 { background: linear-gradient(135deg, #ffedd5, #f97316); color: #7c2d12; box-shadow: 0 4px 10px rgba(249, 115, 22, 0.3); } /* Bronze */
+
+@media print {
+  @page {
+    margin: 0; /* This removes the default browser headers and footers (date, URL, page number) */
+  }
+  
+  body {
+    margin: 1.5cm; /* Add some padding so the actual content isn't cut off by the printer's hardware margins */
+  }
+}

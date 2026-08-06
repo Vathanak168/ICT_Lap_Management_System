@@ -9,6 +9,8 @@ const tableMap: Record<string, string> = {
   'seatingPlans': 'seating_plans',
   'lessonLogs': 'lesson_logs',
   'grades': 'grades',
+  'lessonPlans': 'lesson_plans',
+  'settings': 'settings',
 };
 
 export interface ClassRecord {
@@ -28,11 +30,14 @@ export interface Student {
   gender: 'M' | 'F';
   class: string;
   shift: string;
+  academicYear: string;
   status: string;
   password?: string;
   pcNumber?: string;
   isShiftSwitching?: boolean;
   alternateClassId?: string;
+  pointsBalance?: number;
+  pointsNote?: string;
 }
 
 export interface AttendanceRecord {
@@ -41,6 +46,7 @@ export interface AttendanceRecord {
   classId?: string;
   class?: string;
   shift?: string;
+  academicYear: string;
   records: Record<string, 'P' | 'A' | 'L' | 'E'>; // studentId -> status
 }
 
@@ -58,12 +64,14 @@ export interface PCIssue {
   resolution?: string;
   notes?: string;
   currentIssue?: string;
+  academicYear: string;
 }
 
 export interface SeatingPlan {
   id: string;
   classId: string;
   shift: string;
+  academicYear: string;
   gridLayout: string[][]; // Array of rows, each containing student IDs or null
   createdAt: string;
 }
@@ -73,6 +81,7 @@ export interface LessonLog {
   date: string;
   classId?: string;
   shift?: string;
+  academicYear: string;
   topic: string;
   teacherName?: string;
   class?: string;
@@ -80,18 +89,39 @@ export interface LessonLog {
   notes?: string;
 }
 
+export interface LessonPlanTrack {
+  id: string;
+  classId: string;
+  month: string;
+  week: string;
+  lessonTitle: string;
+  topics: string;
+  exercises: string;
+  status: 'Planned' | 'Completed';
+  academicYear: string;
+  completedDate?: string | null;
+}
+
 export interface GradeRecord {
   id: string;
   month: string; // e.g., '2023-10'
   classId: string;
   shift: string;
+  academicYear: string;
   type: 'Monthly' | 'Midterm' | 'Final';
   scores: Record<string, Record<string, number>>; // studentId -> subject -> score
 }
 
+export interface SettingRecord {
+  id: string; // e.g. 'gradeConfig'
+  config: any;
+}
+
 class SupabaseDBAdapter {
   private getTableName(storeName: string) {
-    return tableMap[storeName] || storeName;
+    const table = tableMap[storeName];
+    if (!table) throw new Error(`Unknown store: ${storeName}`);
+    return table;
   }
 
   // Convert CamelCase DB keys to Snake_Case Supabase keys (basic)
@@ -121,40 +151,55 @@ class SupabaseDBAdapter {
     };
   }
 
-  async getAllFromIndex(storeName: string, indexName: string, key: string) {
+  async getAllFromIndex<T = any>(storeName: string, indexName: string, key: string, academicYear?: string): Promise<T[]> {
     const table = this.getTableName(storeName);
-    // map common index names to supabase column names
-    const dbIndexName = indexName === 'class' ? 'class_id' : indexName;
-    const { data, error } = await supabase.from(table).select('*').eq(dbIndexName, key);
-    if (error) {
-      console.error(`Error fetching index ${indexName} from ${table}:`, error);
-      return [];
+    
+    let dbIndexName = indexName;
+    if (indexName === 'by-class') {
+      dbIndexName = 'class';
+    } else if (indexName === 'class' && storeName !== 'students') {
+      dbIndexName = 'class_id';
     }
-    return data.map(this.mapToCamelCase.bind(this, storeName));
+    
+    let query = supabase.from(table).select('*').eq(dbIndexName, key);
+    if (academicYear && storeName !== 'profiles') {
+      query = query.eq('academic_year', academicYear);
+    }
+    
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`Failed to fetch index ${indexName} from ${table}: ${error.message}`);
+    }
+    return data.map((d: any) => this.mapToCamelCase(storeName, d) as unknown as T);
   }
 
-  async getAll(storeName: string) {
+  async getAll<T = any>(storeName: string, academicYear?: string): Promise<T[]> {
     const table = this.getTableName(storeName);
-    const { data, error } = await supabase.from(table).select('*');
+    
+    let query = supabase.from(table).select('*');
+    if (academicYear && storeName !== 'profiles') {
+      query = query.eq('academic_year', academicYear);
+    }
+    
+    const { data, error } = await query;
     
     if (error) {
-      console.error(`Error fetching ${table}:`, error);
-      return [];
+      throw new Error(`Failed to fetch ${table}: ${error.message}`);
     }
     
     // Map snake_case back to camelCase for the frontend
-    return data.map(this.mapToCamelCase.bind(this, storeName));
+    return data.map((d: any) => this.mapToCamelCase(storeName, d) as unknown as T);
   }
 
-  async get(storeName: string, id: string) {
+  async get<T = any>(storeName: string, id: string): Promise<T | null> {
     const table = this.getTableName(storeName);
-    const { data, error } = await supabase.from(table).select('*').eq('id', id).single();
+    const { data, error } = await supabase.from(table).select('*').eq('id', id).maybeSingle();
     
-    if (error || !data) {
-      return null;
+    if (error) {
+      throw new Error(`Failed to fetch ${table}/${id}: ${error.message}`);
     }
     
-    return this.mapToCamelCase(storeName, data);
+    return data ? (this.mapToCamelCase(storeName, data) as unknown as T) : null;
   }
 
   async put(storeName: string, value: any) {
@@ -163,34 +208,69 @@ class SupabaseDBAdapter {
     
     const { error } = await supabase
       .from(table)
-      .upsert(mappedValue)
-      .select();
+      .upsert(mappedValue);
       
-    if (error) {
-      console.error(`Error putting ${table}:`, error);
-      throw error;
-    }
+    if (error) throw new Error(`Failed to put ${table}: ${error.message}`);
+  }
+
+  async putMany(storeName: string, values: any[]) {
+    if (values.length === 0) return;
+    const table = this.getTableName(storeName);
+    const mappedValues = values.map(v => this.mapToSnakeCase(storeName, v));
+    
+    const { error } = await supabase
+      .from(table)
+      .upsert(mappedValues);
+      
+    if (error) throw new Error(`Failed to putMany ${table}: ${error.message}`);
+  }
+
+  async update(storeName: string, id: string, updates: any) {
+    const table = this.getTableName(storeName);
+    
+    // Fetch existing record first to prevent overwriting missing fields with defaults in mapToSnakeCase
+    const existing = await this.get(storeName, id);
+    if (!existing) throw new Error(`Record ${id} not found in ${storeName}`);
+    
+    const merged = { ...existing, ...updates };
+    const mappedUpdates = this.mapToSnakeCase(storeName, merged);
+    
+    delete mappedUpdates.id; // Prevent updating primary key
+    
+    const { error } = await supabase
+      .from(table)
+      .update(mappedUpdates)
+      .eq('id', id);
+      
+    if (error) throw new Error(`Failed to update ${table}/${id}: ${error.message}`);
   }
 
   async add(storeName: string, value: any) {
-    return this.put(storeName, value);
+    const table = this.getTableName(storeName);
+    const mappedValue = this.mapToSnakeCase(storeName, value);
+    
+    const { error } = await supabase
+      .from(table)
+      .insert(mappedValue);
+      
+    if (error) throw new Error(`Failed to insert ${table}: ${error.message}`);
   }
 
   async delete(storeName: string, id: string) {
     const table = this.getTableName(storeName);
     const { error } = await supabase.from(table).delete().eq('id', id);
-    
-    if (error) {
-      console.error(`Error deleting ${table}:`, error);
-      throw error;
-    }
+    if (error) throw new Error(`Failed to delete ${table}/${id}: ${error.message}`);
+  }
+
+  async deleteMany(storeName: string, ids: string[]) {
+    if (ids.length === 0) return;
+    const table = this.getTableName(storeName);
+    const { error } = await supabase.from(table).delete().in('id', ids);
+    if (error) throw new Error(`Failed to deleteMany ${table}: ${error.message}`);
   }
 
   async clear(storeName: string) {
-    // Dangerous, but keeping for compatibility if used
-    const table = this.getTableName(storeName);
-    const { error } = await supabase.from(table).delete().neq('id', '0'); // deletes all
-    if (error) console.error(`Error clearing ${table}:`, error);
+    throw new Error('clear() is disabled for safety. Use specific deletion methods.');
   }
 
   // Helper to map DB records
@@ -214,11 +294,14 @@ class SupabaseDBAdapter {
           gender: data.gender,
           class: data.class,
           shift: data.shift,
+          academicYear: data.academic_year,
           status: data.status,
           password: data.password,
           pcNumber: data.pc_number,
           isShiftSwitching: data.is_shift_switching,
-          alternateClassId: data.alternate_class_id
+          alternateClassId: data.alternate_class_id,
+          pointsBalance: data.points_balance,
+          pointsNote: data.points_note
         };
       case 'attendance':
         return {
@@ -226,6 +309,7 @@ class SupabaseDBAdapter {
           date: data.date,
           classId: data.class_id,
           shift: data.shift,
+          academicYear: data.academic_year,
           records: data.records_json
         };
       case 'pcIssues':
@@ -238,17 +322,18 @@ class SupabaseDBAdapter {
           reportedBy: data.reported_by,
           reportedDate: data.reported_date,
           resolvedDate: data.resolved_date,
-          dateFound: data.date_found,
-          dateResolved: data.date_resolved,
+          dateFound: data.reported_date,
+          dateResolved: data.resolved_date,
           resolution: data.resolution,
           notes: data.notes,
-          currentIssue: data.current_issue
+          academicYear: data.academic_year
         };
       case 'seatingPlans':
         return {
           id: data.id,
           classId: data.class_id,
           shift: data.shift,
+          academicYear: data.academic_year,
           gridLayout: data.grid_layout_json,
           createdAt: data.created_at
         };
@@ -259,6 +344,7 @@ class SupabaseDBAdapter {
           classId: data.class_id,
           class: data.class,
           shift: data.shift,
+          academicYear: data.academic_year,
           topic: data.topic,
           teacherName: data.teacher_name,
           exercises: data.exercises,
@@ -270,8 +356,27 @@ class SupabaseDBAdapter {
           month: data.month,
           classId: data.class_id,
           shift: data.shift,
+          academicYear: data.academic_year,
           type: data.type,
           scores: data.scores_json
+        };
+      case 'lessonPlans':
+        return {
+          id: data.id,
+          classId: data.class_id,
+          month: data.month,
+          week: data.week,
+          lessonTitle: data.lesson_title,
+          topics: data.topics,
+          exercises: data.exercises,
+          status: data.status,
+          academicYear: data.academic_year,
+          completedDate: data.completed_date
+        };
+      case 'settings':
+        return {
+          id: data.id,
+          config: data.config_json
         };
       default:
         return data;
@@ -298,11 +403,14 @@ class SupabaseDBAdapter {
           gender: value.gender,
           class: value.class,
           shift: value.shift,
+          academic_year: value.academicYear,
           status: value.status,
-          password: value.password,
-          pc_number: value.pcNumber,
+          password: value.password === undefined ? null : value.password,
+          pc_number: value.pcNumber === undefined ? null : value.pcNumber,
           is_shift_switching: value.isShiftSwitching || false,
-          alternate_class_id: value.alternateClassId || null
+          alternate_class_id: value.alternateClassId || null,
+          points_balance: value.pointsBalance === undefined ? null : value.pointsBalance,
+          points_note: value.pointsNote === undefined ? null : value.pointsNote
         };
       case 'attendance':
         return {
@@ -310,6 +418,7 @@ class SupabaseDBAdapter {
           date: value.date,
           class_id: value.classId,
           shift: value.shift,
+          academic_year: value.academicYear,
           records_json: value.records
         };
       case 'pcIssues':
@@ -320,19 +429,18 @@ class SupabaseDBAdapter {
           description: value.description,
           status: value.status,
           reported_by: value.reportedBy,
-          reported_date: value.reportedDate,
-          resolved_date: value.resolvedDate,
-          date_found: value.dateFound,
-          date_resolved: value.dateResolved,
+          reported_date: value.reportedDate || value.dateFound,
+          resolved_date: value.resolvedDate || value.dateResolved,
           resolution: value.resolution,
           notes: value.notes,
-          current_issue: value.currentIssue
+          ...(value.academicYear ? { academic_year: value.academicYear } : {})
         };
       case 'seatingPlans':
         return {
           id: value.id,
           class_id: value.classId,
           shift: value.shift,
+          academic_year: value.academicYear,
           grid_layout_json: value.gridLayout,
           // Handle optional createdAt which might be set by DB
           ...(value.createdAt ? { created_at: value.createdAt } : {})
@@ -344,6 +452,7 @@ class SupabaseDBAdapter {
           class_id: value.classId || value.class,
           class: value.class,
           shift: value.shift,
+          academic_year: value.academicYear,
           topic: value.topic,
           teacher_name: value.teacherName,
           exercises: value.exercises,
@@ -355,8 +464,27 @@ class SupabaseDBAdapter {
           month: value.month,
           class_id: value.classId,
           shift: value.shift,
+          academic_year: value.academicYear,
           type: value.type,
           scores_json: value.scores
+        };
+      case 'lessonPlans':
+        return {
+          id: value.id,
+          class_id: value.classId,
+          month: value.month,
+          week: value.week,
+          lesson_title: value.lessonTitle,
+          topics: value.topics,
+          exercises: value.exercises,
+          status: value.status,
+          academic_year: value.academicYear,
+          completed_date: value.completedDate ?? null
+        };
+      case 'settings':
+        return {
+          id: value.id,
+          config_json: value.config
         };
       default:
         return value;

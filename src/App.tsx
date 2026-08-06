@@ -10,19 +10,26 @@ import LessonLog from './pages/LessonLog';
 import Settings from './pages/Settings';
 import Classes from './pages/Classes';
 import Login from './pages/Login';
+import Register from './pages/Register';
 import UsersManagement from './pages/Users';
 import ShiftSwitching from './pages/ShiftSwitching';
+import LessonPlan from './pages/LessonPlan';
+import MiniApps from './pages/MiniApps';
+import Profile from './pages/Profile';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { AuthProvider } from './contexts/AuthContext';
+import { AcademicYearProvider } from './contexts/AcademicYearContext';
 
 function App() {
   return (
     <AuthProvider>
       <LanguageProvider>
-        <BrowserRouter>
-          <Routes>
+        <AcademicYearProvider>
+          <BrowserRouter>
+            <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
             
             <Route element={<ProtectedRoute />}>
               <Route element={<Layout />}>
@@ -34,7 +41,10 @@ function App() {
                 <Route path="/grades" element={<Gradebook />} />
                 <Route path="/issues" element={<PCIssues />} />
                 <Route path="/lesson-log" element={<LessonLog />} />
+                <Route path="/lesson-plan" element={<LessonPlan />} />
                 <Route path="/shift-switching" element={<ShiftSwitching />} />
+                <Route path="/miniapps" element={<MiniApps />} />
+                <Route path="/profile" element={<Profile />} />
                 <Route path="/settings" element={<Settings />} />
                 
                 {/* Admin only route */}
@@ -45,6 +55,7 @@ function App() {
             </Route>
           </Routes>
         </BrowserRouter>
+        </AcademicYearProvider>
       </LanguageProvider>
     </AuthProvider>
   );

@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Battambang:wght@400;700&family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -8,6 +9,9 @@
   --color-success: #10b981;
   --color-warning: #f59e0b;
   --color-bg-light: #f8fafc;
+  
+  --font-sans: 'Inter', sans-serif;
+  --font-khmer: 'Battambang', sans-serif;
 }
 
 :root {
@@ -31,14 +35,30 @@ body {
   @apply flex items-center justify-center;
 }
 
+.font-khmer {
+  font-family: 'Battambang', cursive, sans-serif;
+}
+
 .card {
-  @apply bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden;
+  @apply bg-white/80 backdrop-blur-xl rounded-2xl shadow-sm hover:shadow-md border border-white/60 overflow-hidden transition-all duration-300;
 }
 
 .input-field {
-  @apply w-full px-4 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-200;
+  @apply w-full px-4 py-3 rounded-xl border border-slate-200 bg-white/50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all duration-200 shadow-sm font-medium;
 }
 
 .btn-primary {
-  @apply bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition-all duration-200 shadow-sm hover:shadow active:scale-95;
+  @apply bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold py-3 px-4 rounded-xl transition-all duration-200 shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 active:translate-y-0.5;
+}
+
+.btn-danger {
+  @apply bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-semibold py-2.5 px-4 rounded-xl transition-all duration-200 shadow-md shadow-red-500/20 hover:shadow-lg hover:shadow-red-500/30 active:translate-y-0.5;
+}
+
+.badge-active {
+  @apply px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold border border-emerald-200 shadow-sm;
+}
+
+.badge-inactive {
+  @apply px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-xs font-bold border border-slate-200 shadow-sm;
 }

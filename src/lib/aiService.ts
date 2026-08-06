@@ -161,3 +161,54 @@ export const generateAIResponse = async (_history: any[], prompt: string) => {
     throw new Error('មានបញ្ហាក្នុងការភ្ជាប់ទៅកាន់ AI: ' + error.message);
   }
 };
+
+export const extractLessonPlanFromImage = async (base64Image: string, mimeType: string) => {
+  if (!ai) {
+    if (!initAI()) throw new Error('API Key not found. Please add it in Settings.');
+  }
+
+  try {
+    const prompt = `
+អ្នកគឺជាជំនួយការគ្រូបង្រៀនដ៏ចំណាននៅកម្ពុជា។
+ខ្ញុំមានរូបភាពកាលវិភាគបង្រៀន ឬកម្មវិធីសិក្សា។
+សូមទាញយកទិន្នន័យមេរៀនទាំងនោះ រួចរៀបចំជា JSON array។ 
+Object នីមួយៗត្រូវមាន keys ដូចខាងក្រោម៖
+- "month": ខែបង្រៀន (ឧទាហរណ៍៖ "តុលា", "វិច្ឆិកា")
+- "week": សប្តាហ៍ទីប៉ុន្មាន (ឧទាហរណ៍៖ "សប្តាហ៍ទី១", "សប្តាហ៍ទី២")
+- "lessonTitle": ចំណងជើងមេរៀន ឬជំពូក
+- "topics": ចំណុចសំខាន់ៗដែលត្រូវបង្រៀន
+- "exercises": លំហាត់ដែលត្រូវធ្វើ ឬឆែក (បើគ្មានដាក់ "")
+
+Please respond with ONLY a valid JSON array, no markdown blocks.
+`;
+
+    const response = await ai!.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                data: base64Image,
+                mimeType: mimeType
+              }
+            }
+          ]
+        }
+      ],
+      config: {
+        responseMimeType: "application/json",
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No text returned from AI");
+    
+    return JSON.parse(text);
+  } catch (error: any) {
+    console.error('AI Vision Error:', error);
+    throw new Error('មានបញ្ហាក្នុងការអានរូបភាព: ' + error.message);
+  }
+};

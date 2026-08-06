@@ -1,97 +1,207 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Plus, Search, Edit2, Trash2, Users, BookOpen } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { ClassRecord } from '../store/db';
+import type { ClassRecord, Student, AttendanceRecord, GradeRecord, SeatingPlan, LessonLog, LessonPlanTrack } from '../store/db';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
+import { useAcademicYear } from '../contexts/AcademicYearContext';
 
 const Classes = () => {
   const [classes, setClasses] = useState<ClassRecord[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterYear, setFilterYear] = useState('All');
+  const { activeYear } = useAcademicYear();
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   
   const [currentClass, setCurrentClass] = useState<Partial<ClassRecord>>({
-    name: '', shift: 'Morning', academicYear: '2026-2027', notes: '', linkedClassIds: []
+    name: '', shift: 'Morning', academicYear: activeYear || '2026-2027', notes: '', linkedClassIds: []
   });
   
   const [errors, setErrors] = useState<Record<string, string>>({});
+  
+  const loadRequestRef = useRef(0);
+
+  const loadClasses = async (targetYear: string) => {
+    if (!targetYear) return;
+    
+    setIsLoading(true);
+    const requestId = ++loadRequestRef.current;
+    
+    try {
+      const db = await initDB();
+      const allClasses = await db.getAll<ClassRecord>('classes', targetYear);
+      
+      if (requestId !== loadRequestRef.current) return;
+      
+      setClasses(allClasses);
+    } catch (error) {
+      if (requestId === loadRequestRef.current) {
+        console.error('Failed to load classes:', error);
+      }
+    } finally {
+      if (requestId === loadRequestRef.current) {
+        setIsLoading(false);
+      }
+    }
+  };
 
   useEffect(() => {
-    loadClasses();
-  }, []);
-
-  const loadClasses = async () => {
-    const db = await initDB();
-    const allClasses = await db.getAll('classes');
-    setClasses(allClasses);
-  };
+    if (activeYear) {
+      void loadClasses(activeYear);
+    } else {
+      setClasses([]);
+    }
+  }, [activeYear]);
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
     if (!currentClass.name) newErrors.name = 'សូមបញ្ចូលឈ្មោះថ្នាក់';
-    if (!currentClass.academicYear) newErrors.academicYear = 'សូមបញ្ចូលឆ្នាំសិក្សា';
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const handleSave = async () => {
     if (!validateForm()) return;
-
-    const db = await initDB();
-    const id = currentClass.id || `${currentClass.name}_${currentClass.shift}`;
-    const newClass: ClassRecord = {
-      id,
-      name: currentClass.name!,
-      shift: currentClass.shift as 'Morning' | 'Afternoon' | 'Evening',
-      academicYear: currentClass.academicYear!,
-      notes: currentClass.notes || '',
-      linkedClassIds: currentClass.linkedClassIds || []
-    };
-
-    const tx = db.transaction('classes', 'readwrite');
-    await tx.store.put(newClass);
-
-    // Also symmetrically update linked classes if they don't have this class linked
-    if (newClass.linkedClassIds && newClass.linkedClassIds.length > 0) {
-      for (const linkedId of newClass.linkedClassIds) {
-        const linkedClass = await tx.store.get(linkedId);
-        if (linkedClass) {
-          const currentLinks = linkedClass.linkedClassIds || [];
-          if (!currentLinks.includes(newClass.id)) {
-            linkedClass.linkedClassIds = [...currentLinks, newClass.id];
-            await tx.store.put(linkedClass);
-          }
-        }
-      }
+    if (!activeYear) {
+      alert('សូមជ្រើសរើសឆ្នាំសិក្សាជាមុនសិន');
+      return;
     }
     
-    await tx.done;
+    // Lock the current year for this save operation
+    const targetYear = activeYear;
 
-    setShowModal(false);
-    loadClasses();
-  };
-
-  const handleDelete = async (id: string) => {
-    if (window.confirm('តើអ្នកពិតជាចង់លុបថ្នាក់នេះមែនទេ? សិស្សទាំងអស់ដែលនៅក្នុងថ្នាក់នេះក៏នឹងត្រូវលុបចោលផងដែរ!')) {
+    setIsSaving(true);
+    try {
       const db = await initDB();
       
-      // 1. Delete all students in this class
-      const allStudents = await db.getAll('students');
-      const studentsInClass = allStudents.filter(s => s.class === id);
-      const studentTx = db.transaction('students', 'readwrite');
-      for (const s of studentsInClass) {
-        await studentTx.store.delete(s.id);
-      }
-      await studentTx.done;
+      const id = currentClass.id || `${targetYear}_${currentClass.name}_${currentClass.shift}`;
+      const newClass: ClassRecord = {
+        id,
+        name: currentClass.name!,
+        shift: currentClass.shift as 'Morning' | 'Afternoon' | 'Evening',
+        academicYear: targetYear, 
+        notes: currentClass.notes || '',
+        linkedClassIds: currentClass.linkedClassIds || []
+      };
 
-      // 2. Delete the class itself
-      const classTx = db.transaction('classes', 'readwrite');
-      await classTx.store.delete(id);
-      await classTx.done;
+      // Ensure symmetrical links
+      // 1. Fetch all classes in this year to see who currently links to us
+      const allClasses = await db.getAll<ClassRecord>('classes', targetYear);
       
-      loadClasses();
+      const updatePromises: Promise<void>[] = [];
+      
+      // Update other classes
+      allClasses.forEach(otherClass => {
+        if (otherClass.id === id) return;
+        
+        const otherLinks = otherClass.linkedClassIds || [];
+        const isLinkedToUs = otherLinks.includes(id);
+        const shouldBeLinked = newClass.linkedClassIds?.includes(otherClass.id) || false;
+        
+        if (shouldBeLinked && !isLinkedToUs) {
+          // Add link symmetrically
+          updatePromises.push(
+            db.update('classes', otherClass.id, {
+              linkedClassIds: [...otherLinks, id]
+            })
+          );
+        } else if (!shouldBeLinked && isLinkedToUs) {
+          // Remove link symmetrically
+          updatePromises.push(
+            db.update('classes', otherClass.id, {
+              linkedClassIds: otherLinks.filter(link => link !== id)
+            })
+          );
+        }
+      });
+
+      // Save our class
+      updatePromises.push(db.put('classes', newClass));
+
+      // Execute all updates concurrently
+      await Promise.all(updatePromises);
+
+      setShowModal(false);
+      await loadClasses(targetYear);
+    } catch (error) {
+      console.error(error);
+      alert('មានបញ្ហាក្នុងការរក្សាទុកថ្នាក់');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (classId: string) => {
+    if (!activeYear) return;
+    const targetYear = activeYear;
+
+    if (window.confirm('តើអ្នកពិតជាចង់លុបថ្នាក់នេះមែនទេ? សិស្ស និងទិន្នន័យពាក់ព័ន្ធទាំងអស់ (វត្តមាន ពិន្ទុ កាលវិភាគ...) នឹងត្រូវលុបចោលទាំងស្រុងដោយមិនអាចទាញមកវិញបានទេ!')) {
+      setIsSaving(true);
+      try {
+        const db = await initDB();
+        
+        // 1. Fetch all dependent records
+        const [
+          allStudents,
+          allAttendance,
+          allGrades,
+          allSeating,
+          allLessonLogs,
+          allLessonPlans,
+          allClasses
+        ] = await Promise.all([
+          db.getAll<Student>('students', targetYear),
+          db.getAll<AttendanceRecord>('attendance', targetYear),
+          db.getAll<GradeRecord>('grades', targetYear),
+          db.getAll<SeatingPlan>('seatingPlans', targetYear),
+          db.getAll<LessonLog>('lessonLogs', targetYear),
+          db.getAll<LessonPlanTrack>('lessonPlans', targetYear),
+          db.getAll<ClassRecord>('classes', targetYear)
+        ]);
+        
+        // Filter those belonging to this class
+        const studentIds = allStudents.filter(s => s.class === classId).map(s => s.id);
+        const attendanceIds = allAttendance.filter(a => a.classId === classId).map(a => a.id);
+        const gradeIds = allGrades.filter(g => g.classId === classId).map(g => g.id);
+        const seatingIds = allSeating.filter(s => s.classId === classId).map(s => s.id);
+        
+        // Note: lessonLog uses classId or class depending on the data structure, check both
+        const logIds = allLessonLogs.filter(l => l.classId === classId || l.class === classId).map(l => l.id);
+        const planIds = allLessonPlans.filter(p => p.classId === classId).map(p => p.id);
+        
+        // Prepare promises for bulk deletion
+        const deletePromises: Promise<void>[] = [];
+        
+        if (studentIds.length > 0) deletePromises.push(db.deleteMany('students', studentIds));
+        if (attendanceIds.length > 0) deletePromises.push(db.deleteMany('attendance', attendanceIds));
+        if (gradeIds.length > 0) deletePromises.push(db.deleteMany('grades', gradeIds));
+        if (seatingIds.length > 0) deletePromises.push(db.deleteMany('seatingPlans', seatingIds));
+        if (logIds.length > 0) deletePromises.push(db.deleteMany('lessonLogs', logIds));
+        if (planIds.length > 0) deletePromises.push(db.deleteMany('lessonPlans', planIds));
+        
+        // Clean up linkedClassIds in other classes that reference this deleted class
+        allClasses.forEach(c => {
+          if (c.id !== classId && c.linkedClassIds?.includes(classId)) {
+            const newLinks = c.linkedClassIds.filter(id => id !== classId);
+            deletePromises.push(db.update('classes', c.id, { linkedClassIds: newLinks }));
+          }
+        });
+        
+        // Finally, delete the class itself
+        deletePromises.push(db.delete('classes', classId));
+
+        // Execute all deletes concurrently
+        await Promise.all(deletePromises);
+        
+        await loadClasses(targetYear);
+      } catch (error) {
+        console.error(error);
+        alert('បរាជ័យក្នុងការលុបថ្នាក់');
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
 
@@ -103,7 +213,7 @@ const Classes = () => {
   
   const openAddModal = () => {
     setErrors({});
-    setCurrentClass({ name: '', shift: 'Morning', academicYear: '2026-2027', notes: '', linkedClassIds: [] });
+    setCurrentClass({ name: '', shift: 'Morning', academicYear: activeYear || '2026-2027', notes: '', linkedClassIds: [] });
     setShowModal(true);
   };
 
@@ -116,13 +226,9 @@ const Classes = () => {
     }
   };
 
-  // Get unique academic years for filter
-  const academicYears = Array.from(new Set(classes.map(c => c.academicYear)));
-
   const filteredClasses = classes.filter(c => {
-    const matchYear = filterYear === 'All' || c.academicYear === filterYear;
     const matchSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchYear && matchSearch;
+    return matchSearch;
   });
 
   return (
@@ -153,23 +259,17 @@ const Classes = () => {
             
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ឆ្នាំសិក្សា (Academic Year)</label>
-              <select 
-                className="w-full min-w-[200px] bg-white border border-gray-300 text-gray-800 text-sm rounded-sm px-3 py-2 outline-none focus:border-[#48b5c9] focus:ring-1 focus:ring-[#48b5c9] transition-all cursor-pointer"
-                value={filterYear}
-                onChange={(e) => setFilterYear(e.target.value)}
-              >
-                <option value="All">គ្រប់ឆ្នាំសិក្សា</option>
-                {academicYears.map(year => (
-                  <option key={year} value={year}>{year}</option>
-                ))}
-              </select>
+              <div className="w-full min-w-[200px] bg-gray-100 border border-gray-300 text-gray-600 font-medium text-sm rounded-sm px-3 py-2">
+                {activeYear || 'គ្មានឆ្នាំសិក្សា'}
+              </div>
             </div>
           </div>
           
           <div className="flex items-center gap-3 mt-4 sm:mt-0">
             <button 
-              className="bg-[#48b5c9] hover:bg-[#3aa3b7] hover:shadow-md text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-all border border-transparent" 
+              className="bg-[#48b5c9] hover:bg-[#3aa3b7] hover:shadow-md text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-all border border-transparent disabled:opacity-50" 
               onClick={openAddModal}
+              disabled={isLoading || isSaving || !activeYear}
             >
               <Plus size={16} /> បង្កើតថ្នាក់ថ្មី
             </button>
@@ -183,69 +283,78 @@ const Classes = () => {
           <span>បញ្ជីថ្នាក់រៀន (List of Classes)</span>
           <span className="text-xs font-medium bg-white/20 px-2 py-0.5 rounded">សរុប {filteredClasses.length} ថ្នាក់</span>
         </div>
-        <div className="overflow-x-auto p-0">
-          <table className="w-full text-left border-collapse min-w-[600px]">
-            <thead className="bg-[#f8f9fa] text-gray-800 sticky top-0 z-10 border-b border-gray-300">
-              <tr>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ឈ្មោះថ្នាក់</th>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">វេនសិក្សា</th>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ឆ្នាំសិក្សា</th>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ចំណាំ</th>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider text-right">សកម្មភាព</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredClasses.map(c => (
-                <tr key={c.id} className="hover:bg-gray-50/50 transition-colors">
-                  <td className="border-b border-gray-100 px-5 py-4 font-bold text-gray-800 flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-[#2a5298]">
-                      <Users size={16} />
-                    </div>
-                    {c.name}
-                  </td>
-                  <td className="border-b border-gray-100 px-5 py-4">
-                    {c.shift === 'Morning' && <span className="bg-orange-100 text-orange-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនព្រឹក</span>}
-                    {c.shift === 'Afternoon' && <span className="bg-blue-100 text-blue-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនរសៀល</span>}
-                    {c.shift === 'Evening' && <span className="bg-gray-100 text-gray-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនយប់</span>}
-                  </td>
-                  <td className="border-b border-gray-100 px-5 py-4 text-sm font-medium text-gray-700">{c.academicYear}</td>
-                  <td className="border-b border-gray-100 px-5 py-4 text-sm text-gray-500">{c.notes || '---'}</td>
-                  <td className="border-b border-gray-100 px-5 py-4 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <button 
-                        onClick={() => openEditModal(c)}
-                        className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-sm transition-colors"
-                        title="កែប្រែ"
-                      >
-                        <Edit2 size={16} />
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(c.id)}
-                        className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-sm transition-colors"
-                        title="លុបថ្នាក់"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filteredClasses.length === 0 && (
+        
+        {isLoading && !isSaving ? (
+          <div className="flex items-center justify-center p-12 text-secondary-text">
+            កំពុងទាញយកទិន្នន័យ...
+          </div>
+        ) : (
+          <div className="overflow-x-auto p-0">
+            <table className="w-full text-left border-collapse min-w-[600px]">
+              <thead className="bg-[#f8f9fa] text-gray-800 sticky top-0 z-10 border-b border-gray-300">
                 <tr>
-                  <td colSpan={5}>
-                    <div className="flex flex-col items-center justify-center p-12 text-secondary-text">
-                      <div className="w-12 h-12 bg-background-selected rounded-full flex items-center justify-center mb-4">
-                        <BookOpen size={24} className="text-secondary-text" />
-                      </div>
-                      <p className="text-base font-medium">មិនមានទិន្នន័យថ្នាក់ទេ</p>
-                      <p className="text-sm mt-1">សូមបង្កើតថ្នាក់ថ្មី ដើម្បីចាប់ផ្តើម។</p>
-                    </div>
-                  </td>
+                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ឈ្មោះថ្នាក់</th>
+                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">វេនសិក្សា</th>
+                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ឆ្នាំសិក្សា</th>
+                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ចំណាំ</th>
+                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider text-right">សកម្មភាព</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filteredClasses.map(c => (
+                  <tr key={c.id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="border-b border-gray-100 px-5 py-4 font-bold text-gray-800 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-[#2a5298]">
+                        <Users size={16} />
+                      </div>
+                      {c.name}
+                    </td>
+                    <td className="border-b border-gray-100 px-5 py-4">
+                      {c.shift === 'Morning' && <span className="bg-orange-100 text-orange-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនព្រឹក</span>}
+                      {c.shift === 'Afternoon' && <span className="bg-blue-100 text-blue-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនរសៀល</span>}
+                      {c.shift === 'Evening' && <span className="bg-gray-100 text-gray-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនយប់</span>}
+                    </td>
+                    <td className="border-b border-gray-100 px-5 py-4 text-sm font-medium text-gray-700">{c.academicYear}</td>
+                    <td className="border-b border-gray-100 px-5 py-4 text-sm text-gray-500">{c.notes || '---'}</td>
+                    <td className="border-b border-gray-100 px-5 py-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button 
+                          onClick={() => openEditModal(c)}
+                          className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-sm transition-colors disabled:opacity-50"
+                          title="កែប្រែ"
+                          disabled={isSaving}
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(c.id)}
+                          className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-sm transition-colors disabled:opacity-50"
+                          title="លុបថ្នាក់"
+                          disabled={isSaving}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filteredClasses.length === 0 && (
+                  <tr>
+                    <td colSpan={5}>
+                      <div className="flex flex-col items-center justify-center p-12 text-secondary-text">
+                        <div className="w-12 h-12 bg-background-selected rounded-full flex items-center justify-center mb-4">
+                          <BookOpen size={24} className="text-secondary-text" />
+                        </div>
+                        <p className="text-base font-medium">មិនមានទិន្នន័យថ្នាក់ទេ</p>
+                        <p className="text-sm mt-1">សូមបង្កើតថ្នាក់ថ្មី ដើម្បីចាប់ផ្តើម។</p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <Modal 
@@ -260,6 +369,7 @@ const Classes = () => {
               value={currentClass.name} 
               onChange={(e) => setCurrentClass({...currentClass, name: e.target.value})}
               error={!!errors.name}
+              disabled={isSaving}
             />
             {errors.name && <p className="text-danger text-xs mt-1">{errors.name}</p>}
           </div>
@@ -267,9 +377,10 @@ const Classes = () => {
           <div>
             <label className="block text-sm font-medium text-primary mb-1">វេនសិក្សា *</label>
             <select 
-              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white"
+              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white disabled:opacity-50"
               value={currentClass.shift}
               onChange={(e) => setCurrentClass({...currentClass, shift: e.target.value as any})}
+              disabled={isSaving}
             >
               <option value="Morning">ព្រឹក</option>
               <option value="Afternoon">រសៀល</option>
@@ -280,11 +391,10 @@ const Classes = () => {
           <div>
             <label className="block text-sm font-medium text-primary mb-1">ឆ្នាំសិក្សា *</label>
             <Input 
-              value={currentClass.academicYear} 
-              onChange={(e) => setCurrentClass({...currentClass, academicYear: e.target.value})}
-              error={!!errors.academicYear}
+              value={activeYear || ''} 
+              disabled={true}
+              className="bg-gray-100 cursor-not-allowed"
             />
-            {errors.academicYear && <p className="text-danger text-xs mt-1">{errors.academicYear}</p>}
           </div>
           
           <div>
@@ -293,6 +403,7 @@ const Classes = () => {
               value={currentClass.notes} 
               onChange={(e) => setCurrentClass({...currentClass, notes: e.target.value})}
               placeholder="ព័ត៌មានបន្ថែម..."
+              disabled={isSaving}
             />
           </div>
 
@@ -317,6 +428,7 @@ const Classes = () => {
                         className="rounded border-border text-primary focus:ring-primary h-4 w-4"
                         checked={(currentClass.linkedClassIds || []).includes(c.id)}
                         onChange={() => toggleLinkedClass(c.id)}
+                        disabled={isSaving}
                       />
                       <span className="text-sm">{c.name} ({c.shift === 'Morning' ? 'ព្រឹក' : c.shift === 'Afternoon' ? 'រសៀល' : 'យប់'})</span>
                       </label>
@@ -329,8 +441,10 @@ const Classes = () => {
           </div>
 
           <div className="pt-4 flex justify-end gap-3 border-t border-border mt-6">
-            <Button variant="secondary" onClick={() => setShowModal(false)}>បោះបង់</Button>
-            <Button variant="primary" onClick={handleSave}>រក្សាទុក</Button>
+            <Button variant="secondary" onClick={() => setShowModal(false)} disabled={isSaving}>បោះបង់</Button>
+            <Button variant="primary" onClick={handleSave} disabled={isSaving}>
+              {isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក'}
+            </Button>
           </div>
         </div>
       </Modal>

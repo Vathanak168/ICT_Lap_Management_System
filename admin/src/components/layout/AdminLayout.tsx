@@ -1,11 +1,21 @@
 import { Outlet, Navigate, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { LayoutDashboard, Users, Monitor, Settings, LogOut, Loader2, ShieldCheck } from 'lucide-react';
+import { 
+  Users, 
+  Monitor, 
+  LayoutDashboard, 
+  LogOut, 
+  Settings, 
+  ShieldCheck,
+  Loader2,
+  AppWindow 
+} from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 const AdminLayout = () => {
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedBranch, setSelectedBranch] = useState<string>('None');
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -42,10 +52,14 @@ const AdminLayout = () => {
   }
 
   const navItems = [
-    { label: 'ទំព័រដើម (Dashboard)', icon: <LayoutDashboard size={20} />, path: '/' },
-    { label: 'អ្នកប្រើប្រាស់ (Users)', icon: <Users size={20} />, path: '/users' },
-    { label: 'កុំព្យូទ័រ (Lab PCs)', icon: <Monitor size={20} />, path: '/labs' },
-    { label: 'ការកំណត់ (Settings)', icon: <Settings size={20} />, path: '/settings' },
+    { label: 'ទំព័រដើម', icon: <LayoutDashboard size={20} />, path: '/' },
+    { label: 'ថ្នាក់រៀន', icon: <Monitor size={20} />, path: '/classes' },
+    { label: 'សិស្ស', icon: <Users size={20} />, path: '/students' },
+    { label: 'ការសិក្សា', icon: <Users size={20} />, path: '/academic' },
+    { label: 'អ្នកប្រើប្រាស់', icon: <Users size={20} />, path: '/users' },
+    { label: 'កុំព្យូទ័រ', icon: <Monitor size={20} />, path: '/labs' },
+    { label: 'Mini App', icon: <AppWindow size={20} />, path: '/miniapps' },
+    { label: 'ការកំណត់', icon: <Settings size={20} />, path: '/settings' },
   ];
 
   return (
@@ -85,7 +99,7 @@ const AdminLayout = () => {
             className="flex items-center gap-3 px-3 py-3 w-full rounded-lg text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-colors"
           >
             <LogOut size={20} />
-            <span className="font-medium font-khmer text-sm mt-0.5">ចាកចេញ (Sign Out)</span>
+            <span className="font-medium font-khmer text-sm mt-0.5">ចាកចេញ</span>
           </button>
         </div>
       </aside>
@@ -93,14 +107,30 @@ const AdminLayout = () => {
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-h-screen overflow-hidden">
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10 sticky top-0">
-          <div className="flex items-center md:hidden">
-            <span className="font-bold text-lg text-slate-800">Admin Portal</span>
+          <div className="flex items-center gap-4">
+            <span className="font-bold text-lg text-slate-800 md:hidden">Admin Portal</span>
+            <div className="hidden sm:flex items-center gap-2">
+              <span className="text-sm font-semibold text-slate-600 font-khmer">សាខា៖</span>
+              <select 
+                className="input-field py-1.5 px-3 text-sm min-w-[140px] font-khmer font-medium"
+                value={selectedBranch}
+                onChange={(e) => setSelectedBranch(e.target.value)}
+              >
+                <option value="None">-- ជ្រើសរើសសាខា --</option>
+                <option value="All">ទាំងអស់ (All Branches)</option>
+                {Array.from({ length: 32 }, (_, i) => (
+                  <option key={i + 1} value={`BELTEI IS ${i + 1}`}>
+                    BELTEI IS {i + 1}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="flex items-center gap-4 ml-auto">
             <div className="flex items-center gap-3 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200">
               <div className="text-right hidden sm:block">
                 <p className="text-sm font-semibold text-slate-700">{session.user?.email}</p>
-                <p className="text-xs text-slate-500 font-khmer">អ្នកគ្រប់គ្រង (Admin)</p>
+                <p className="text-xs text-slate-500 font-khmer">អ្នកគ្រប់គ្រង</p>
               </div>
               <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 flex-center font-bold border-2 border-white shadow-sm uppercase">
                 {session.user?.email?.[0] || 'A'}
@@ -109,7 +139,24 @@ const AdminLayout = () => {
           </div>
         </header>
         <div className="flex-1 overflow-auto bg-slate-50/50 p-6">
-          <Outlet />
+          {/* Mobile Branch Filter */}
+          <div className="sm:hidden mb-6 flex items-center gap-2">
+            <span className="text-sm font-semibold text-slate-600 font-khmer">សាខា៖</span>
+            <select 
+              className="input-field py-2 px-3 text-sm flex-1 font-khmer font-medium"
+              value={selectedBranch}
+              onChange={(e) => setSelectedBranch(e.target.value)}
+            >
+              <option value="None">-- ជ្រើសរើសសាខា --</option>
+              <option value="All">ទាំងអស់ (All Branches)</option>
+              {Array.from({ length: 32 }, (_, i) => (
+                <option key={i + 1} value={`BELTEI IS ${i + 1}`}>
+                  BELTEI IS {i + 1}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Outlet context={{ selectedBranch }} />
         </div>
       </main>
     </div>

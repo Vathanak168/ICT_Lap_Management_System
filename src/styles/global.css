@@ -34,6 +34,10 @@
     @apply font-sans bg-background text-primary antialiased;
   }
 
+  button, select, a, [role="button"], input[type="button"], input[type="submit"] {
+    cursor: pointer;
+  }
+
   input[type="number"]::-webkit-inner-spin-button,
   input[type="number"]::-webkit-outer-spin-button {
     -webkit-appearance: none;

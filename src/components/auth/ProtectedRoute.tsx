@@ -22,9 +22,7 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allowedRoles }) => {
   }
 
   if (!session) {
-    // TEMPORARY: Allow bypassing login for development before Supabase is connected
-    // return <Navigate to="/login" replace />;
-    console.warn('Dev Mode: Bypassing authentication');
+    return <Navigate to="/login" replace />;
   }
 
   if (session && allowedRoles && role && !allowedRoles.includes(role)) {
