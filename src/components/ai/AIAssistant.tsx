@@ -229,10 +229,10 @@ const AIAssistant = () => {
 
       {/* Topbar Button */}
       <button 
-        className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-sm border transition-all text-sm font-medium ${isOpen ? 'bg-white text-[#2a5298] border-white' : 'bg-white/10 hover:bg-white/20 text-white border-white/20 hover:border-white/40'}`}
-        onClick={() => setIsOpen(!isOpen)}
+        className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-sm border transition-all text-sm font-medium bg-white/10 hover:bg-white/20 text-white border-white/20 hover:border-white/40`}
+        onClick={() => alert('មុខងារនេះកំពុងស្ថិតក្នុងការអភិវឌ្ឍន៍! (Under Development)')}
       >
-        {isOpen ? <X size={16} /> : <Bot size={16} />}
+        <Bot size={16} />
         <span>Gemini AI</span>
       </button>
     </>

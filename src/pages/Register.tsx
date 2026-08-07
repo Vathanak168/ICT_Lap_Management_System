@@ -19,9 +19,21 @@ const Register: React.FC = () => {
   
   const [availableBranches, setAvailableBranches] = useState<string[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   useEffect(() => {
     const fetchAvailableBranches = async () => {
@@ -57,13 +69,59 @@ const Register: React.FC = () => {
     fetchAvailableBranches();
   }, []);
 
+  useEffect(() => {
+    let subscription: any = null;
+    if (success) {
+      const { data } = supabase.auth.onAuthStateChange((event, session) => {
+        if (session) {
+          navigate('/');
+        }
+      });
+      subscription = data.subscription;
+    }
+    return () => {
+      if (subscription) subscription.unsubscribe();
+    };
+  }, [success, navigate]);
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setImageFile(file);
       const reader = new FileReader();
       reader.onload = (event) => {
-        setImagePreview(event.target?.result as string);
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 400;
+          const MAX_HEIGHT = 400;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.6);
+            setImagePreview(compressedBase64);
+          }
+        };
+        if (event.target?.result) {
+          img.src = event.target.result as string;
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -76,6 +134,12 @@ const Register: React.FC = () => {
     
     if (!name || !gmail || !password || !phone || !branch) {
       setError('សូមបំពេញព័ត៌មានឲ្យបានគ្រប់គ្រាន់');
+      setLoading(false);
+      return;
+    }
+
+    if (!imageFile) {
+      setError('សូមបញ្ចូលរូបថតរបស់អ្នក');
       setLoading(false);
       return;
     }
@@ -105,13 +169,20 @@ const Register: React.FC = () => {
     }
 
     try {
-      // 1. Sign up user in Auth
+      if (imagePreview) {
+        localStorage.setItem('pending_profile_image', imagePreview);
+      }
+
+      // 2. Sign up user in Auth and store profile data in metadata
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: gmail,
         password,
         options: {
           data: {
             full_name: name,
+            branch: branch,
+            phone_number: phone,
+            role: 'teacher'
           }
         }
       });
@@ -119,34 +190,7 @@ const Register: React.FC = () => {
       if (authError) throw authError;
       if (!authData.user) throw new Error('ការចុះឈ្មោះបរាជ័យ');
 
-      // 2. Upload Profile Image if exists
-      let profileImageUrl = null;
-      if (imageFile) {
-        profileImageUrl = imagePreview; // Storing base64 temporarily
-      }
-
-      // 3. Create Profile
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authData.user.id,
-          name: name,
-          email: gmail,
-          phone_number: phone,
-          branch: branch,
-          profile_image_url: profileImageUrl,
-          role: 'teacher'
-        });
-
-      if (profileError) {
-        console.error("Profile creation error:", profileError);
-        throw profileError;
-      }
-
       setSuccess(true);
-      setTimeout(() => {
-        navigate('/login');
-      }, 2000);
       
     } catch (err: any) {
       setError(err.message || 'បញ្ហាពេលចុះឈ្មោះ សូមព្យាយាមម្តងទៀត');
@@ -157,9 +201,9 @@ const Register: React.FC = () => {
 
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#E6EBF5] font-khmer">
+      <div className="min-h-screen flex items-center justify-center bg-[#E6EBF5] font-khmer p-4">
         <div 
-          className="max-w-md w-full rounded-[2.5rem] p-10 m-4 flex flex-col items-center text-center"
+          className="max-w-md w-full rounded-[2.5rem] p-8 md:p-10 m-4 flex flex-col items-center text-center"
           style={{
             backgroundColor: '#E6EBF5',
             boxShadow: '16px 16px 32px #c4c8d1, -16px -16px 32px #ffffff'
@@ -174,8 +218,19 @@ const Register: React.FC = () => {
           >
             <CheckCircle2 size={40} className="text-green-500" />
           </div>
-          <h2 className="text-2xl font-bold text-[#1E3C72] mb-2">ចុះឈ្មោះជោគជ័យ!</h2>
-          <p className="text-slate-500">គណនីរបស់អ្នកត្រូវបានបង្កើតដោយជោគជ័យ។ ប្រព័ន្ធនឹងនាំអ្នកទៅកាន់ទំព័រ Login ឥឡូវនេះ...</p>
+          <h2 className="text-2xl font-bold text-[#1E3C72] mb-3">ចុះឈ្មោះជោគជ័យ!</h2>
+          <p className="text-slate-600 font-medium leading-relaxed mb-8">
+            គណនីរបស់អ្នកត្រូវបានបង្កើតដោយជោគជ័យ។ ប្រព័ន្ធនឹងនាំអ្នកទៅកាន់ Dashboard ឥឡូវនេះ...
+          </p>
+          
+          <div className="flex flex-col items-center gap-4 p-4 rounded-2xl w-full"
+            style={{
+              boxShadow: 'inset 6px 6px 12px #cbcfd8, inset -6px -6px 12px #ffffff'
+            }}
+          >
+            <span className="w-8 h-8 border-[3px] border-[#0044CC]/30 border-t-[#0044CC] rounded-full animate-spin"></span>
+            <p className="text-sm font-bold text-[#0044CC]">កំពុងដំណើរការ...</p>
+          </div>
         </div>
       </div>
     );
@@ -294,30 +349,47 @@ const Register: React.FC = () => {
             {/* Branch */}
             <div>
               <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">សាខា</label>
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#2A5298] transition-colors">
+              <div className="relative group" ref={dropdownRef}>
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#2A5298] transition-colors z-10">
                   <MapPin size={18} />
                 </div>
-                <select
-                  value={branch}
-                  onChange={(e) => setBranch(e.target.value)}
-                  disabled={loadingBranches || availableBranches.length === 0}
-                  className="w-full h-12 pl-11 pr-10 rounded-xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 focus:ring-2 focus:ring-blue-400/30 transition-all appearance-none disabled:opacity-60"
+                <div
+                  onClick={() => {
+                    if (!loadingBranches && availableBranches.length > 0) {
+                      setIsDropdownOpen(!isDropdownOpen);
+                    }
+                  }}
+                  className={`w-full h-12 pl-11 pr-10 rounded-xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 flex items-center cursor-pointer transition-all ${loadingBranches || availableBranches.length === 0 ? 'opacity-60 cursor-not-allowed' : ''}`}
                   style={{ boxShadow: 'inset 4px 4px 8px #cbcfd8, inset -4px -4px 8px #ffffff' }}
                 >
-                  {loadingBranches ? (
-                    <option value="">កំពុងទាញយកទិន្នន័យ...</option>
-                  ) : availableBranches.length === 0 ? (
-                    <option value="">អស់សាខាសម្រាប់ចុះឈ្មោះហើយ</option>
-                  ) : (
-                    availableBranches.map(b => (
-                      <option key={b} value={b}>{b}</option>
-                    ))
-                  )}
-                </select>
-                <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none text-slate-400">
-                  <ChevronDown size={18} />
+                  <span className="truncate">{loadingBranches ? "កំពុងទាញយកទិន្នន័យ..." : availableBranches.length === 0 ? "អស់សាខាសម្រាប់ចុះឈ្មោះហើយ" : branch}</span>
                 </div>
+                <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none text-slate-400 z-10">
+                  <ChevronDown size={18} className={`transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
+                </div>
+
+                {isDropdownOpen && (
+                  <div 
+                    className="absolute z-50 w-full mt-2 py-2 rounded-2xl bg-[#E6EBF5] max-h-60 overflow-y-auto"
+                    style={{
+                      boxShadow: '8px 8px 16px #c4c8d1, -8px -8px 16px #ffffff',
+                      border: '1px solid rgba(255,255,255,0.3)'
+                    }}
+                  >
+                    {availableBranches.map(b => (
+                      <div
+                        key={b}
+                        onClick={() => {
+                          setBranch(b);
+                          setIsDropdownOpen(false);
+                        }}
+                        className={`px-4 py-2.5 cursor-pointer text-[15px] font-medium transition-colors ${branch === b ? 'bg-[#0044CC] text-white font-bold rounded-lg mx-2' : 'text-slate-700 hover:bg-[#d1d9e6] rounded-lg mx-2'}`}
+                      >
+                        {b}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

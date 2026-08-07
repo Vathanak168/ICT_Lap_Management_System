@@ -149,15 +149,15 @@ const Login: React.FC = () => {
             />
           </div>
 
-          <h1 className="text-2xl sm:text-[28px] font-bold text-center text-[#1E3C72] mb-1">
-            ICT Lab Management System
+          <h1 className="text-2xl sm:text-[26px] font-bold text-center text-[#1E3C72] mb-1">
+            ប្រព័ន្ធគ្រប់គ្រងបន្ទប់កុំព្យូទ័រ
           </h1>
           
           <div className="w-12 h-1 bg-gradient-to-r from-blue-400 to-blue-600 rounded-full my-4"></div>
 
-          <h2 className="text-[19px] font-bold text-slate-700">Welcome Back</h2>
+          <h2 className="text-[19px] font-bold text-slate-700">សូមស្វាគមន៍ការត្រឡប់មកវិញ</h2>
           <p className="text-sm font-medium text-slate-500 mb-8 text-center">
-            Sign in to continue to your account
+            សូមចូលគណនីដើម្បីបន្ត
           </p>
 
           {error && (
@@ -182,7 +182,7 @@ const Login: React.FC = () => {
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && passwordRef.current?.focus()}
-                placeholder="Username or Email"
+                placeholder="ឈ្មោះ ឬ អ៊ីមែល"
                 className="w-full h-14 pl-12 pr-4 rounded-2xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-400/30 transition-all"
                 style={{
                   boxShadow: 'inset 6px 6px 12px #cbcfd8, inset -6px -6px 12px #ffffff'
@@ -203,7 +203,7 @@ const Login: React.FC = () => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                placeholder="Password"
+                placeholder="ពាក្យសម្ងាត់"
                 className="w-full h-14 pl-12 pr-12 rounded-2xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-400/30 transition-all"
                 style={{
                   boxShadow: 'inset 6px 6px 12px #cbcfd8, inset -6px -6px 12px #ffffff'
@@ -239,11 +239,11 @@ const Login: React.FC = () => {
                   {remember && <div className="w-2.5 h-2.5 rounded-[2px] bg-[#2A5298]" />}
                 </div>
                 <span className="text-sm font-medium text-slate-500 group-hover:text-slate-700 transition-colors">
-                  Remember me
+                  ចងចាំខ្ញុំ
                 </span>
               </label>
               <a href="#" className="text-sm font-bold text-[#1E3C72] hover:underline">
-                Forgot Password?
+                ភ្លេចពាក្យសម្ងាត់?
               </a>
             </div>
 
@@ -260,7 +260,7 @@ const Login: React.FC = () => {
                 <span className="w-6 h-6 border-[3px] border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <div className="flex items-center gap-2">
-                  <span>Sign In</span>
+                  <span>ចូលគណនី</span>
                   <LogIn size={20} className="group-hover:translate-x-1 transition-transform" />
                 </div>
               )}
@@ -268,7 +268,7 @@ const Login: React.FC = () => {
 
             <div className="flex items-center gap-4 py-1">
               <div className="flex-1 h-px bg-slate-300 shadow-[0_1px_1px_#ffffff]"></div>
-              <span className="text-xs font-bold text-slate-400">or</span>
+              <span className="text-xs font-bold text-slate-400">ឬ</span>
               <div className="flex-1 h-px bg-slate-300 shadow-[0_1px_1px_#ffffff]"></div>
             </div>
 
@@ -292,18 +292,19 @@ const Login: React.FC = () => {
                     <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
                     <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
                   </svg>
-                  <span>Continue with Google</span>
+                  <span>ចូលគណនីជាមួយ Google</span>
                 </>
               )}
             </button>
+
+            {/* Register Link */}
+            <p className="text-center text-sm font-medium text-slate-500 mt-2">
+              មិនទាន់មានគណនីមែនទេ?{' '}
+              <Link to="/register" className="text-[#1E3C72] font-bold hover:underline">
+                ចុះឈ្មោះនៅទីនេះ
+              </Link>
+            </p>
           </div>
-          
-          {/* Footer Text */}
-          <p className="mt-8 text-[11px] font-bold text-slate-400 text-center uppercase tracking-wide">
-            BELTEI International School • Building Quality, Human Resource and Society
-            <br />
-            &copy; 2024 BELTEI. All rights reserved.
-          </p>
         </div>
 
 

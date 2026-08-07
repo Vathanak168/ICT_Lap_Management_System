@@ -97,10 +97,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (currentSession?.user) {
         if (loadedProfileUserIdRef.current !== currentSession.user.id) {
           // New user signed in
+          const pendingImage = localStorage.getItem('pending_profile_image');
+          if (pendingImage) {
+            void supabase.from('profiles').update({ profile_image_url: pendingImage }).eq('id', currentSession.user.id).then(() => {
+              localStorage.removeItem('pending_profile_image');
+              void fetchUserProfile(currentSession.user.id);
+            });
+          }
+          
           setRole(null);
           setProfileImage(null);
           loadedProfileUserIdRef.current = currentSession.user.id;
-          void fetchUserProfile(currentSession.user.id);
+          if (!pendingImage) {
+            void fetchUserProfile(currentSession.user.id);
+          }
         }
       } else {
         // User signed out

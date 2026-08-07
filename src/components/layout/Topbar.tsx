@@ -51,15 +51,7 @@ const Topbar = () => {
         {/* AI Assistant Trigger */}
         <AIAssistant />
 
-        {/* Language Select */}
-        <button 
-          onClick={toggleLanguage}
-          className="hidden md:flex items-center gap-2 bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-sm border border-white/20 hover:border-white/40 transition-all text-sm"
-        >
-          <Globe size={16} />
-          <span>{language === 'KH' ? 'ខ្មែរ' : 'English'}</span>
-          <ChevronDown size={14} className="opacity-70" />
-        </button>
+        {/* Language Select Removed */}
 
         {/* Academic Year Select */}
         <div className="hidden sm:flex items-center">
