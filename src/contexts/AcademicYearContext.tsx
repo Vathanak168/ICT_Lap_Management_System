@@ -75,11 +75,13 @@ export const AcademicYearProvider: React.FC<{ children: React.ReactNode }> = ({ 
     void fetchYears();
   }, [fetchYears]);
 
-  const changeYear = useCallback((year: string) => {
-    const exists = academicYears.some(item => item.year === year);
-    if (!exists) {
-      console.error(`Unknown academic year: ${year}`);
-      return;
+  const changeYear = useCallback((year: string, skipValidation = false) => {
+    if (!skipValidation) {
+      const exists = academicYears.some(item => item.year === year);
+      if (!exists) {
+        console.error(`Unknown academic year: ${year}`);
+        return;
+      }
     }
     setActiveYear(year);
     localStorage.setItem('active_academic_year', year);
@@ -103,7 +105,7 @@ export const AcademicYearProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (error) throw error;
       
       await fetchYears();
-      changeYear(normalizedYear);
+      changeYear(normalizedYear, true);
       return true;
     } catch (error) {
       console.error('Error creating academic year:', error);
