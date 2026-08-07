@@ -306,32 +306,7 @@ const Login: React.FC = () => {
           </p>
         </div>
 
-        {/* Right Floating Badges (Hidden on mobile) */}
-        <div className="hidden xl:flex flex-col gap-8 relative z-20">
-          <div 
-            className="w-28 h-28 rounded-3xl flex flex-col items-center justify-center gap-2 cursor-pointer hover:-translate-y-1 transition-transform"
-            style={{ backgroundColor: '#E6EBF5', boxShadow: '12px 12px 24px #c4c8d1, -12px -12px 24px #ffffff' }}
-          >
-            <Monitor size={28} className="text-[#1E3C72]" />
-            <span className="text-xs font-bold text-[#1E3C72]">IT Teachers</span>
-          </div>
-          
-          <div 
-            className="w-28 h-28 rounded-3xl flex flex-col items-center justify-center gap-2 cursor-pointer hover:-translate-y-1 transition-transform"
-            style={{ backgroundColor: '#E6EBF5', boxShadow: '12px 12px 24px #c4c8d1, -12px -12px 24px #ffffff' }}
-          >
-            <Users size={28} className="text-[#1E3C72]" />
-            <span className="text-xs font-bold text-[#1E3C72]">Admins</span>
-          </div>
 
-          <div 
-            className="w-28 h-28 rounded-3xl flex flex-col items-center justify-center gap-2 cursor-pointer hover:-translate-y-1 transition-transform"
-            style={{ backgroundColor: '#E6EBF5', boxShadow: '12px 12px 24px #c4c8d1, -12px -12px 24px #ffffff' }}
-          >
-            <ShieldCheck size={28} className="text-[#1E3C72]" />
-            <span className="text-xs font-bold text-[#1E3C72]">Secure Access</span>
-          </div>
-        </div>
       </div>
     </div>
   );
