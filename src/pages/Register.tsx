@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { User, Lock, Mail, Phone, MapPin, Camera, AlertCircle, CheckCircle2, ChevronDown } from 'lucide-react';
+import { User, Lock, Mail, Phone, MapPin, Camera, AlertCircle, CheckCircle2, ChevronDown, Eye, EyeOff } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 
 const Register: React.FC = () => {
   const [name, setName] = useState('');
   const [branch, setBranch] = useState('BELTEI IS 1');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [gmail, setGmail] = useState('');
   const [phone, setPhone] = useState('');
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -121,12 +122,6 @@ const Register: React.FC = () => {
       // 2. Upload Profile Image if exists
       let profileImageUrl = null;
       if (imageFile) {
-        // const fileExt = imageFile.name.split('.').pop();
-        // const fileName = `${authData.user.id}.${fileExt}`;
-        
-        // Ensure bucket exists in Supabase, but for now we'll just store the base64 or a dummy URL 
-        // since we might not have the bucket configured. Let's use the local preview as a base64 for simplicity in demo
-        // In production: supabase.storage.from('avatars').upload(fileName, imageFile)
         profileImageUrl = imagePreview; // Storing base64 temporarily
       }
 
@@ -145,10 +140,7 @@ const Register: React.FC = () => {
 
       if (profileError) {
         console.error("Profile creation error:", profileError);
-        // We won't block the user if profile fails, but we'll log it.
-        // Wait, if it fails they won't be able to login with Name. 
-        // Throwing is better.
-        // If there's an RLS issue, it might fail. We've set RLS so it should work.
+        throw profileError;
       }
 
       setSuccess(true);
@@ -163,66 +155,111 @@ const Register: React.FC = () => {
     }
   };
 
-  // Branches are fetched dynamically in useEffect
-
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#f8fafc] font-khmer">
-        <div className="max-w-md w-full bg-white/70 backdrop-blur-xl rounded-2xl shadow-xl p-10 m-4 border border-white flex flex-col items-center text-center">
-          <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
+      <div className="min-h-screen flex items-center justify-center bg-[#E6EBF5] font-khmer">
+        <div 
+          className="max-w-md w-full rounded-[2.5rem] p-10 m-4 flex flex-col items-center text-center"
+          style={{
+            backgroundColor: '#E6EBF5',
+            boxShadow: '16px 16px 32px #c4c8d1, -16px -16px 32px #ffffff'
+          }}
+        >
+          <div 
+            className="w-20 h-20 rounded-full flex items-center justify-center mb-6"
+            style={{
+              backgroundColor: '#E6EBF5',
+              boxShadow: '8px 8px 16px #c4c8d1, -8px -8px 16px #ffffff'
+            }}
+          >
             <CheckCircle2 size={40} className="text-green-500" />
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">ចុះឈ្មោះជោគជ័យ!</h2>
-          <p className="text-gray-600">គណនីរបស់អ្នកត្រូវបានបង្កើតដោយជោគជ័យ។ ប្រព័ន្ធនឹងនាំអ្នកទៅកាន់ទំព័រ Login ឥឡូវនេះ...</p>
+          <h2 className="text-2xl font-bold text-[#1E3C72] mb-2">ចុះឈ្មោះជោគជ័យ!</h2>
+          <p className="text-slate-500">គណនីរបស់អ្នកត្រូវបានបង្កើតដោយជោគជ័យ។ ប្រព័ន្ធនឹងនាំអ្នកទៅកាន់ទំព័រ Login ឥឡូវនេះ...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#f8fafc] font-khmer p-4 relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center bg-[#E6EBF5] font-khmer p-4 relative overflow-hidden text-slate-800 py-10">
       {/* Background decoration */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-400/20 rounded-full blur-[100px]"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-400/20 rounded-full blur-[100px]"></div>
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-500/10 rounded-full blur-[120px] pointer-events-none"></div>
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-blue-600/10 rounded-full blur-[150px] pointer-events-none"></div>
       
-      <div className="max-w-xl w-full bg-white/80 backdrop-blur-xl rounded-3xl shadow-2xl p-8 sm:p-10 border border-white/60 relative z-10">
-        <div className="text-center mb-8">
-          <img 
-            src="/Asset 1@3x.png" 
-            alt="Beltei Logo" 
-            className="w-full max-w-[310px] h-[60px] mx-auto mb-6 drop-shadow-sm object-fill"
-            onError={(e) => {
-              (e.target as HTMLImageElement).src = 'https://via.placeholder.com/310x60?text=BELTEI+LOGO';
+      {/* SVG Background decoration (Soft abstract circles) */}
+      <div className="absolute top-0 right-0 w-full h-full pointer-events-none overflow-hidden opacity-[0.15]">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
+          <circle cx="95" cy="5" r="40" fill="url(#grad1)" />
+          <circle cx="5" cy="95" r="30" fill="url(#grad1)" />
+          <defs>
+            <radialGradient id="grad1" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+              <stop offset="0%" style={{ stopColor: '#2a5298', stopOpacity: 1 }} />
+              <stop offset="100%" style={{ stopColor: '#2a5298', stopOpacity: 0 }} />
+            </radialGradient>
+          </defs>
+        </svg>
+      </div>
+      
+      <div 
+        className="max-w-2xl w-full rounded-[2.5rem] p-8 sm:p-12 relative z-10"
+        style={{
+          backgroundColor: '#E6EBF5',
+          boxShadow: '16px 16px 32px #c4c8d1, -16px -16px 32px #ffffff'
+        }}
+      >
+        <div className="text-center mb-8 flex flex-col items-center">
+          <div 
+            className="w-24 h-24 mb-5 rounded-3xl flex items-center justify-center p-2"
+            style={{
+              backgroundColor: '#E6EBF5',
+              boxShadow: '8px 8px 16px #c4c8d1, -8px -8px 16px #ffffff'
             }}
-          />
-          <h2 className="text-3xl font-bold text-gray-900 mb-2 bg-gradient-to-r from-[#2a5298] to-[#1e3c72] bg-clip-text text-transparent">បង្កើតគណនីថ្មី</h2>
-          <p className="text-gray-500">សូមបញ្ចូលព័ត៌មានរបស់អ្នកខាងក្រោម</p>
+          >
+            <img 
+              src="/beltei_international_school_in_cambodia.png" 
+              alt="Beltei Logo" 
+              className="w-full h-full object-contain mix-blend-multiply"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+          </div>
+          <h2 className="text-[26px] font-bold text-[#1E3C72] mb-1">បង្កើតគណនីថ្មី</h2>
+          <div className="w-12 h-1 bg-gradient-to-r from-blue-400 to-blue-600 rounded-full my-3"></div>
+          <p className="text-slate-500 font-medium">សូមបញ្ចូលព័ត៌មានខាងក្រោមដើម្បីចុះឈ្មោះ</p>
         </div>
 
         {error && (
-          <div className="mb-6 bg-red-50/80 backdrop-blur border-l-4 border-red-500 p-4 rounded-r-lg flex items-start gap-3 shadow-sm">
-            <AlertCircle className="text-red-500 mt-0.5 shrink-0" size={18} />
-            <p className="text-sm text-red-700">{error}</p>
+          <div className="mb-8 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50/50 px-4 py-3 shadow-[inset_2px_2px_5px_#fca5a5,inset_-2px_-2px_5px_#ffffff]">
+            <AlertCircle size={18} className="mt-0.5 shrink-0 text-red-500" />
+            <p className="text-[13px] font-medium text-red-700">{error}</p>
           </div>
         )}
 
-        <form onSubmit={handleRegister} className="space-y-5">
+        <form onSubmit={handleRegister} className="space-y-6">
           {/* Profile Image Upload */}
-          <div className="flex flex-col items-center justify-center mb-6">
+          <div className="flex flex-col items-center justify-center mb-8">
             <div 
-              className="relative w-28 h-28 rounded-full border-4 border-white shadow-lg bg-gray-100 flex items-center justify-center overflow-hidden cursor-pointer group transition-transform hover:scale-105"
+              className="relative w-28 h-28 rounded-full flex items-center justify-center overflow-hidden cursor-pointer group"
               onClick={() => fileInputRef.current?.click()}
+              style={{
+                backgroundColor: '#E6EBF5',
+                boxShadow: imagePreview 
+                  ? '8px 8px 16px #c4c8d1, -8px -8px 16px #ffffff' 
+                  : 'inset 6px 6px 12px #cbcfd8, inset -6px -6px 12px #ffffff'
+              }}
             >
               {imagePreview ? (
                 <img src={imagePreview} alt="Profile" className="w-full h-full object-cover" />
               ) : (
-                <User size={40} className="text-gray-300" />
+                <User size={36} className="text-slate-400" />
               )}
-              <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute inset-0 bg-[#1E3C72]/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                 <Camera className="text-white" size={24} />
               </div>
             </div>
-            <p className="text-sm text-[#2a5298] font-medium mt-3 cursor-pointer hover:underline" onClick={() => fileInputRef.current?.click()}>
+            <p className="text-sm font-bold text-[#1E3C72] mt-4 cursor-pointer hover:underline" onClick={() => fileInputRef.current?.click()}>
               បញ្ចូលរូបថត
             </p>
             <input 
@@ -234,37 +271,39 @@ const Register: React.FC = () => {
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             {/* Name */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1.5 ml-1">ឈ្មោះ</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <User size={18} className="text-gray-400" />
+              <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">ឈ្មោះ</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#2A5298] transition-colors">
+                  <User size={18} />
                 </div>
                 <input
                   type="text"
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full pl-11 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#2a5298]/20 focus:border-[#2a5298] outline-none transition-all shadow-sm"
+                  className="w-full h-12 pl-11 pr-4 rounded-xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-400/30 transition-all"
                   placeholder="ឈ្មោះរបស់អ្នក"
+                  style={{ boxShadow: 'inset 4px 4px 8px #cbcfd8, inset -4px -4px 8px #ffffff' }}
                 />
               </div>
             </div>
 
             {/* Branch */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1.5 ml-1">សាខា</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <MapPin size={18} className="text-gray-400" />
+              <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">សាខា</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#2A5298] transition-colors">
+                  <MapPin size={18} />
                 </div>
                 <select
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
                   disabled={loadingBranches || availableBranches.length === 0}
-                  className="w-full pl-11 pr-10 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#2a5298]/20 focus:border-[#2a5298] outline-none transition-all shadow-sm appearance-none disabled:opacity-50"
+                  className="w-full h-12 pl-11 pr-10 rounded-xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 focus:ring-2 focus:ring-blue-400/30 transition-all appearance-none disabled:opacity-60"
+                  style={{ boxShadow: 'inset 4px 4px 8px #cbcfd8, inset -4px -4px 8px #ffffff' }}
                 >
                   {loadingBranches ? (
                     <option value="">កំពុងទាញយកទិន្នន័យ...</option>
@@ -276,44 +315,46 @@ const Register: React.FC = () => {
                     ))
                   )}
                 </select>
-                <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none">
-                  <ChevronDown size={18} className="text-gray-400" />
+                <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none text-slate-400">
+                  <ChevronDown size={18} />
                 </div>
               </div>
             </div>
 
             {/* Email */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1.5 ml-1">អ៊ីមែល</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Mail size={18} className="text-gray-400" />
+              <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">អ៊ីមែល</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#2A5298] transition-colors">
+                  <Mail size={18} />
                 </div>
                 <input
                   type="email"
                   required
                   value={gmail}
                   onChange={(e) => setGmail(e.target.value)}
-                  className="w-full pl-11 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#2a5298]/20 focus:border-[#2a5298] outline-none transition-all shadow-sm"
+                  className="w-full h-12 pl-11 pr-4 rounded-xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-400/30 transition-all"
                   placeholder="example@gmail.com"
+                  style={{ boxShadow: 'inset 4px 4px 8px #cbcfd8, inset -4px -4px 8px #ffffff' }}
                 />
               </div>
             </div>
 
             {/* Phone */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1.5 ml-1">លេខទូរស័ព្ទ</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Phone size={18} className="text-gray-400" />
+              <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">លេខទូរស័ព្ទ</label>
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#2A5298] transition-colors">
+                  <Phone size={18} />
                 </div>
                 <input
                   type="tel"
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  className="w-full pl-11 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#2a5298]/20 focus:border-[#2a5298] outline-none transition-all shadow-sm"
+                  className="w-full h-12 pl-11 pr-4 rounded-xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-400/30 transition-all"
                   placeholder="012 345 678"
+                  style={{ boxShadow: 'inset 4px 4px 8px #cbcfd8, inset -4px -4px 8px #ffffff' }}
                 />
               </div>
             </div>
@@ -321,37 +362,52 @@ const Register: React.FC = () => {
 
           {/* Password */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1.5 ml-1">ពាក្យសម្ងាត់</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                <Lock size={18} className="text-gray-400" />
+            <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">ពាក្យសម្ងាត់</label>
+            <div className="relative group">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within:text-[#2A5298] transition-colors">
+                <Lock size={18} />
               </div>
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-11 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#2a5298]/20 focus:border-[#2a5298] outline-none transition-all shadow-sm"
+                className="w-full h-12 pl-11 pr-12 rounded-xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-400/30 transition-all"
                 placeholder="បញ្ជូលពាក្យសម្ងាត់ (យ៉ាងតិច ៦ ខ្ទង់)"
+                style={{ boxShadow: 'inset 4px 4px 8px #cbcfd8, inset -4px -4px 8px #ffffff' }}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full flex justify-center items-center gap-2 bg-gradient-to-r from-[#2a5298] to-[#1e3c72] hover:from-[#1e3c72] hover:to-[#152a51] text-white py-3 px-4 rounded-xl font-bold text-lg transition-all shadow-lg hover:shadow-xl disabled:opacity-70 disabled:cursor-not-allowed mt-4 transform hover:-translate-y-0.5 active:translate-y-0"
+            className="w-full h-14 mt-8 rounded-2xl bg-[#0044CC] hover:bg-[#0038b3] active:bg-[#002f99] flex items-center justify-center text-white font-bold text-[16px] transition-all disabled:opacity-70 disabled:cursor-not-allowed group"
+            style={{
+              boxShadow: '8px 8px 16px #c4c8d1, -8px -8px 16px #ffffff'
+            }}
           >
             {loading ? (
-              <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin"></div>
+              <span className="w-6 h-6 border-[3px] border-white/30 border-t-white rounded-full animate-spin" />
             ) : (
-              'ចុះឈ្មោះ'
+              'ចុះឈ្មោះបង្កើតគណនី'
             )}
           </button>
           
-          <p className="text-center text-sm text-gray-500 mt-6 font-medium">
+          <div className="flex items-center gap-4 py-2 mt-4">
+            <div className="flex-1 h-px bg-slate-300 shadow-[0_1px_1px_#ffffff]"></div>
+          </div>
+
+          <p className="text-center text-sm font-medium text-slate-500 mt-2">
             មានគណនីរួចហើយមែនទេ?{' '}
-            <Link to="/login" className="text-[#2a5298] font-bold hover:underline">
+            <Link to="/login" className="text-[#1E3C72] font-bold hover:underline">
               ចូលគណនី
             </Link>
           </p>
