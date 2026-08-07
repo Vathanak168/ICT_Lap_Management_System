@@ -140,7 +140,7 @@ const Login: React.FC = () => {
             }}
           >
             <img
-              src="/Asset 1@3x.png"
+              src="/beltei_international_school_in_cambodia.png"
               alt="BELTEI Logo"
               className="w-full h-full object-contain drop-shadow-md"
               onError={(e) => {
