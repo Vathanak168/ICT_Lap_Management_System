@@ -133,7 +133,7 @@ const Login: React.FC = () => {
         >
           {/* Logo 3D Effect */}
           <div 
-            className="w-24 h-24 mb-6 rounded-full flex items-center justify-center p-3"
+            className="w-28 h-28 mb-6 rounded-3xl flex items-center justify-center p-2"
             style={{
               backgroundColor: '#E6EBF5',
               boxShadow: '8px 8px 16px #c4c8d1, -8px -8px 16px #ffffff'
@@ -142,7 +142,7 @@ const Login: React.FC = () => {
             <img
               src="/beltei_international_school_in_cambodia.png"
               alt="BELTEI Logo"
-              className="w-full h-full object-contain drop-shadow-md"
+              className="w-full h-full object-contain mix-blend-multiply"
               onError={(e) => {
                 e.currentTarget.style.display = 'none';
               }}
