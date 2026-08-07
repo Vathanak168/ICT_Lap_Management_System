@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { Save, Download, Upload, Lock, Unlock, Edit, X } from 'lucide-react';
+import { Save, Download, Upload, Lock, Unlock, Edit, X, Globe, Languages } from 'lucide-react';
 import { initDB } from '../store/db';
 import type { Student, ClassRecord, GradeRecord, SettingRecord } from '../store/db';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Settings } from 'lucide-react';
 import './Gradebook.css';
+import { translateKhmerToEnglish } from '../utils/khmerTranslator';
 
 interface StudentRow extends Student {
   practice: number | null;
@@ -28,8 +29,9 @@ const Gradebook = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   
-  const { language } = useLanguage();
+  const { language, toggleLanguage } = useLanguage();
   const { activeYear } = useAcademicYear();
+  const [isTranslating, setIsTranslating] = useState(false);
   
   const loadClassRequestRef = useRef(0);
   const loadDataRequestRef = useRef(0);
@@ -524,6 +526,57 @@ const Gradebook = () => {
                 <input type="checkbox" checked={showAdjustment} onChange={(e) => setShowAdjustment(e.target.checked)} className="cursor-pointer" /> ពិន្ទុបន្ថែម
               </label>
             </div>
+            
+            {/* Language / Translate Button */}
+            {displayedStudents.some(s => !s.englishName) ? (
+              <button 
+                className="bg-white border border-indigo-300 text-indigo-700 hover:bg-indigo-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
+                onClick={async () => {
+                  if (!activeYear || !selectedClass) return;
+                  setIsTranslating(true);
+                  try {
+                    const db = await initDB();
+                    const targetStudents = displayedStudents.filter(s => !s.englishName);
+                    let translatedCount = 0;
+                    
+                    for (const s of targetStudents) {
+                       await db.update('students', s.id, {
+                          englishName: translateKhmerToEnglish(s.name)
+                       });
+                       translatedCount++;
+                    }
+                    
+                    if (translatedCount > 0) {
+                      setAllScopeStudents(prev => prev.map(s => {
+                        if (targetStudents.some(t => t.id === s.id)) {
+                          return { ...s, englishName: translateKhmerToEnglish(s.name) };
+                        }
+                        return s;
+                      }));
+                      alert(language === 'KH' ? `បានបកប្រែឈ្មោះសិស្សចំនួន ${translatedCount} នាក់ជោគជ័យ!` : `Translated ${translatedCount} students successfully!`);
+                    }
+                  } catch (error) {
+                    console.error('Translation failed:', error);
+                    alert(language === 'KH' ? 'មានកំហុសពេលបកប្រែ' : 'Error translating');
+                  } finally {
+                    setIsTranslating(false);
+                  }
+                }}
+                disabled={isTranslating || isLoading || displayedStudents.length === 0}
+              >
+                <Globe size={16} />
+                <span>{isTranslating ? 'កំពុងបកប្រែ...' : 'Translate'}</span>
+              </button>
+            ) : (
+              <button 
+                className="bg-white border border-green-300 text-green-700 hover:bg-green-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
+                onClick={toggleLanguage}
+                disabled={isLoading || displayedStudents.length === 0}
+              >
+                <Languages size={16} />
+                <span>{language === 'KH' ? 'ប្តូរភាសា' : 'Language'}</span>
+              </button>
+            )}
             <button 
               className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
               onClick={() => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Search, UserPlus, MoreVertical, Edit2, Trash2, KeyRound, Download, Eye, User, Users, ArrowLeftRight } from 'lucide-react';
+import { Search, UserPlus, MoreVertical, Edit2, Trash2, KeyRound, Download, Eye, User, Users, ArrowLeftRight, Globe, Languages } from 'lucide-react';
 import { initDB } from '../store/db';
 import type { Student, ClassRecord } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
@@ -14,7 +14,7 @@ const Students = () => {
   const [classes, setClasses] = useState<ClassRecord[]>([]);
   const [filterClass, setFilterClass] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
-  const { language } = useLanguage();
+  const { language, toggleLanguage } = useLanguage();
   
   const [showModal, setShowModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -255,41 +255,52 @@ const Students = () => {
           </div>
           
           <div className="flex flex-wrap items-center gap-3 mt-4 xl:mt-0">
-            <button 
-              className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
-              disabled={isProcessing || isSaving || !activeYear || !students.some(s => !s.englishName)}
-              onClick={async () => {
-                if (!activeYear) return;
-                const targetYear = activeYear;
-                if (!window.confirm('តើអ្នកចង់បកប្រែឈ្មោះសិស្សដែលមិនទាន់មានឈ្មោះអង់គ្លេសដោយស្វ័យប្រវត្តិមែនទេ? (ទិន្នន័យនឹងត្រូវរក្សាទុកក្នុង Database)')) return;
-                setIsProcessing(true);
-                try {
-                  const db = await initDB();
-                  const targetStudents = students.filter(s => !s.englishName);
-                  let translatedCount = 0;
-                  
-                  // Use loop of partial updates instead of putMany to avoid full overwrites
-                  for (const s of targetStudents) {
-                     await db.update('students', s.id, {
-                        englishName: translateKhmerToEnglish(s.name)
-                     });
-                     translatedCount++;
+            {students.some(s => !s.englishName) ? (
+              <button 
+                className="bg-white border border-indigo-300 text-indigo-700 hover:bg-indigo-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
+                disabled={isProcessing || isSaving || !activeYear}
+                onClick={async () => {
+                  if (!activeYear) return;
+                  const targetYear = activeYear;
+                  if (!window.confirm('តើអ្នកចង់បកប្រែឈ្មោះសិស្សដែលមិនទាន់មានឈ្មោះអង់គ្លេសដោយស្វ័យប្រវត្តិមែនទេ? (ទិន្នន័យនឹងត្រូវរក្សាទុកក្នុង Database)')) return;
+                  setIsProcessing(true);
+                  try {
+                    const db = await initDB();
+                    const targetStudents = students.filter(s => !s.englishName);
+                    let translatedCount = 0;
+                    
+                    for (const s of targetStudents) {
+                       await db.update('students', s.id, {
+                          englishName: translateKhmerToEnglish(s.name)
+                       });
+                       translatedCount++;
+                    }
+                    
+                    if (translatedCount > 0) {
+                      await fetchData(targetYear);
+                      alert(language === 'KH' ? `បានបកប្រែនិងរក្សាទុកឈ្មោះសិស្សចំនួន ${translatedCount} នាក់ជោគជ័យ!` : `Translated ${translatedCount} students successfully!`);
+                    }
+                  } catch (error) {
+                    console.error('Translation failed:', error);
+                    alert(language === 'KH' ? 'មានកំហុសពេលបកប្រែ' : 'Translation failed');
+                  } finally {
+                    setIsProcessing(false);
                   }
-                  
-                  if (translatedCount > 0) {
-                    await fetchData(targetYear);
-                    alert(`បានបកប្រែនិងរក្សាទុកឈ្មោះសិស្សចំនួន ${translatedCount} នាក់ជោគជ័យ!`);
-                  }
-                } catch (error) {
-                  console.error('Translation failed:', error);
-                  alert('មានកំហុសពេលបកប្រែ');
-                } finally {
-                  setIsProcessing(false);
-                }
-              }}
-            >
-              {isProcessing ? 'កំពុងដំណើរការ...' : 'បកប្រែទាំងអស់'}
-            </button>
+                }}
+              >
+                <Globe size={16} />
+                {isProcessing ? 'កំពុងដំណើរការ...' : 'បកប្រែទាំងអស់ (Translate)'}
+              </button>
+            ) : (
+              <button 
+                className="bg-white border border-green-300 text-green-700 hover:bg-green-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
+                onClick={toggleLanguage}
+                disabled={isProcessing || isSaving || students.length === 0}
+              >
+                <Languages size={16} />
+                <span>{language === 'KH' ? 'ប្តូរភាសា: ខ្មែរ' : 'Language: English'}</span>
+              </button>
+            )}
             <button 
               className="bg-white border border-red-200 text-red-600 hover:bg-red-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
               disabled={isProcessing || isSaving || !activeYear || !students.some(s => s.englishName)}
