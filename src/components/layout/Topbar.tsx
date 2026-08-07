@@ -64,6 +64,7 @@ const Topbar = () => {
             }}
             className="bg-white/10 hover:bg-white/20 text-white text-sm rounded-sm px-3 py-1.5 border border-white/20 hover:border-white/40 outline-none focus:bg-white focus:text-gray-800 focus:border-white transition-all font-medium cursor-pointer"
           >
+            {!activeYear && <option value="" disabled>-- ជ្រើសរើស --</option>}
             {academicYears.map(y => (
               <option key={y.id} value={y.year} className="text-gray-800">{y.year}</option>
             ))}
