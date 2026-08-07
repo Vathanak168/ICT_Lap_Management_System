@@ -105,13 +105,13 @@ const MiniApps = () => {
         </div>
         
         <div className="flex gap-3 w-full sm:w-auto">
-          <div className="relative w-full sm:w-64">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search size={18} className="text-slate-400" />
+          <div className="relative w-full sm:w-80 group">
+            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+              <Search size={18} className="text-slate-400 group-focus-within:text-blue-500 transition-colors" />
             </div>
             <input
               type="text"
-              className="input-field pl-10 bg-white"
+              className="w-full h-11 pl-11 pr-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer shadow-sm text-slate-700 placeholder:text-slate-400 placeholder:font-khmer"
               placeholder="ស្វែងរកឈ្មោះកម្មវិធី..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -127,52 +127,59 @@ const MiniApps = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-x-4 gap-y-8 p-6 bg-slate-50/50 rounded-3xl border border-slate-200/50 shadow-inner min-h-[400px]">
         {loading ? (
           <div className="col-span-full py-12 text-center text-slate-500 font-khmer">កំពុងទាញយកទិន្នន័យ...</div>
         ) : filteredApps.length === 0 ? (
-          <div className="col-span-full card py-12 text-center flex flex-col items-center justify-center">
+          <div className="col-span-full py-12 text-center flex flex-col items-center justify-center">
             <AppWindow size={48} className="text-slate-300 mb-4" />
             <h2 className="text-xl font-bold text-slate-700 font-khmer mb-2">មិនមានកម្មវិធីទេ</h2>
             <p className="text-slate-500 font-khmer">សូមចុចប៊ូតុង "បន្ថែម App" ដើម្បីបង្កើត Mini App ថ្មីមួយ។</p>
           </div>
         ) : (
           filteredApps.map((app) => (
-            <div key={app.id} className="card p-5 flex flex-col group hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
-              <div className="flex items-start justify-between mb-4">
-                <div className="w-14 h-14 rounded-2xl bg-slate-100 p-2 shadow-sm border border-slate-200">
+            <div key={app.id} className="flex flex-col items-center group relative animate-in fade-in zoom-in-95 duration-300">
+              {/* Action Buttons visible on hover */}
+              <div className="absolute -top-2 -right-2 z-20 flex gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200 scale-90 group-hover:scale-100">
+                <button 
+                  onClick={(e) => { e.preventDefault(); handleOpenModal(app); }} 
+                  className="w-7 h-7 flex items-center justify-center bg-white/95 backdrop-blur text-blue-600 rounded-full shadow-md hover:bg-blue-50 border border-slate-100 transition-colors"
+                  title="កែប្រែ"
+                >
+                  <Edit2 size={14} />
+                </button>
+                <button 
+                  onClick={(e) => { e.preventDefault(); handleDelete(app.id); }} 
+                  className="w-7 h-7 flex items-center justify-center bg-white/95 backdrop-blur text-red-600 rounded-full shadow-md hover:bg-red-50 border border-slate-100 transition-colors"
+                  title="លុប"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+
+              <a 
+                href={app.url} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex flex-col items-center gap-2 w-full active:scale-95 transition-transform duration-200 cursor-pointer"
+              >
+                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-[22%] bg-white p-2.5 shadow-sm border border-slate-200/60 group-hover:shadow-md transition-all duration-300 flex items-center justify-center overflow-hidden relative group-hover:-translate-y-1">
                   <img 
                     src={app.icon_url} 
                     alt={app.name} 
-                    className="w-full h-full object-contain"
-                    onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/64?text=APP' }}
+                    className="w-full h-full object-contain drop-shadow-sm group-hover:scale-110 transition-transform duration-300 ease-out relative z-10"
+                    onError={(e) => { (e.target as HTMLImageElement).src = 'https://placehold.co/128x128/png?text=APP' }}
                   />
+                  {/* Glass reflection effect */}
+                  <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-white/30 pointer-events-none z-20"></div>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => handleOpenModal(app)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
-                    <Edit2 size={16} />
-                  </button>
-                  <button onClick={() => handleDelete(app.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
-                    <Trash2 size={16} />
-                  </button>
+                <div className="text-center w-full px-1 flex flex-col items-center">
+                  <h3 className="text-xs sm:text-sm font-medium text-slate-700 truncate w-full group-hover:text-blue-600 transition-colors">{app.name}</h3>
+                  <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider truncate w-full mt-0.5">
+                    {app.branch === 'ទូទៅ' ? 'ទូទៅ' : app.branch?.replace('BELTEI IS ', 'B-')}
+                  </span>
                 </div>
-              </div>
-              
-              <h3 className="text-lg font-bold text-slate-800 mb-1">{app.name}</h3>
-              
-              <div className="flex items-center justify-between mt-auto pt-4 border-t border-slate-100">
-                <span className="text-[10px] font-bold px-2 py-1 bg-slate-100 text-slate-600 rounded-md uppercase tracking-wider">
-                  {app.branch}
-                </span>
-                <a 
-                  href={app.url} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-sm font-semibold text-indigo-600 hover:text-indigo-700"
-                >
-                  បើក <ExternalLink size={14} />
-                </a>
-              </div>
+              </a>
             </div>
           ))
         )}
@@ -197,7 +204,7 @@ const MiniApps = () => {
                 <input 
                   type="text" 
                   required 
-                  className="input-field py-2" 
+                  className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer shadow-sm text-slate-700 placeholder:text-slate-400 placeholder:font-khmer" 
                   placeholder="ឧ. Google Drive"
                   value={formData.name}
                   onChange={e => setFormData({...formData, name: e.target.value})}
@@ -209,7 +216,7 @@ const MiniApps = () => {
                 <input 
                   type="url" 
                   required 
-                  className="input-field py-2" 
+                  className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer shadow-sm text-slate-700 placeholder:text-slate-400 placeholder:font-khmer" 
                   placeholder="https://drive.google.com"
                   value={formData.url}
                   onChange={e => setFormData({...formData, url: e.target.value})}
@@ -221,7 +228,7 @@ const MiniApps = () => {
                 <input 
                   type="url" 
                   required 
-                  className="input-field py-2" 
+                  className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer shadow-sm text-slate-700 placeholder:text-slate-400 placeholder:font-khmer" 
                   placeholder="https://example.com/logo.png"
                   value={formData.icon_url}
                   onChange={e => setFormData({...formData, icon_url: e.target.value})}
@@ -231,7 +238,7 @@ const MiniApps = () => {
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5 font-khmer">សម្រាប់សាខា</label>
                 <select 
-                  className="input-field py-2"
+                  className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer shadow-sm text-slate-700"
                   value={formData.branch}
                   onChange={e => setFormData({...formData, branch: e.target.value})}
                 >

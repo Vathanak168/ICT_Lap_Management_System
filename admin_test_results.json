@@ -1,0 +1,26 @@
+[
+  {
+    "status": "INFO",
+    "msg": "Starting Point 4 & 5 (Tools & Admin Panel) Tests..."
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Mini Apps (Point 4) ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Teacher A inserted a Mini App"
+  },
+  {
+    "status": "PASS",
+    "msg": "Super Admin can see the Mini App (RLS allows all)"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Admin Global Access (Point 5) ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Super Admin CAN see data from Branch A"
+  }
+]

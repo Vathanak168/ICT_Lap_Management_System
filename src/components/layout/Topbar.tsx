@@ -1,4 +1,4 @@
-import { Globe, Menu, Bell, User, ChevronDown } from 'lucide-react';
+import { Globe, User, ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -9,7 +9,7 @@ import AIAssistant from '../ai/AIAssistant';
 
 const Topbar = () => {
   const { language, toggleLanguage } = useLanguage();
-  const { user, profileImage } = useAuth();
+  const { profileImage } = useAuth();
   const { activeYear, academicYears, changeYear, createYear } = useAcademicYear();
   const navigate = useNavigate();
   

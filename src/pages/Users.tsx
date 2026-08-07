@@ -13,7 +13,7 @@ interface Profile {
 }
 
 const UsersManagement: React.FC = () => {
-  const { role, session, isLoading: authLoading } = useAuth();
+  const { role, session, isLoading: authLoading, branch } = useAuth();
   const [users, setUsers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
@@ -31,11 +31,18 @@ const UsersManagement: React.FC = () => {
       setErrorMsg('');
 
       try {
-        const { data, error } = await supabase
+        let query = supabase
           .from('profiles')
           .select('id, email, role, name, created_at')
           .order('created_at', { ascending: false })
           .abortSignal(controller.signal);
+
+        // Scope to same branch so admin only sees their branch's users
+        if (branch) {
+          query = query.eq('branch', branch);
+        }
+
+        const { data, error } = await query;
 
         if (error) throw error;
         setUsers(data ?? []);

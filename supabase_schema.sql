@@ -43,7 +43,13 @@ CREATE TABLE students (
   shift TEXT NOT NULL,
   academic_year TEXT NOT NULL,
   branch TEXT NOT NULL DEFAULT 'BELTEI IS 1',
-  status TEXT DEFAULT 'Active'
+  status TEXT DEFAULT 'Active',
+  password TEXT,
+  pc_number TEXT,
+  is_shift_switching BOOLEAN DEFAULT false,
+  alternate_class_id TEXT,
+  points_balance NUMERIC,
+  points_note TEXT
 );
 
 -- 3. Create attendance table
@@ -61,13 +67,17 @@ CREATE TABLE attendance (
 CREATE TABLE pc_issues (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   pc_number TEXT NOT NULL,
+  seat_number TEXT,
   description TEXT NOT NULL,
   status TEXT NOT NULL,
   reported_by TEXT NOT NULL,
   reported_date TEXT NOT NULL,
   academic_year TEXT NOT NULL,
   branch TEXT NOT NULL DEFAULT 'BELTEI IS 1',
-  resolved_date TEXT
+  resolved_date TEXT,
+  resolution TEXT,
+  notes TEXT,
+  current_issue TEXT
 );
 
 -- 5. Create seating_plans table
@@ -90,7 +100,9 @@ CREATE TABLE lesson_logs (
   academic_year TEXT NOT NULL,
   topic TEXT NOT NULL,
   branch TEXT NOT NULL DEFAULT 'BELTEI IS 1',
-  teacher_name TEXT NOT NULL
+  teacher_name TEXT NOT NULL,
+  exercises TEXT,
+  notes TEXT
 );
 
 -- 7. Create grades table
@@ -143,6 +155,12 @@ CREATE TABLE IF NOT EXISTS mini_apps (
 );
 
 -- Set up Row Level Security (RLS) policies
+-- Branch-scoped: users can only access data matching their own branch.
+-- The user's branch is resolved from the profiles table via auth.uid().
+
+-- Helper: subquery to get the current user's branch
+-- Used in all branch-scoped policies below:
+--   (SELECT branch FROM profiles WHERE id = auth.uid())
 
 ALTER TABLE academic_years ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow public read access to academic_years" ON academic_years FOR SELECT USING (true);
@@ -156,31 +174,66 @@ CREATE POLICY "Allow public read access to profiles" ON profiles FOR SELECT USIN
 CREATE POLICY "Allow users to update own profile" ON profiles FOR UPDATE USING (auth.uid() = id);
 CREATE POLICY "Allow users to insert own profile" ON profiles FOR INSERT WITH CHECK (auth.uid() = id);
 
+-- Branch-scoped data tables: classes, students, attendance, pc_issues,
+-- seating_plans, lesson_logs, grades, lesson_plans
+
 ALTER TABLE classes ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow authenticated users full access to classes" ON classes;
-CREATE POLICY "Allow authenticated users full access to classes" ON classes FOR ALL TO authenticated USING (true);
+CREATE POLICY "Branch-scoped access to classes" ON classes
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
 ALTER TABLE students ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow authenticated users full access to students" ON students FOR ALL TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated users full access to students" ON students;
+CREATE POLICY "Branch-scoped access to students" ON students
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
 ALTER TABLE attendance ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow authenticated users full access to attendance" ON attendance FOR ALL TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated users full access to attendance" ON attendance;
+CREATE POLICY "Branch-scoped access to attendance" ON attendance
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
 ALTER TABLE pc_issues ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow authenticated users full access to pc_issues" ON pc_issues FOR ALL TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated users full access to pc_issues" ON pc_issues;
+CREATE POLICY "Branch-scoped access to pc_issues" ON pc_issues
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
 ALTER TABLE seating_plans ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow authenticated users full access to seating_plans" ON seating_plans FOR ALL TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated users full access to seating_plans" ON seating_plans;
+CREATE POLICY "Branch-scoped access to seating_plans" ON seating_plans
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
 ALTER TABLE lesson_logs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow authenticated users full access to lesson_logs" ON lesson_logs FOR ALL TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated users full access to lesson_logs" ON lesson_logs;
+CREATE POLICY "Branch-scoped access to lesson_logs" ON lesson_logs
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
 ALTER TABLE grades ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow authenticated users full access to grades" ON grades FOR ALL TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated users full access to grades" ON grades;
+CREATE POLICY "Branch-scoped access to grades" ON grades
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
 ALTER TABLE lesson_plans ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow authenticated users full access to lesson_plans" ON lesson_plans FOR ALL TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated users full access to lesson_plans" ON lesson_plans;
+CREATE POLICY "Branch-scoped access to lesson_plans" ON lesson_plans
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
 ALTER TABLE mini_apps ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow authenticated users full access to mini_apps" ON mini_apps;
 CREATE POLICY "Allow authenticated users full access to mini_apps" ON mini_apps FOR ALL TO authenticated USING (true) WITH CHECK (true);
+

@@ -153,8 +153,8 @@ const Gradebook = () => {
         const db = await initDB();
         const setting = await db.get<SettingRecord>('settings', 'gradeConfig');
         if (setting?.config) {
-           setGradeConfig(setting.config);
-           setTempConfig(setting.config);
+           setGradeConfig(setting.config as any);
+           setTempConfig(setting.config as any);
         }
       } catch (e) {
         console.error('Failed to load grade config:', e);
@@ -215,11 +215,10 @@ const Gradebook = () => {
           const adjustment = sScores.adjustment ?? null;
           const adjustmentNote = sScores.adjustmentNote ?? '';
           
+          
           const practice = sScores.practice ?? null;
           const book = sScores.book ?? null;
           const exam = sScores.exam ?? null;
-          
-          const rawBase = (practice || 0) + (book || 0) + (exam || 0);
           
             const row: StudentRow = {
               ...s,

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { AppWindow, ExternalLink } from 'lucide-react';
+import { AppWindow } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 interface MiniApp {
@@ -95,7 +95,7 @@ const MiniApps = () => {
                       src={app.icon_url} 
                       alt={app.name} 
                       className="w-full h-full object-contain relative z-10 group-hover:scale-110 transition-transform duration-500 ease-out"
-                      onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/96?text=APP' }}
+                      onError={(e) => { (e.target as HTMLImageElement).src = 'https://placehold.co/96x96/png?text=APP' }}
                     />
                   </div>
                   

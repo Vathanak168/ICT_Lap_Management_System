@@ -106,7 +106,7 @@ const Settings = () => {
                   <input
                     type="text"
                     required
-                    className="input-field"
+                    className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer text-slate-700 placeholder:text-slate-400 placeholder:font-khmer"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="ឧ. សុខ សាន្ត"

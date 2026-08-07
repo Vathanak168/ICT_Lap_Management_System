@@ -77,7 +77,6 @@ const PCIssues = () => {
     setIsSaving(true);
     try {
       const db = await initDB();
-      const isNew = !currentIssue.id;
       const issueToSave: PCIssue = {
         id: currentIssue.id || crypto.randomUUID(),
         pcNumber: currentIssue.pcNumber!,

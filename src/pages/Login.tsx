@@ -28,17 +28,28 @@ const Login: React.FC = () => {
     try {
       let emailToLogin = identifier;
       
-      const { data } = await supabase
-        .from('profiles')
-        .select('email')
-        .ilike('name', identifier)
-        .limit(1)
-        .single();
+      // Check if identifier looks like an email
+      const isEmail = identifier.includes('@');
+      
+      if (!isEmail) {
+        // Lookup by name — check for duplicates across branches
+        const { data: matches, error: lookupError } = await supabase
+          .from('profiles')
+          .select('email, name')
+          .ilike('name', identifier);
         
-      if (data && data.email) {
-        emailToLogin = data.email;
-      } else {
-        throw new Error('មិនមានឈ្មោះនេះក្នុងប្រព័ន្ធទេ សូមពិនិត្យម្តងទៀត។');
+        if (lookupError) throw lookupError;
+        
+        if (!matches || matches.length === 0) {
+          throw new Error('មិនមានឈ្មោះនេះក្នុងប្រព័ន្ធទេ សូមពិនិត្យម្តងទៀត។');
+        }
+        
+        if (matches.length > 1) {
+          // Multiple users with the same name — ask to use email instead
+          throw new Error('មានគណនីច្រើនដែលមានឈ្មោះដូចគ្នា។ សូមប្រើ Email ដើម្បីចូលគណនីជំនួស។');
+        }
+        
+        emailToLogin = matches[0].email;
       }
 
       const { error } = await supabase.auth.signInWithPassword({

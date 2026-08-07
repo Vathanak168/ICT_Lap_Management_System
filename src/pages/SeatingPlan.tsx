@@ -2,12 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Monitor, User, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle } from 'lucide-react';
 import { initDB } from '../store/db';
 import type { Student, ClassRecord, PCIssue } from '../store/db';
+import { supabase } from '../lib/supabase';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { Input } from '../components/ui/Input';
 
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Desk {
   id: string;
@@ -39,6 +41,7 @@ const SeatingPlan = () => {
 
   const { language } = useLanguage();
   const { activeYear } = useAcademicYear();
+  const { user } = useAuth();
   
   const loadClassRequestRef = useRef(0);
   const loadDataRequestRef = useRef(0);
@@ -139,7 +142,9 @@ const SeatingPlan = () => {
   };
 
   useEffect(() => {
-    void loadData(activeYear, selectedClass);
+    if (activeYear) {
+      void loadData(activeYear, selectedClass);
+    }
   }, [selectedClass, activeYear]);
 
 
@@ -231,13 +236,54 @@ const SeatingPlan = () => {
     return newPassword;
   };
 
+  /**
+   * Fetch existing passwords directly from Supabase (bypasses omitFromSelect
+   * in the DB adapter) so that we can avoid generating duplicates.
+   * Scoped to user's branch to prevent cross-branch data leakage.
+   */
+  const fetchExistingPasswords = async (targetClass: string, targetYear: string): Promise<Set<string>> => {
+    // Resolve the user's branch first to scope the query
+    let userBranch: string | null = null;
+    if (user) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('branch')
+        .eq('id', user.id)
+        .single();
+      userBranch = profile?.branch ?? null;
+    }
+
+    let query = supabase
+      .from('students')
+      .select('password')
+      .eq('class', targetClass)
+      .eq('academic_year', targetYear)
+      .eq('status', 'Active')
+      .not('password', 'is', null);
+
+    if (userBranch) {
+      query = query.eq('branch', userBranch);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Failed to fetch existing passwords:', error);
+      return new Set();
+    }
+
+    return new Set(
+      (data ?? []).map((row: { password: string | null }) => row.password).filter(Boolean) as string[]
+    );
+  };
+
   const generatePasswordForStudent = async (studentId: string) => {
     if (!activeYear || !selectedClass) return;
     const currentYear = activeYear;
     const currentClass = selectedClass;
 
     try {
-      const existingPasswords = new Set(students.map(s => s.password).filter(Boolean) as string[]);
+      const existingPasswords = await fetchExistingPasswords(currentClass, currentYear);
       const newPassword = generateUniquePassword(existingPasswords);
       
       const db = await initDB();

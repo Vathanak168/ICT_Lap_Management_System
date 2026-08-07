@@ -12,6 +12,20 @@ export const initAI = () => {
 
 export const hasApiKey = () => !!localStorage.getItem('GEMINI_API_KEY');
 
+// Action Types
+export type AddStudentAction = {
+  action: 'ADD_STUDENT';
+  data: {
+    studentId: string;
+    name: string;
+    gender: 'M' | 'F';
+    classId: string;
+  };
+};
+
+export type PendingAction = AddStudentAction; // Expand this later
+
+
 // Define tools
 export const systemInstruction = `
 You are a highly capable ICT Lab Management Assistant. Your job is to help the user manage their school database (classes, students, attendance, grades, etc.).
@@ -22,6 +36,7 @@ RULES FOR USING TOOLS:
 2. When asked to add/update/delete data, use the appropriate 'propose...' tools. YOU CANNOT MODIFY DATA DIRECTLY. You can only propose changes. 
 3. Always respond in Khmer (Cambodian) language, as the system is for a Cambodian school. Be polite and professional.
 4. If a user asks to add a student, use proposeAddStudent. Make sure to find the correct classId first by using getClasses if you don't know it.
+5. Pay attention to the user's current context (Branch, Academic Year) and only fetch data relevant to their context unless they ask otherwise.
 `;
 
 const tools: any = [{
@@ -64,15 +79,15 @@ const tools: any = [{
 }];
 
 // Tool execution logic
-export const executeTool = async (name: string, args: any) => {
+export const executeTool = async (name: string, args: any, academicYear?: string) => {
   const db = await initDB();
   
   if (name === 'getClasses') {
-    return await db.getAll('classes');
+    return await db.getAll('classes', academicYear);
   }
   
   if (name === 'getStudents') {
-    const students = await db.getAll('students');
+    const students = await db.getAll('students', academicYear);
     if (args.classId) {
       return students.filter(s => s.class === args.classId);
     }
@@ -91,16 +106,33 @@ export const executeTool = async (name: string, args: any) => {
   throw new Error(`Tool ${name} not found`);
 };
 
-export const generateAIResponse = async (_history: any[], prompt: string) => {
+export const generateAIResponse = async (
+  history: { role: 'user' | 'model', text: string }[], 
+  prompt: string,
+  context?: { branch: string; academicYear: string }
+) => {
   if (!ai) {
     if (!initAI()) throw new Error('API Key not found. Please add it in Settings.');
   }
 
   try {
+    const formattedHistory = history
+      .filter(h => h.text && h.text.trim() !== '')
+      .map(h => ({
+        role: h.role,
+        parts: [{ text: h.text }]
+      }));
+
+    let instruction = systemInstruction;
+    if (context) {
+      instruction += `\n\nCURRENT CONTEXT:\n- Branch: ${context.branch}\n- Academic Year: ${context.academicYear}`;
+    }
+
     const chat = ai!.chats.create({
       model: 'gemini-2.0-flash',
+      history: formattedHistory,
       config: {
-        systemInstruction,
+        systemInstruction: instruction,
         tools,
         temperature: 0.2
       }
@@ -121,7 +153,7 @@ export const generateAIResponse = async (_history: any[], prompt: string) => {
       
       for (const call of calls) {
         try {
-          const result: any = await executeTool(call.name || '', call.args);
+          const result: any = await executeTool(call.name || '', call.args, context?.academicYear);
           callResults.push({
             functionResponse: {
               name: call.name || '',

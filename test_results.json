@@ -1,0 +1,30 @@
+[
+  {
+    "status": "INFO",
+    "msg": "Starting Auth & Security Tests..."
+  },
+  {
+    "status": "PASS",
+    "msg": "User A registered and inserted profile successfully (Branch 1)"
+  },
+  {
+    "status": "PASS",
+    "msg": "User B and C registered successfully (Branch 2)"
+  },
+  {
+    "status": "PASS",
+    "msg": "User A can update own profile (RLS check passed)"
+  },
+  {
+    "status": "PASS",
+    "msg": "User A update on User B profile was silently blocked by RLS"
+  },
+  {
+    "status": "FAIL",
+    "msg": "Login collision failed. Expected >=2, found 1"
+  },
+  {
+    "status": "PASS",
+    "msg": "RLS Data Isolation PASSED! User B cannot see User A's student across branches."
+  }
+]

@@ -94,7 +94,7 @@ const Login = () => {
               <input
                 type="text"
                 required
-                className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700/50 rounded-xl focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all shadow-sm text-slate-100 font-medium placeholder-slate-500"
+                className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700/50 rounded-xl focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all shadow-sm text-slate-100 font-medium font-khmer placeholder-slate-500 placeholder:font-khmer"
                 placeholder="ឧ. admin"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}

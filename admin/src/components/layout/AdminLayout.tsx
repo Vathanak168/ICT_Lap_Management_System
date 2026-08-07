@@ -8,7 +8,8 @@ import {
   Settings, 
   ShieldCheck,
   Loader2,
-  AppWindow 
+  AppWindow,
+  ChevronDown 
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
@@ -16,6 +17,8 @@ const AdminLayout = () => {
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [selectedBranch, setSelectedBranch] = useState<string>('None');
+  const [selectedYear, setSelectedYear] = useState<string>('None');
+  const [academicYears, setAcademicYears] = useState<{year: string}[]>([]);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -30,6 +33,16 @@ const AdminLayout = () => {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
+
+    const fetchYears = async () => {
+      const { data } = await supabase.from('academic_years').select('year').order('year', { ascending: false });
+      if (data && data.length > 0) {
+        setAcademicYears(data);
+        const active = data.find((y: any) => y.is_active);
+        setSelectedYear(active ? active.year : data[0].year);
+      }
+    };
+    fetchYears();
 
     return () => subscription.unsubscribe();
   }, []);
@@ -109,21 +122,48 @@ const AdminLayout = () => {
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10 sticky top-0">
           <div className="flex items-center gap-4">
             <span className="font-bold text-lg text-slate-800 md:hidden">Admin Portal</span>
-            <div className="hidden sm:flex items-center gap-2">
-              <span className="text-sm font-semibold text-slate-600 font-khmer">សាខា៖</span>
-              <select 
-                className="input-field py-1.5 px-3 text-sm min-w-[140px] font-khmer font-medium"
-                value={selectedBranch}
-                onChange={(e) => setSelectedBranch(e.target.value)}
-              >
-                <option value="None">-- ជ្រើសរើសសាខា --</option>
-                <option value="All">ទាំងអស់ (All Branches)</option>
-                {Array.from({ length: 32 }, (_, i) => (
-                  <option key={i + 1} value={`BELTEI IS ${i + 1}`}>
-                    BELTEI IS {i + 1}
-                  </option>
-                ))}
-              </select>
+            <div className="hidden sm:flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-600 font-khmer">សាខា៖</span>
+                <div className="relative group">
+                  <select 
+                    className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 py-1.5 pl-3 pr-8 rounded-lg text-sm min-w-[150px] font-khmer font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none hover:border-slate-300 transition-colors cursor-pointer"
+                    value={selectedBranch}
+                    onChange={(e) => setSelectedBranch(e.target.value)}
+                  >
+                    <option value="None">-- ជ្រើសរើសសាខា --</option>
+                    <option value="All">ទាំងអស់ (All Branches)</option>
+                    {Array.from({ length: 32 }, (_, i) => (
+                      <option key={i + 1} value={`BELTEI IS ${i + 1}`}>
+                        BELTEI IS {i + 1}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none">
+                    <ChevronDown size={14} className="text-slate-400 group-hover:text-slate-600 transition-colors" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-600 font-khmer">ឆ្នាំសិក្សា៖</span>
+                <div className="relative group">
+                  <select 
+                    className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 py-1.5 pl-3 pr-8 rounded-lg text-sm min-w-[120px] font-khmer font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none hover:border-slate-300 transition-colors cursor-pointer"
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(e.target.value)}
+                  >
+                    <option value="None">-- ជ្រើសរើសឆ្នាំ --</option>
+                    <option value="All">ទាំងអស់</option>
+                    {academicYears.map((ay, idx) => (
+                      <option key={idx} value={ay.year}>{ay.year}</option>
+                    ))}
+                  </select>
+                  <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none">
+                    <ChevronDown size={14} className="text-slate-400 group-hover:text-slate-600 transition-colors" />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-4 ml-auto">
@@ -140,23 +180,50 @@ const AdminLayout = () => {
         </header>
         <div className="flex-1 overflow-auto bg-slate-50/50 p-6">
           {/* Mobile Branch Filter */}
-          <div className="sm:hidden mb-6 flex items-center gap-2">
-            <span className="text-sm font-semibold text-slate-600 font-khmer">សាខា៖</span>
-            <select 
-              className="input-field py-2 px-3 text-sm flex-1 font-khmer font-medium"
-              value={selectedBranch}
-              onChange={(e) => setSelectedBranch(e.target.value)}
-            >
-              <option value="None">-- ជ្រើសរើសសាខា --</option>
-              <option value="All">ទាំងអស់ (All Branches)</option>
-              {Array.from({ length: 32 }, (_, i) => (
-                <option key={i + 1} value={`BELTEI IS ${i + 1}`}>
-                  BELTEI IS {i + 1}
-                </option>
-              ))}
-            </select>
+          <div className="sm:hidden mb-6 flex flex-col gap-4">
+            <div>
+              <span className="text-sm font-semibold text-slate-600 font-khmer">សាខា៖</span>
+              <div className="relative group mt-1">
+                <select 
+                  className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 py-2 pl-3 pr-8 rounded-lg w-full font-khmer font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none hover:border-slate-300 transition-colors cursor-pointer"
+                  value={selectedBranch}
+                  onChange={(e) => setSelectedBranch(e.target.value)}
+                >
+                  <option value="None">-- ជ្រើសរើសសាខា --</option>
+                  <option value="All">ទាំងអស់ (All Branches)</option>
+                  {Array.from({ length: 32 }, (_, i) => (
+                    <option key={i + 1} value={`BELTEI IS ${i + 1}`}>
+                      BELTEI IS {i + 1}
+                    </option>
+                  ))}
+                </select>
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                  <ChevronDown size={16} className="text-slate-400 group-hover:text-slate-600 transition-colors" />
+                </div>
+              </div>
+            </div>
+            
+            <div>
+              <span className="text-sm font-semibold text-slate-600 font-khmer">ឆ្នាំសិក្សា៖</span>
+              <div className="relative group mt-1">
+                <select 
+                  className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 py-2 pl-3 pr-8 rounded-lg w-full font-khmer font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none hover:border-slate-300 transition-colors cursor-pointer"
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(e.target.value)}
+                >
+                  <option value="None">-- ជ្រើសរើសឆ្នាំ --</option>
+                  <option value="All">ទាំងអស់</option>
+                  {academicYears.map((ay, idx) => (
+                    <option key={idx} value={ay.year}>{ay.year}</option>
+                  ))}
+                </select>
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                  <ChevronDown size={16} className="text-slate-400 group-hover:text-slate-600 transition-colors" />
+                </div>
+              </div>
+            </div>
           </div>
-          <Outlet context={{ selectedBranch }} />
+          <Outlet context={{ selectedBranch, selectedYear }} />
         </div>
       </main>
     </div>

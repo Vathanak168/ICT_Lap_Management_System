@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { X, Send, Bot, User, Check, XCircle, Loader2 } from 'lucide-react';
 import { generateAIResponse, hasApiKey } from '../../lib/aiService';
 import { initDB } from '../../store/db';
+import { useAcademicYear } from '../../contexts/AcademicYearContext';
+import { useAuth } from '../../contexts/AuthContext';
 
 type Message = {
   id: string;
@@ -11,12 +13,15 @@ type Message = {
 };
 
 const AIAssistant = () => {
+  const { activeYear } = useAcademicYear();
+  const { branch } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     { id: '1', sender: 'ai', text: 'សួស្តីលោកគ្រូ! តើមានអ្វីឲ្យខ្ញុំជួយថ្ងៃនេះ?' }
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [processingActionId, setProcessingActionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,11 +42,20 @@ const AIAssistant = () => {
     setLoading(true);
 
     try {
-      // In a real app, pass the full history. For now, pass just the prompt.
-      const response = await generateAIResponse([], userMsg.text);
+      const history: { role: 'user' | 'model'; text: string }[] = messages.map(m => ({ 
+        role: m.sender === 'user' ? 'user' : 'model', 
+        text: m.text 
+      }));
+      
+      const context = {
+        branch: branch || localStorage.getItem('userBranch') || 'BELTEI IS 1',
+        academicYear: activeYear || ''
+      };
+
+      const response = await generateAIResponse(history, userMsg.text, context);
       
       const aiMsg: Message = { 
-        id: (Date.now() + 1).toString(), 
+        id: crypto.randomUUID(), 
         sender: 'ai', 
         text: response.text || '',
         pendingAction: response.pendingAction
@@ -50,7 +64,7 @@ const AIAssistant = () => {
       setMessages(prev => [...prev, aiMsg]);
     } catch (error: any) {
       const errorMsg: Message = {
-        id: (Date.now() + 1).toString(),
+        id: crypto.randomUUID(),
         sender: 'ai',
         text: error.message
       };
@@ -61,22 +75,39 @@ const AIAssistant = () => {
   };
 
   const handleApproveAction = async (msgId: string, action: any) => {
+    if (processingActionId) return;
+    setProcessingActionId(msgId);
+    
     try {
       const db = await initDB();
       
-      if (action.action === 'ADD_STUDENT') {
-        const tx = db.transaction('students', 'readwrite');
-        const newStudent = {
-          id: Date.now().toString(),
-          studentId: action.data.studentId,
-          name: action.data.name,
-          gender: action.data.gender,
-          class: action.data.classId,
-          shift: 'Morning', // Default, should probably be looked up from class
-          status: 'Active'
-        };
-        await tx.store.put(newStudent);
-        await tx.done;
+      switch (action.action) {
+        case 'ADD_STUDENT':
+          if (!action.data.studentId || !action.data.classId) {
+            throw new Error('ទិន្នន័យមិនពេញលេញ (Missing studentId or classId)');
+          }
+          
+          const existing = await db.getAllFromIndex('students', 'studentId', action.data.studentId);
+          if (existing && existing.length > 0) {
+            throw new Error('លេខអត្តសញ្ញាណសិស្សនេះមានរួចហើយ (Student ID already exists)');
+          }
+          
+          const newStudent = {
+            id: crypto.randomUUID(),
+            studentId: action.data.studentId,
+            name: action.data.name,
+            gender: action.data.gender,
+            class: action.data.classId,
+            shift: 'Morning', // Should ideally come from the class info
+            status: 'Active',
+            academicYear: action.data.academicYear || '2026-2027'
+          };
+          
+          await db.put('students', newStudent);
+          break;
+          
+        default:
+          throw new Error(`មិនគាំទ្រសកម្មភាពប្រភេទនេះទេ (Unsupported action: ${action.action})`);
       }
       
       // Update message to remove the pending action and add success text
@@ -89,6 +120,8 @@ const AIAssistant = () => {
       
     } catch (e: any) {
       alert('មានបញ្ហាក្នុងការរក្សាទុកទិន្នន័យ: ' + e.message);
+    } finally {
+      setProcessingActionId(null);
     }
   };
 
@@ -136,14 +169,17 @@ const AIAssistant = () => {
                       </div>
                       <div className="flex gap-2">
                         <button 
-                          className="flex-1 bg-green-500 hover:bg-green-600 text-white py-1.5 rounded-sm flex items-center justify-center gap-1 font-bold transition-colors"
+                          className="flex-1 bg-green-500 hover:bg-green-600 text-white py-1.5 rounded-sm flex items-center justify-center gap-1 font-bold transition-colors disabled:opacity-50"
                           onClick={() => handleApproveAction(msg.id, msg.pendingAction)}
+                          disabled={processingActionId === msg.id}
                         >
-                          <Check size={14} /> យល់ព្រម
+                          {processingActionId === msg.id ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 
+                          យល់ព្រម
                         </button>
                         <button 
-                          className="flex-1 bg-red-100 text-red-600 hover:bg-red-200 py-1.5 rounded-sm flex items-center justify-center gap-1 font-bold transition-colors"
+                          className="flex-1 bg-red-100 text-red-600 hover:bg-red-200 py-1.5 rounded-sm flex items-center justify-center gap-1 font-bold transition-colors disabled:opacity-50"
                           onClick={() => handleRejectAction(msg.id)}
+                          disabled={!!processingActionId}
                         >
                           <XCircle size={14} /> បដិសេធ
                         </button>

@@ -3,7 +3,6 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 import { User, Mail, Phone, MapPin, Camera, Save, ShieldAlert, CheckCircle2, LogOut } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 
 const Profile = () => {
   const { user, refreshProfile } = useAuth();

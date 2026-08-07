@@ -1,0 +1,58 @@
+[
+  {
+    "status": "INFO",
+    "msg": "Starting Operations (Point 3) Tests..."
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Seating Plans ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Seating plan assigned successfully"
+  },
+  {
+    "status": "PASS",
+    "msg": "Seating plan read successfully"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Attendance ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Attendance marked successfully"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Gradebook ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Grades inserted successfully"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Lesson Log ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Lesson log created successfully"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing PC Issues ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "PC Issue reported successfully"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Cleanup ---"
+  },
+  {
+    "status": "INFO",
+    "msg": "Cleanup finished"
+  }
+]

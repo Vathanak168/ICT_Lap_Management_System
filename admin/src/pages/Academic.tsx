@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useOutletContext } from 'react-router-dom';
-import { BookOpen, Search, BookMarked, Calendar, CheckSquare, Award } from 'lucide-react';
+import { BookOpen, Search, BookMarked, Calendar, CheckSquare, Award, Trash2 } from 'lucide-react';
 
 const Academic = () => {
   const { selectedBranch } = useOutletContext<{ selectedBranch: string }>();
@@ -42,6 +42,26 @@ const Academic = () => {
       console.error('Error fetching academic data:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('តើអ្នកពិតជាចង់លុបទិន្នន័យនេះមែនទេ?')) return;
+
+    let tableName = '';
+    switch (activeTab) {
+      case 'lessons': tableName = 'lesson_logs'; break;
+      case 'attendance': tableName = 'attendance'; break;
+      case 'grades': tableName = 'grades'; break;
+      case 'seating': tableName = 'seating_plans'; break;
+    }
+
+    try {
+      const { error } = await supabase.from(tableName).delete().eq('id', id);
+      if (error) throw error;
+      setData(data.filter(item => item.id !== id));
+    } catch (error: any) {
+      alert(`មានបញ្ហាក្នុងការលុប: ${error.message}`);
     }
   };
 
@@ -106,6 +126,7 @@ const Academic = () => {
                   <th className="px-4 py-3 font-khmer font-semibold text-slate-600 text-sm">ID / ថ្នាក់</th>
                   <th className="px-4 py-3 font-khmer font-semibold text-slate-600 text-sm">ព័ត៌មានលម្អិត</th>
                   <th className="px-4 py-3 font-khmer font-semibold text-slate-600 text-sm">សាខា</th>
+                  <th className="px-4 py-3 font-khmer font-semibold text-slate-600 text-sm text-right">សកម្មភាព</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -125,6 +146,15 @@ const Academic = () => {
                       <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-xs font-semibold">
                         {item.branch}
                       </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button 
+                        onClick={() => handleDelete(item.id)}
+                        className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="លុបទិន្នន័យនេះ"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </td>
                   </tr>
                 ))}

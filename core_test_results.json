@@ -1,0 +1,58 @@
+[
+  {
+    "status": "INFO",
+    "msg": "Starting Core Management (Point 2) Tests..."
+  },
+  {
+    "status": "PASS",
+    "msg": "Test User created in branch 'TestBranch_1786102174350'"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Classes CRUD ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Class created successfully"
+  },
+  {
+    "status": "PASS",
+    "msg": "Class updated successfully"
+  },
+  {
+    "status": "PASS",
+    "msg": "Class read successfully and matches update"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Students CRUD ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Student created successfully"
+  },
+  {
+    "status": "PASS",
+    "msg": "Student updated successfully (Status changed)"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Shift Switching ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Student shift switching updated successfully"
+  },
+  {
+    "status": "INFO",
+    "msg": "\n--- Testing Delete Operations (Cleanup) ---"
+  },
+  {
+    "status": "PASS",
+    "msg": "Student deleted successfully"
+  },
+  {
+    "status": "PASS",
+    "msg": "Classes deleted successfully"
+  }
+]

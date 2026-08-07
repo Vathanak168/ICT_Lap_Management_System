@@ -69,7 +69,7 @@ const Settings = () => {
     if (operation) return;
     setOperation('backup');
     try {
-      const success = await exportDatabase();
+      const success = await exportDatabase(activeYear || undefined);
       if (success) {
         showMessage('ទាញយកទិន្នន័យបម្រុង (Backup) ជោគជ័យ!', 'success');
       } else {

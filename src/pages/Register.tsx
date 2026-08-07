@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { User, Lock, Mail, Phone, MapPin, Camera, AlertCircle, CheckCircle2, ChevronDown } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -16,8 +16,45 @@ const Register: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   
+  const [availableBranches, setAvailableBranches] = useState<string[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(true);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchAvailableBranches = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('branch')
+          .eq('role', 'teacher');
+          
+        if (error) throw error;
+        
+        const takenBranches = data?.map(p => p.branch) || [];
+        const allBranches = Array.from({ length: 32 }, (_, i) => `BELTEI IS ${i + 1}`);
+        const free = allBranches.filter(b => !takenBranches.includes(b));
+        
+        setAvailableBranches(free);
+        if (free.length > 0) {
+          setBranch(free[0]); // Default to first available
+        } else {
+          setBranch('');
+        }
+      } catch (err) {
+        console.error("Error fetching branches:", err);
+        // Fallback
+        const allBranches = Array.from({ length: 32 }, (_, i) => `BELTEI IS ${i + 1}`);
+        setAvailableBranches(allBranches);
+        setBranch(allBranches[0]);
+      } finally {
+        setLoadingBranches(false);
+      }
+    };
+    
+    fetchAvailableBranches();
+  }, []);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -36,7 +73,7 @@ const Register: React.FC = () => {
     setLoading(true);
     setError(null);
     
-    if (!name || !gmail || !password || !phone) {
+    if (!name || !gmail || !password || !phone || !branch) {
       setError('សូមបំពេញព័ត៌មានឲ្យបានគ្រប់គ្រាន់');
       setLoading(false);
       return;
@@ -102,8 +139,7 @@ const Register: React.FC = () => {
     }
   };
 
-  // Generate Branches BELTEI IS 1 to 32
-  const branches = Array.from({ length: 32 }, (_, i) => `BELTEI IS ${i + 1}`);
+  // Branches are fetched dynamically in useEffect
 
   if (success) {
     return (
@@ -203,11 +239,18 @@ const Register: React.FC = () => {
                 <select
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
-                  className="w-full pl-11 pr-10 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#2a5298]/20 focus:border-[#2a5298] outline-none transition-all shadow-sm appearance-none"
+                  disabled={loadingBranches || availableBranches.length === 0}
+                  className="w-full pl-11 pr-10 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-[#2a5298]/20 focus:border-[#2a5298] outline-none transition-all shadow-sm appearance-none disabled:opacity-50"
                 >
-                  {branches.map(b => (
-                    <option key={b} value={b}>{b}</option>
-                  ))}
+                  {loadingBranches ? (
+                    <option value="">កំពុងទាញយកទិន្នន័យ...</option>
+                  ) : availableBranches.length === 0 ? (
+                    <option value="">អស់សាខាសម្រាប់ចុះឈ្មោះហើយ</option>
+                  ) : (
+                    availableBranches.map(b => (
+                      <option key={b} value={b}>{b}</option>
+                    ))
+                  )}
                 </select>
                 <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none">
                   <ChevronDown size={18} className="text-gray-400" />

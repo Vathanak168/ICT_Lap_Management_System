@@ -123,8 +123,8 @@ const Students = () => {
           studentId: currentStudent.studentId.trim(),
           name: currentStudent.name.trim(),
           englishName: (currentStudent.englishName || '').trim(),
-          pcNumber: null,
-          password: null,
+          pcNumber: undefined,
+          password: undefined,
           isShiftSwitching: false,
           alternateClassId: ''
         };

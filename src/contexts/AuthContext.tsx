@@ -7,6 +7,7 @@ interface AuthContextType {
   session: Session | null;
   isLoading: boolean;
   role: 'admin' | 'teacher' | null;
+  branch: string | null;
   profileImage: string | null;
   refreshProfile: () => Promise<void>;
 }
@@ -17,6 +18,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [role, setRole] = useState<'admin' | 'teacher' | null>(null); 
+  const [branch, setBranch] = useState<string | null>(null);
   const [profileImage, setProfileImage] = useState<string | null>(null);
 
   const user = session?.user ?? null;
@@ -30,7 +32,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('role, profile_image_url')
+        .select('role, branch, profile_image_url')
         .eq('id', userId)
         .maybeSingle();
         
@@ -39,6 +41,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const validRole = data?.role === 'admin' || data?.role === 'teacher' ? data.role : null;
       setRole(validRole);
+      setBranch(data?.branch ?? null);
       setProfileImage(data?.profile_image_url ?? null);
     } catch (error: any) {
       if (requestId !== profileRequestRef.current) return;
@@ -50,6 +53,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       
       setRole(null);
+      setBranch(null);
       setProfileImage(null);
     } finally {
       if (requestId === profileRequestRef.current) {
@@ -70,6 +74,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await fetchUserProfile(data.session.user.id);
       } else {
         setRole(null);
+        setBranch(null);
         setProfileImage(null);
         setIsLoading(false);
       }
@@ -77,6 +82,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Failed to initialize authentication:', error);
       setSession(null);
       setRole(null);
+      setBranch(null);
       setProfileImage(null);
       setIsLoading(false);
     }
@@ -101,6 +107,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profileRequestRef.current++;
         loadedProfileUserIdRef.current = null;
         setRole(null);
+        setBranch(null);
         setProfileImage(null);
         setIsLoading(false);
       }
@@ -120,9 +127,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     session,
     isLoading,
     role,
+    branch,
     profileImage,
     refreshProfile
-  }), [user, session, isLoading, role, profileImage, refreshProfile]);
+  }), [user, session, isLoading, role, branch, profileImage, refreshProfile]);
 
   return (
     <AuthContext.Provider value={contextValue}>

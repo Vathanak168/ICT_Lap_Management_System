@@ -1,13 +1,13 @@
 import { initDB } from '../store/db';
 
-export const exportDatabase = async () => {
+export const exportDatabase = async (academicYear?: string) => {
   try {
     const db = await initDB();
     const data: any = {};
     
-    // Get all data from all object stores
+    // Get all data from all object stores, scoped to academic year if provided
     for (const storeName of db.objectStoreNames) {
-      data[storeName] = await db.getAll(storeName);
+      data[storeName] = await db.getAll(storeName, academicYear);
     }
     
     // Convert to JSON string
