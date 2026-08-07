@@ -79,6 +79,30 @@ const Register: React.FC = () => {
       return;
     }
 
+    // Validate Gmail
+    const gmailRegex = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i;
+    if (!gmailRegex.test(gmail)) {
+      setError('សូមបញ្ចូលគណនី Gmail ឲ្យបានត្រឹមត្រូវ (ត្រូវបញ្ជប់ដោយ @gmail.com)');
+      setLoading(false);
+      return;
+    }
+
+    // Validate Cambodia Phone Number (Starts with 0, total 9-10 digits)
+    const cleanPhone = phone.replace(/\s+/g, '');
+    const phoneRegex = /^0\d{8,9}$/;
+    if (!phoneRegex.test(cleanPhone)) {
+      setError('សូមបញ្ចូលលេខទូរស័ព្ទកម្ពុជាឲ្យបានត្រឹមត្រូវ (ឧទាហរណ៍៖ 012345678)');
+      setLoading(false);
+      return;
+    }
+
+    // Validate Password
+    if (password.length < 6) {
+      setError('ពាក្យសម្ងាត់ត្រូវមានយ៉ាងហោចណាស់ ៦ ខ្ទង់');
+      setLoading(false);
+      return;
+    }
+
     try {
       // 1. Sign up user in Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
