@@ -72,7 +72,7 @@ const Register: React.FC = () => {
   useEffect(() => {
     let subscription: any = null;
     if (success) {
-      const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
         if (session) {
           navigate('/');
         }
