@@ -74,6 +74,138 @@ const tools: any = [{
         },
         required: ['studentId', 'name', 'gender', 'classId']
       }
+    },
+    {
+      name: 'getPcIssues',
+      description: 'Get a list of PC issues or broken computers',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          status: { type: Type.STRING, description: 'Optional. Filter by status (e.g. pending, resolved)' }
+        }
+      }
+    },
+    {
+      name: 'getAttendance',
+      description: 'Get attendance records',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          classId: { type: Type.STRING, description: 'Optional. Filter by class ID' },
+          date: { type: Type.STRING, description: 'Optional. Filter by date (YYYY-MM-DD)' }
+        }
+      }
+    },
+    {
+      name: 'getGrades',
+      description: 'Get student grades/scores',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          classId: { type: Type.STRING, description: 'Optional. Filter by class ID' },
+          month: { type: Type.STRING, description: 'Optional. Filter by month (e.g. October)' }
+        }
+      }
+    },
+    {
+      name: 'getLessonLogs',
+      description: 'Get lesson logs or teaching history',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          classId: { type: Type.STRING, description: 'Optional. Filter by class ID' },
+          date: { type: Type.STRING, description: 'Optional. Filter by date' }
+        }
+      }
+    },
+    {
+      name: 'proposeUpdateStudent',
+      description: 'Propose to update an existing student. User will review and approve.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          studentId: { type: Type.STRING, description: 'The student ID to update' },
+          name: { type: Type.STRING, description: 'New name' },
+          gender: { type: Type.STRING, description: 'New gender (M or F)' },
+          classId: { type: Type.STRING, description: 'New class ID' },
+          status: { type: Type.STRING, description: 'New status (e.g., Active, Dropped)' }
+        },
+        required: ['studentId']
+      }
+    },
+    {
+      name: 'proposeDeleteStudent',
+      description: 'Propose to delete a student. User will review and approve.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          studentId: { type: Type.STRING, description: 'The student ID to delete' }
+        },
+        required: ['studentId']
+      }
+    },
+    {
+      name: 'proposeAddPcIssue',
+      description: 'Propose to report a broken PC or issue. User will review and approve.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          pcNumber: { type: Type.STRING, description: 'The PC number (e.g., PC-01)' },
+          description: { type: Type.STRING, description: 'Description of the problem' },
+          reportedBy: { type: Type.STRING, description: 'Name of person reporting' }
+        },
+        required: ['pcNumber', 'description']
+      }
+    },
+    {
+      name: 'proposeResolvePcIssue',
+      description: 'Propose to mark a PC issue as resolved. User will review and approve.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          id: { type: Type.STRING, description: 'The ID of the issue to resolve' },
+          resolution: { type: Type.STRING, description: 'How it was fixed' }
+        },
+        required: ['id']
+      }
+    },
+    {
+      name: 'proposeDeleteClass',
+      description: 'Propose to delete a class. User will review and approve.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          classId: { type: Type.STRING, description: 'The class ID to delete' }
+        },
+        required: ['classId']
+      }
+    },
+    {
+      name: 'proposeAddClass',
+      description: 'Propose to add a new class. User will review and approve.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING, description: 'The name of the class (e.g. 6A1)' },
+          shift: { type: Type.STRING, description: 'The shift (Morning, Afternoon, Evening)' },
+          notes: { type: Type.STRING, description: 'Optional notes' }
+        },
+        required: ['name', 'shift']
+      }
+    },
+    {
+      name: 'proposeUpdateClass',
+      description: 'Propose to update an existing class. User will review and approve.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          classId: { type: Type.STRING, description: 'The class ID to update' },
+          name: { type: Type.STRING, description: 'New name of the class' },
+          shift: { type: Type.STRING, description: 'New shift' },
+          notes: { type: Type.STRING, description: 'New notes' }
+        },
+        required: ['classId']
+      }
     }
   ]
 }];
@@ -94,16 +226,68 @@ export const executeTool = async (name: string, args: any, academicYear?: string
     return students;
   }
   
+  if (name === 'getPcIssues') {
+    const issues = await db.getAll('pcIssues', academicYear);
+    if (args.status) {
+      return issues.filter(i => i.status.toLowerCase() === args.status.toLowerCase());
+    }
+    return issues;
+  }
+  
+  if (name === 'getAttendance') {
+    const records = await db.getAll('attendance', academicYear);
+    return records.filter(r => 
+      (!args.classId || r.classId === args.classId) && 
+      (!args.date || r.date === args.date)
+    );
+  }
+
+  if (name === 'getGrades') {
+    const records = await db.getAll('grades', academicYear);
+    return records.filter(r => 
+      (!args.classId || r.classId === args.classId) && 
+      (!args.month || r.month === args.month)
+    );
+  }
+
+  if (name === 'getLessonLogs') {
+    const records = await db.getAll('lessonLogs', academicYear);
+    return records.filter(r => 
+      (!args.classId || r.classId === args.classId) && 
+      (!args.date || r.date === args.date)
+    );
+  }
+  
   // Propose functions don't execute DB changes, they just return the intended action to the UI
-  if (name === 'proposeAddStudent') {
+  const proposeActions = [
+    'proposeAddStudent',
+    'proposeUpdateStudent',
+    'proposeDeleteStudent',
+    'proposeAddPcIssue',
+    'proposeResolvePcIssue',
+    'proposeDeleteClass',
+    'proposeAddClass',
+    'proposeUpdateClass'
+  ];
+  
+  if (proposeActions.includes(name)) {
+    const actionMap: Record<string, string> = {
+      'proposeAddStudent': 'ADD_STUDENT',
+      'proposeUpdateStudent': 'UPDATE_STUDENT',
+      'proposeDeleteStudent': 'DELETE_STUDENT',
+      'proposeAddPcIssue': 'ADD_PC_ISSUE',
+      'proposeResolvePcIssue': 'RESOLVE_PC_ISSUE',
+      'proposeDeleteClass': 'DELETE_CLASS',
+      'proposeAddClass': 'ADD_CLASS',
+      'proposeUpdateClass': 'UPDATE_CLASS'
+    };
+    
     return {
-      action: 'ADD_STUDENT',
+      action: actionMap[name],
       data: args,
       status: 'PENDING_APPROVAL'
     };
   }
-  
-  throw new Error(`Tool ${name} not found`);
 };
 
 export const generateAIResponse = async (
@@ -143,11 +327,11 @@ export const generateAIResponse = async (
     // In a real app, you'd maintain the chat session object, but here we'll just send the prompt.
     // To support history, we'd need to re-instantiate chat with history.
     
-    const response = await chat.sendMessage({ message: prompt });
+    let currentResponse = await chat.sendMessage({ message: prompt });
     
-    // Handle function calls
-    if (response.functionCalls && response.functionCalls.length > 0) {
-      const calls = response.functionCalls;
+    // Handle function calls in a loop (for multi-step reasoning)
+    while (currentResponse.functionCalls && currentResponse.functionCalls.length > 0) {
+      const calls = currentResponse.functionCalls;
       const callResults: any[] = [];
       let pendingAction = null;
       
@@ -180,18 +364,22 @@ export const generateAIResponse = async (
       
       // If there's an action pending approval, we can stop and return it to the UI
       if (pendingAction) {
+        let textPart = '';
+        try { textPart = currentResponse.text; } catch (e) {}
+        
         return {
-          text: response.text || 'ខ្ញុំបានរៀបចំទិន្នន័យរួចរាល់ហើយ។ សូមលោកគ្រូពិនិត្យ និងយល់ព្រម (Approve) ខាងក្រោមនេះ៖',
+          text: textPart || 'ខ្ញុំបានរៀបចំទិន្នន័យរួចរាល់ហើយ។ សូមលោកគ្រូពិនិត្យ និងយល់ព្រម (Approve) ខាងក្រោមនេះ៖',
           pendingAction
         };
       }
       
-      // Send the tool results back to the model
-      const followUp = await chat.sendMessage({ message: callResults as any });
-      return { text: followUp.text };
+      // Send the tool results back to the model for the next turn
+      currentResponse = await chat.sendMessage({ message: callResults as any });
     }
     
-    return { text: response.text };
+    let finalText = '';
+    try { finalText = currentResponse.text; } catch(e) {}
+    return { text: finalText };
   } catch (error: any) {
     console.error('AI Error:', error);
     throw new Error('មានបញ្ហាក្នុងការភ្ជាប់ទៅកាន់ AI: ' + error.message);

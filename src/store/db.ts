@@ -131,6 +131,11 @@ export interface SettingRecord {
   config: JsonValue;
 }
 
+export interface AiHistoryRecord {
+  id: string;
+  messages: JsonValue;
+}
+
 const tableMap = {
   classes: 'classes',
   students: 'students',
@@ -141,6 +146,7 @@ const tableMap = {
   grades: 'grades',
   lessonPlans: 'lesson_plans',
   settings: 'settings',
+  aiHistory: 'ai_history',
 } as const;
 
 export type StoreName = keyof typeof tableMap;
@@ -156,6 +162,7 @@ export interface StoreRecordMap {
   grades: GradeRecord;
   lessonPlans: LessonPlanTrack;
   settings: SettingRecord;
+  aiHistory: AiHistoryRecord;
 }
 
 export type StoreRecord<K extends StoreName> = StoreRecordMap[K];
@@ -439,6 +446,16 @@ const storeSchemas: Record<StoreName, StoreSchema> = {
     fields: {
       id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
       config: field('config_json', 'json', { requiredRead: true, requiredWrite: true }),
+    },
+    indexColumns: new Set(['id']),
+  },
+  aiHistory: {
+    table: 'ai_history',
+    branchScoped: true,
+    academicYear: false,
+    fields: {
+      id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
+      messages: field('messages', 'json', { requiredRead: true, requiredWrite: true }),
     },
     indexColumns: new Set(['id']),
   },
