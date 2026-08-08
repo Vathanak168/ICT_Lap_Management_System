@@ -129,7 +129,7 @@ export const generateAIResponse = async (
     }
 
     const chat = ai!.chats.create({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-3.6-flash',
       history: formattedHistory,
       config: {
         systemInstruction: instruction,
@@ -215,7 +215,7 @@ Please respond with ONLY a valid JSON array, no markdown blocks.
 `;
 
     const response = await ai!.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-3.6-flash',
       contents: [
         {
           role: 'user',

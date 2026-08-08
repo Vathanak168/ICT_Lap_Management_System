@@ -62,11 +62,14 @@ const AIAssistant = () => {
       };
       
       setMessages(prev => [...prev, aiMsg]);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      console.error('[AI Assistant] Request failed:', error);
+      const message = error instanceof Error ? error.message : 'Unknown AI error';
+      
       const errorMsg: Message = {
         id: crypto.randomUUID(),
         sender: 'ai',
-        text: error.message
+        text: `❌ AI Error\n${message}`
       };
       setMessages(prev => [...prev, errorMsg]);
     } finally {
@@ -230,7 +233,7 @@ const AIAssistant = () => {
       {/* Topbar Button */}
       <button 
         className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-sm border transition-all text-sm font-medium bg-white/10 hover:bg-white/20 text-white border-white/20 hover:border-white/40`}
-        onClick={() => alert('មុខងារនេះកំពុងស្ថិតក្នុងការអភិវឌ្ឍន៍! (Under Development)')}
+        onClick={() => setIsOpen(true)}
       >
         <Bot size={16} />
         <span>Gemini AI</span>
