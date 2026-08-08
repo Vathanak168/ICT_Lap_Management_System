@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Monitor, User, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle } from 'lucide-react';
+import { Monitor, User, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle, Grid, RotateCw } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { Student, ClassRecord, PCIssue } from '../store/db';
+import type { Student, ClassRecord, PCIssue, SeatingPlan as SeatingPlanType, SettingRecord } from '../store/db';
+
+type ExtendedSeatingPlan = SeatingPlanType & { deskRotations?: Record<string, number> };
 import { supabase } from '../lib/supabase';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
@@ -39,12 +41,20 @@ const SeatingPlan = () => {
   const [issueDescription, setIssueDescription] = useState('');
   const [isReportingIssue, setIsReportingIssue] = useState(false);
 
+  // For Layout Builder
+  const [currentLayout, setCurrentLayout] = useState<ExtendedSeatingPlan | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [builderRows, setBuilderRows] = useState<number>(6);
+  const [builderCols, setBuilderCols] = useState<number>(9);
+
+
   const { language } = useLanguage();
   const { activeYear } = useAcademicYear();
   const { user } = useAuth();
   
   const loadClassRequestRef = useRef(0);
   const loadDataRequestRef = useRef(0);
+  const saveInProgressRef = useRef(false);
 
   useEffect(() => {
     if (!activeYear) {
@@ -76,8 +86,8 @@ const SeatingPlan = () => {
     void loadClasses();
   }, [activeYear]);
 
-  const loadData = async (targetYear: string, targetClass: string, isForceReload: boolean = false) => {
-    if (!targetYear || !targetClass) return;
+  const loadData = async (targetYear: string, targetClass: string, targetShift: string, isForceReload: boolean = false) => {
+    if (!targetYear || !targetClass || !targetShift) return;
     
     if (!isForceReload) setIsLoading(true);
     const requestId = ++loadDataRequestRef.current;
@@ -85,9 +95,10 @@ const SeatingPlan = () => {
     try {
       const db = await initDB();
 
-      const [studentRows, issueRows] = await Promise.all([
+      const [studentRows, issueRows, planRows] = await Promise.all([
         db.getAllFromIndex<Student>('students', 'class', targetClass, targetYear),
-        db.getAll<PCIssue>('pcIssues', targetYear)
+        db.getAll<PCIssue>('pcIssues', targetYear),
+        db.getAllFromIndex<SeatingPlanType>('seatingPlans', 'class_id', targetClass, targetYear)
       ]);
 
       if (requestId !== loadDataRequestRef.current) return;
@@ -113,10 +124,61 @@ const SeatingPlan = () => {
         }
       });
 
-      const initialDesks = Array.from({ length: 37 }, (_, index) => {
-        const pcNumber = index === 0 ? 'Teacher PC' : `PC-${index.toString().padStart(2, '0')}`;
+      const shift = targetShift;
+      
+      const plan = planRows.find(p => p.shift === shift && p.academicYear === targetYear);
+      
+      let deskRotations = {};
+      if (plan) {
+        try {
+          const rotationSetting = await db.get<SettingRecord>('settings', `rotations_${plan.id}`);
+          if (rotationSetting && rotationSetting.config) {
+            deskRotations = rotationSetting.config as Record<string, number>;
+          }
+        } catch (e) {
+          console.warn('Failed to load desk rotations:', e);
+        }
+      }
+
+      if (requestId !== loadDataRequestRef.current) return;
+      
+      if (plan) {
+        setCurrentLayout({ ...plan, deskRotations });
+        if (plan.gridLayout) {
+          setBuilderRows(plan.gridLayout.length);
+          setBuilderCols(plan.gridLayout[0]?.length || 9);
+        }
+      } else {
+        const layoutToUse: ExtendedSeatingPlan = { 
+          id: `layout_${targetClass}_${shift}_${Date.now()}`,
+          classId: targetClass,
+          shift: shift,
+          academicYear: targetYear,
+          gridLayout: generateDefaultGrid(),
+          deskRotations: {},
+          createdAt: new Date().toISOString()
+        };
+        setCurrentLayout(layoutToUse);
+        setBuilderRows(6);
+        setBuilderCols(9);
+      }
+      
+      let pcNumbersList: string[] = [];
+      const layoutToUse = plan || { gridLayout: generateDefaultGrid() };
+      
+      if (layoutToUse && layoutToUse.gridLayout) {
+        layoutToUse.gridLayout.forEach(row => {
+          row.forEach(cell => {
+            if (cell && !pcNumbersList.includes(cell)) {
+              pcNumbersList.push(cell);
+            }
+          });
+        });
+      }
+
+      const initialDesks = pcNumbersList.map((pcNumber, index) => {
         return {
-          id: `desk-${index}`,
+          id: `desk-${index}-${pcNumber}`,
           pcNumber,
           status: issuePcNumbers.has(pcNumber) ? 'Issue' as const : 'Good' as const,
           studentIds: studentByPc.get(pcNumber) || []
@@ -127,7 +189,7 @@ const SeatingPlan = () => {
       
       setSelectedDesk(prev => {
         if (!prev) return null;
-        return initialDesks.find(d => d.id === prev.id) || null;
+        return initialDesks.find(d => d.pcNumber === prev.pcNumber) || null;
       });
 
     } catch (error) {
@@ -141,11 +203,212 @@ const SeatingPlan = () => {
     }
   };
 
-  useEffect(() => {
-    if (activeYear) {
-      void loadData(activeYear, selectedClass);
+  const generateDefaultGrid = () => {
+    const grid: Array<Array<string | null>> = [];
+    grid.push(['Teacher PC', null, null, null, null, null, null, null, null]);
+    for (let r = 0; r < 4; r++) {
+      const row: Array<string | null> = [];
+      for (let c = 0; c < 4; c++) row.push(`PC-${String(1 + r * 4 + c).padStart(2, '0')}`);
+      row.push(null);
+      for (let c = 0; c < 4; c++) row.push(`PC-${String(21 + r * 4 + c).padStart(2, '0')}`);
+      grid.push(row);
     }
-  }, [selectedClass, activeYear]);
+    const lastRow: Array<string | null> = [];
+    for (let c = 0; c < 4; c++) lastRow.push(`PC-${String(17 + c).padStart(2, '0')}`);
+    lastRow.push(null);
+    for (let c = 0; c < 4; c++) lastRow.push(null);
+    grid.push(lastRow);
+    return grid;
+  };
+
+  const handleUpdateGridSize = (newRows: number, newCols: number) => {
+    if (!currentLayout) return;
+    let grid = [...currentLayout.gridLayout];
+    
+    if (newRows > grid.length) {
+      for (let i = grid.length; i < newRows; i++) {
+        grid.push(Array(newCols).fill(null));
+      }
+    } else if (newRows < grid.length) {
+      grid = grid.slice(0, newRows);
+    }
+    
+    grid = grid.map(row => {
+      let newRow = [...row];
+      if (newCols > newRow.length) {
+        newRow = newRow.concat(Array(newCols - newRow.length).fill(null));
+      } else if (newCols < newRow.length) {
+        newRow = newRow.slice(0, newCols);
+      }
+      return newRow;
+    });
+
+    setCurrentLayout({ ...currentLayout, gridLayout: grid });
+    setBuilderRows(newRows);
+    setBuilderCols(newCols);
+  };
+
+  const handleCellClickInEditMode = (rIdx: number, cIdx: number) => {
+    if (!currentLayout) return;
+    const newGrid = [...currentLayout.gridLayout];
+    const newRow = [...newGrid[rIdx]];
+    
+    if (newRow[cIdx] === null) {
+       const existingMax = Math.max(0, ...newGrid.flat().map(c => {
+         if (c && c.startsWith('PC-')) return parseInt(c.replace('PC-', '')) || 0;
+         return 0;
+       }));
+       const newPcNumber = `PC-${String(existingMax + 1).padStart(2, '0')}`;
+       newRow[cIdx] = newPcNumber;
+       
+       // Add to desks if not exists
+       if (!desks.find(d => d.pcNumber === newPcNumber)) {
+         setDesks(prev => [...prev, {
+           id: `desk-new-${Date.now()}`,
+           pcNumber: newPcNumber,
+           status: 'Good',
+           studentIds: []
+         }]);
+       }
+    } else if (newRow[cIdx] === 'Teacher PC') {
+       newRow[cIdx] = null;
+    } else {
+       if (newRow[cIdx]?.startsWith('PC-') && !newGrid.flat().includes('Teacher PC')) {
+         newRow[cIdx] = 'Teacher PC';
+       } else {
+         newRow[cIdx] = null;
+       }
+    }
+    newGrid[rIdx] = newRow;
+    setCurrentLayout({ ...currentLayout, gridLayout: newGrid });
+  };
+
+  const handleDragStartLayout = (e: React.DragEvent, cell: string | null) => {
+    if (!isEditMode || !cell) {
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.setData('text/plain', cell);
+    setDraggedDeskId(cell);
+  };
+
+  const handleDropLayout = (e: React.DragEvent, targetR: number, targetC: number) => {
+    e.preventDefault();
+    if (!isEditMode || !currentLayout) return;
+    
+    const draggedCell = e.dataTransfer.getData('text/plain');
+    if (!draggedCell) return;
+    
+    const newGrid = currentLayout.gridLayout.map(row => [...row]);
+    
+    // Find where it came from
+    let sourceR = -1;
+    let sourceC = -1;
+    for (let r = 0; r < newGrid.length; r++) {
+      for (let c = 0; c < newGrid[r].length; c++) {
+        if (newGrid[r][c] === draggedCell) {
+          sourceR = r;
+          sourceC = c;
+        }
+      }
+    }
+    
+    if (sourceR !== -1 && sourceC !== -1) {
+      // Swap with target
+      const targetCell = newGrid[targetR][targetC];
+      newGrid[sourceR][sourceC] = targetCell;
+      newGrid[targetR][targetC] = draggedCell;
+      setCurrentLayout({ ...currentLayout, gridLayout: newGrid });
+    }
+    setDraggedDeskId(null);
+  };
+
+  const handleSaveLayout = async () => {
+    if (saveInProgressRef.current) return;
+    
+    if (!activeYear || !selectedClass || !currentLayout) {
+       alert("សូមជ្រើសរើសថ្នាក់ជាមុនសិន");
+       return;
+    }
+    
+    saveInProgressRef.current = true;
+    setIsSaving(true);
+    
+    try {
+      const currentClassObj = classes.find(c => c.id === selectedClass);
+      const shift = currentClassObj?.shift || 'Morning';
+      
+      const db = await initDB();
+      let layoutId = currentLayout.id;
+      let isMigratingUUID = false;
+      let oldLayoutId: string | null = null;
+      
+      // Upgrade old string-based layout IDs to UUID
+      if (layoutId.startsWith('layout_')) {
+        isMigratingUUID = true;
+        oldLayoutId = layoutId;
+        layoutId = crypto.randomUUID();
+      }
+      
+      const newPlan: SeatingPlanType = {
+        id: layoutId,
+        classId: selectedClass,
+        shift,
+        academicYear: activeYear,
+        gridLayout: currentLayout.gridLayout,
+        createdAt: currentLayout.createdAt || new Date().toISOString()
+      };
+      
+      // Step 1: Write new records
+      await db.put('seatingPlans', newPlan);
+      
+      if (currentLayout.deskRotations) {
+        await db.put('settings', {
+          id: `rotations_${layoutId}`,
+          config: currentLayout.deskRotations
+        });
+      }
+      
+      // Step 2: Delete old records only after successful write
+      if (isMigratingUUID && oldLayoutId) {
+        try {
+          await db.delete('seatingPlans', oldLayoutId);
+          await db.delete('settings', `rotations_${oldLayoutId}`);
+        } catch (e) {
+          console.warn('Could not delete old layout format during migration:', e);
+        }
+      }
+      
+      // Immediately update local UI reference
+      setCurrentLayout(prev => prev ? { ...prev, id: layoutId } : null);
+      
+      await loadData(activeYear, selectedClass, shift, true);
+      setIsEditMode(false);
+    } catch (e) {
+      console.error(e);
+      alert('បរាជ័យក្នុងការរក្សាទុកប្លង់');
+    } finally {
+      saveInProgressRef.current = false;
+      setIsSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    const requestId = ++loadDataRequestRef.current;
+    
+    if (!activeYear || !selectedClass) return;
+    
+    const currentClassObj = classes.find(c => c.id === selectedClass);
+    if (currentClassObj) {
+      void loadData(activeYear, selectedClass, currentClassObj.shift);
+    }
+    
+    return () => {
+      if (loadDataRequestRef.current === requestId) {
+        loadDataRequestRef.current++;
+      }
+    };
+  }, [selectedClass, activeYear, classes]);
 
 
   const handleDeskClick = (desk: Desk) => {
@@ -158,6 +421,22 @@ const SeatingPlan = () => {
   // -------------------------------------------------------------
   // Drag and Drop Logic
   // -------------------------------------------------------------
+  const handleRotateDesk = (e: React.MouseEvent, pcNumber: string) => {
+    e.stopPropagation();
+    setCurrentLayout(prev => {
+      if (!prev) return prev;
+      const currentRot = prev.deskRotations?.[pcNumber] || 0;
+      const newRot = (currentRot + 90) % 360;
+      return {
+        ...prev,
+        deskRotations: {
+          ...prev.deskRotations,
+          [pcNumber]: newRot
+        }
+      };
+    });
+  };
+
   const handleDragStart = (e: React.DragEvent, desk: Desk) => {
     if (desk.studentIds.length === 0 || desk.studentIds.length > 1) {
       e.preventDefault();
@@ -211,7 +490,8 @@ const SeatingPlan = () => {
 
       await db.putMany('students', studentsToUpdate);
       setDraggedDeskId(null);
-      await loadData(currentYear, currentClass, true);
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
       console.error(error);
       alert('មានបញ្ហាក្នុងការផ្លាស់ប្តូរកន្លែងអង្គុយសិស្ស។');
@@ -290,7 +570,8 @@ const SeatingPlan = () => {
       // Partial update to avoid overwriting concurrent changes
       await db.update('students', studentId, { password: newPassword });
       
-      await loadData(currentYear, currentClass, true);
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
       console.error(error);
       alert('បរាជ័យក្នុងការបង្កើត Password');
@@ -322,7 +603,8 @@ const SeatingPlan = () => {
       
       await db.putMany('students', studentsToUpdate);
       alert('បង្កើត Password រួមបានជោគជ័យ!');
-      await loadData(currentYear, currentClass, true);
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
     } catch (error: any) {
       alert('មានបញ្ហាក្នុងការបង្កើត Password: ' + error.message);
     } finally {
@@ -343,7 +625,8 @@ const SeatingPlan = () => {
     try {
       const db = await initDB();
       await db.update('students', studentId, { pcNumber: selectedDesk.pcNumber });
-      await loadData(currentYear, currentClass, true);
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
       console.error(error);
       alert('បរាជ័យក្នុងការចាត់តាំងតុ');
@@ -362,7 +645,8 @@ const SeatingPlan = () => {
       const db = await initDB();
       // Partial update to safely clear pcNumber and password
       await db.update('students', studentId, { pcNumber: null, password: null });
-      await loadData(currentYear, currentClass, true);
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
       console.error(error);
       alert('បរាជ័យក្នុងការដកសិស្សចេញពីតុ');
@@ -393,7 +677,8 @@ const SeatingPlan = () => {
       
       await db.putMany('students', studentsToUpdate);
       alert('លុបទិន្នន័យតុបានជោគជ័យ!');
-      await loadData(currentYear, currentClass, true);
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
     } catch (error: any) {
       alert('មានបញ្ហាក្នុងការលុបទិន្នន័យតុ: ' + error.message);
     } finally {
@@ -441,7 +726,8 @@ const SeatingPlan = () => {
       
       await db.putMany('students', studentsToUpdate);
       alert(`បានរៀបចំកន្លែងអង្គុយដោយស្វ័យប្រវត្តិជូនសិស្សចំនួន ${assignedCount} នាក់ជោគជ័យ!`);
-      await loadData(currentYear, currentClass, true);
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
     } catch (error: any) {
       alert('មានបញ្ហាក្នុងការរៀបចំកន្លែងអង្គុយដោយស្វ័យប្រវត្តិ: ' + error.message);
     } finally {
@@ -483,7 +769,8 @@ const SeatingPlan = () => {
       await db.put('pcIssues', newIssue);
       setIsReportingIssue(false);
       setIssueDescription('');
-      await loadData(currentYear, currentClass, true);
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
       console.error(error);
       alert('បរាជ័យក្នុងការរាយការណ៍បញ្ហា');
@@ -511,7 +798,8 @@ const SeatingPlan = () => {
           dateResolved: new Date().toISOString()
         }));
         await db.putMany('pcIssues', issuesToUpdate);
-        await loadData(currentYear, currentClass, true);
+        const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+        await loadData(currentYear, currentClass, shift, true);
       } catch (error) {
         console.error(error);
         alert('បរាជ័យក្នុងការដោះស្រាយបញ្ហា');
@@ -556,25 +844,35 @@ const SeatingPlan = () => {
     }
     
     const isDragging = draggedDeskId === desk.id;
+    const rotation = currentLayout?.deskRotations?.[desk.pcNumber] || 0;
 
     return (
       <div 
         key={desk.id} 
-        draggable={!isTeacher && desk.status !== 'Issue' && !isConflict && !!student}
+        draggable={!isTeacher && desk.status !== 'Issue' && !isConflict && !!student && !isEditMode}
         onDragStart={(e) => handleDragStart(e, desk)}
         onDragOver={handleDragOver}
         onDrop={(e) => handleDrop(e, desk)}
         onDragEnd={handleDragEnd}
-        className={`flex flex-col border rounded-xl overflow-hidden cursor-pointer transition-all duration-200 shadow-sm hover:shadow-md 
+        className={`flex flex-col border rounded-xl overflow-hidden cursor-pointer transition-all duration-200 shadow-sm hover:shadow-md relative
           ${borderClass} ${bgClass} 
           ${isDragging ? 'opacity-50 scale-95 border-dashed border-2' : ''}
-          ${!isTeacher && desk.status !== 'Issue' ? 'active:scale-95' : ''}
+          ${!isTeacher && desk.status !== 'Issue' && !isEditMode ? 'active:scale-95' : ''}
         `}
-        onClick={() => handleDeskClick(desk)}
+        onClick={() => !isEditMode && handleDeskClick(desk)}
       >
+        {isEditMode && (
+          <button 
+            className="absolute top-1 right-1 p-1 bg-white border border-gray-200 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 shadow-sm transition-colors z-10"
+            onClick={(e) => handleRotateDesk(e, desk.pcNumber)}
+            title="បង្វិលតុ (Rotate)"
+          >
+            <RotateCw size={14} />
+          </button>
+        )}
         <div className={`px-3 py-2 print:py-1 flex items-center justify-between border-b ${borderClass} bg-white/50`}>
           <div className="flex items-center gap-2 pointer-events-none">
-            <Monitor size={14} className={iconColor} />
+            <Monitor size={14} className={`${iconColor} transition-transform duration-300`} style={{ transform: `rotate(${rotation}deg)` }} />
             <span className={`text-xs print:text-[10px] font-semibold ${isTeacher ? 'text-green-700' : 'text-secondary-text'}`}>
               {desk.pcNumber}
             </span>
@@ -653,34 +951,87 @@ const SeatingPlan = () => {
           </div>
           
           <div className="flex flex-wrap items-center gap-3 mt-4 xl:mt-0">
-            <button 
-              className="bg-[#48b5c9] hover:bg-[#3aa3b7] text-white px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={handleAutoAssign}
-              disabled={isSaving || isLoading || !selectedClass}
-            >
-              <Zap size={16} /> រៀបចំកន្លែងស្វ័យប្រវត្តិ
-            </button>
-            <button 
-              className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={generatePasswordsForClass}
-              disabled={isSaving || isLoading || !selectedClass}
-            >
-              <RefreshCw size={16} /> បង្កើត Password រួម
-            </button>
-            <button 
-              className="bg-white border border-red-200 text-red-600 hover:bg-red-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={handleClearAllAssignments}
-              disabled={isSaving || isLoading || !selectedClass}
-            >
-              <Trash2 size={16} /> លុបទិន្នន័យតុ
-            </button>
-            <button 
-              className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent disabled:opacity-50"
-              onClick={handlePrint}
-              disabled={isLoading || !selectedClass}
-            >
-              <Printer size={16} /> បោះពុម្ពប្លង់តុ
-            </button>
+            {!isEditMode ? (
+              <>
+                <button 
+                  className="bg-[#48b5c9] hover:bg-[#3aa3b7] text-white px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={handleAutoAssign}
+                  disabled={isSaving || isLoading || !selectedClass}
+                >
+                  <Zap size={16} /> រៀបចំកន្លែងស្វ័យប្រវត្តិ
+                </button>
+                <button 
+                  className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={generatePasswordsForClass}
+                  disabled={isSaving || isLoading || !selectedClass}
+                >
+                  <RefreshCw size={16} /> បង្កើត Password រួម
+                </button>
+                <button 
+                  className="bg-white border border-red-200 text-red-600 hover:bg-red-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={handleClearAllAssignments}
+                  disabled={isSaving || isLoading || !selectedClass}
+                >
+                  <Trash2 size={16} /> លុបទិន្នន័យតុ
+                </button>
+                <button 
+                  className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => setIsEditMode(true)}
+                  disabled={isSaving || isLoading || !selectedClass}
+                >
+                  <Grid size={16} /> រៀបចំប្លង់ថ្នាក់
+                </button>
+                <button 
+                  className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent disabled:opacity-50"
+                  onClick={handlePrint}
+                  disabled={isLoading || !selectedClass}
+                >
+                  <Printer size={16} /> បោះពុម្ពប្លង់តុ
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded border border-blue-200 mr-4">
+                  <span className="text-sm font-medium text-blue-800">បន្ថែមជួរដេក៖</span>
+                  <input 
+                    type="number" 
+                    className="w-16 px-2 py-1 border border-gray-300 rounded text-sm outline-none text-center"
+                    value={builderRows}
+                    min={1} max={20}
+                    onChange={(e) => handleUpdateGridSize(parseInt(e.target.value) || 1, builderCols)}
+                  />
+                  <span className="text-sm font-medium text-blue-800 ml-2">ជួរឈរ៖</span>
+                  <input 
+                    type="number" 
+                    className="w-16 px-2 py-1 border border-gray-300 rounded text-sm outline-none text-center"
+                    value={builderCols}
+                    min={1} max={20}
+                    onChange={(e) => handleUpdateGridSize(builderRows, parseInt(e.target.value) || 1)}
+                  />
+                </div>
+                <button 
+                  className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+                  onClick={() => {
+                    setIsEditMode(false);
+                    const shift = classes.find(c => c.id === selectedClass)?.shift || 'Morning';
+                    loadData(activeYear, selectedClass, shift, true); // reload to cancel changes
+                  }}
+                  disabled={isSaving}
+                >
+                  បោះបង់
+                </button>
+                <button 
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+                  onClick={() => {
+                    setIsEditMode(false);
+                    handleSaveLayout();
+                  }}
+                  disabled={isSaving}
+                >
+                  <CheckCircle2 size={16} /> រក្សាទុកប្លង់ថ្មី
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -723,50 +1074,73 @@ const SeatingPlan = () => {
               </span>
             </div>
 
-          {/* Print Header */}
-          <div className="hidden print:block text-center w-full mb-8">
-            <h1 className="text-2xl font-bold uppercase text-gray-900">ប្រព័ន្ធគ្រប់គ្រងបន្ទប់កុំព្យូទ័រ (ICT Lab Management System)</h1>
-            <h2 className="text-xl mt-2 font-semibold text-gray-700">
-              ប្លង់តុសិស្ស - ថ្នាក់៖ {classes.find(c => c.id === selectedClass)?.name || ''}
-            </h2>
-          </div>
+          {/* Print Header removed per user request */}          {currentLayout && (
+             <div className="flex flex-col items-center justify-center bg-background rounded-xl p-8 border border-border/50 print:bg-white print:border-none print:p-0 print:w-full w-full overflow-x-auto print:overflow-visible">
+               <div 
+                 className={`grid gap-3 sm:gap-4 print:gap-1 w-full max-w-7xl print:max-w-none ${isEditMode ? 'p-4 border-2 border-dashed border-blue-200 bg-blue-50/30 rounded-xl' : ''}`}
+                 style={{ 
+                   gridTemplateColumns: (() => {
+                     const cols = currentLayout.gridLayout[0]?.length || 1;
+                     if (isEditMode) return `repeat(${cols}, minmax(0, 1fr))`;
+                     
+                     const rows = currentLayout.gridLayout.length;
+                     let template = '';
+                     for (let c = 0; c < cols; c++) {
+                       let isEmpty = true;
+                       for (let r = 0; r < rows; r++) {
+                         if (currentLayout.gridLayout[r][c] !== null && currentLayout.gridLayout[r][c] !== '') {
+                           isEmpty = false; break;
+                         }
+                       }
+                       template += isEmpty ? ' 4rem' : ' minmax(0, 1fr)';
+                     }
+                     return template.trim();
+                   })()
+                 }}
+               >
+                  {currentLayout.gridLayout.map((row, rIdx) => (
+                    row.map((cell, cIdx) => {
+                      const isTeacher = cell === 'Teacher PC';
+                      const cols = currentLayout.gridLayout[0]?.length || 1;
+                      
+                      const prevCell = cIdx > 0 ? row[cIdx - 1] : null;
+                      // If this cell is empty and the previous cell was Teacher PC, skip it so Teacher PC can span 2 columns
+                      if (prevCell === 'Teacher PC' && !cell) {
+                        return null;
+                      }
+                      
+                      // Teacher PC spans 2 columns if it's not the last column and the next cell is empty
+                      const shouldSpanTwo = isTeacher && cIdx < cols - 1 && !row[cIdx + 1];
 
-          {/* Full width lab layout */}
-          <div className="flex flex-col lg:flex-row gap-8 lg:gap-16 justify-center bg-background rounded-xl p-8 border border-border/50 print:bg-white print:border-none print:p-0 print:gap-8 print:flex-row print:w-[100vw] print:max-w-none print:items-start">
-            
-            {/* Left Column */}
-            <div className="flex-1 max-w-[500px] flex flex-col gap-6">
-              {/* Teacher Desk Box */}
-              <div className="grid grid-cols-4 gap-4">
-                <div className="col-span-4 lg:col-span-2 print:col-span-2">
-                  {desks[0] && renderDesk(desks[0])}
-                </div>
-              </div>
-              
-              {/* Student Desks 1-20 (5 groups of 4) */}
-              {[0, 1, 2, 3, 4].map(rowIndex => (
-                <div className="grid grid-cols-2 sm:grid-cols-4 print:grid-cols-4 gap-3 sm:gap-4 print:gap-2" key={`left-row-${rowIndex}`}>
-                  {desks.slice(1 + rowIndex * 4, 1 + rowIndex * 4 + 4).map(renderDesk)}
-                </div>
-              ))}
-            </div>
-
-            {/* Right Column / Board */}
-            <div className="flex-1 max-w-[500px] flex flex-col gap-6">
-              {/* Empty spacer for alignment with teacher desk */}
-              <div className="grid grid-cols-4 gap-4 hidden lg:grid print:grid">
-                <div className="col-span-2 invisible h-[114px] print:h-[75px]"></div>
-              </div>
-              
-              {/* Student Desks 21-36 (4 groups of 4) */}
-              {[0, 1, 2, 3].map(rowIndex => (
-                <div className="grid grid-cols-2 sm:grid-cols-4 print:grid-cols-4 gap-3 sm:gap-4 print:gap-2" key={`right-row-${rowIndex}`}>
-                  {desks.slice(21 + rowIndex * 4, 21 + rowIndex * 4 + 4).map(renderDesk)}
-                </div>
-              ))}
-            </div>
-
-          </div>
+                      return (
+                        <div 
+                          key={`cell-${rIdx}-${cIdx}`} 
+                          className={`flex justify-center w-full min-w-[80px] sm:min-w-[100px] print:min-w-0 ${shouldSpanTwo ? 'col-span-2' : ''}`}
+                          onDragOver={isEditMode ? (e) => e.preventDefault() : undefined}
+                          onDrop={isEditMode ? (e) => handleDropLayout(e, rIdx, cIdx) : undefined}
+                          onClick={isEditMode ? () => handleCellClickInEditMode(rIdx, cIdx) : undefined}
+                        >
+                           {cell ? (
+                             <div 
+                               className={`w-full ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:ring-2 ring-blue-400 rounded-xl transition-all' : ''}`}
+                               draggable={isEditMode}
+                               onDragStart={(e) => handleDragStartLayout(e, cell)}
+                               onClick={isEditMode ? (e) => { e.stopPropagation(); handleCellClickInEditMode(rIdx, cIdx); } : undefined}
+                             >
+                               {renderDesk(desks.find(d => d.pcNumber === cell) || { id: `temp-${cell}`, pcNumber: cell, studentIds: [], status: 'Good' })}
+                             </div>
+                           ) : (
+                             <div className={`w-full flex items-center justify-center h-[114px] print:h-[75px] ${isEditMode ? 'border-2 border-dashed border-blue-300 rounded-xl bg-blue-50/50 hover:bg-blue-100 cursor-pointer transition-colors text-blue-400 font-medium text-xs' : ''}`}>
+                               {isEditMode ? '+ ដាក់តុទីនេះ' : ''}
+                             </div>
+                           )}
+                        </div>
+                      );
+                    })
+                  ))}
+               </div>
+             </div>
+          )}
         </div>
         )}
       </div>
@@ -900,6 +1274,7 @@ const SeatingPlan = () => {
           </div>
         )}
       </Modal>
+
     </div>
   );
 };

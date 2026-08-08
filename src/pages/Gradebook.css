@@ -131,10 +131,11 @@
 
 @media print {
   @page {
-    margin: 0; /* This removes the default browser headers and footers (date, URL, page number) */
+    size: A4 portrait;
+    margin: 5mm;
   }
   
   body {
-    margin: 1.5cm; /* Add some padding so the actual content isn't cut off by the printer's hardware margins */
+    margin: 0;
   }
 }

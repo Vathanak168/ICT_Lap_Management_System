@@ -7,6 +7,7 @@ import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Settings } from 'lucide-react';
 import './Gradebook.css';
 import { translateKhmerToEnglish } from '../utils/khmerTranslator';
+import { useAuth } from '../contexts/AuthContext';
 
 interface StudentRow extends Student {
   practice: number | null;
@@ -31,6 +32,7 @@ const Gradebook = () => {
   
   const { language, toggleLanguage } = useLanguage();
   const { activeYear } = useAcademicYear();
+  const { user } = useAuth();
   const [isTranslating, setIsTranslating] = useState(false);
   
   const loadClassRequestRef = useRef(0);
@@ -634,7 +636,7 @@ const Gradebook = () => {
         </div>
       </div>
 
-      <div className={`bg-white border border-gray-200 shadow-sm rounded-sm print:border-none print:bg-transparent ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div className={`bg-white border border-gray-200 shadow-sm rounded-sm print:border-none print:shadow-none print:bg-transparent print:overflow-visible print:h-auto print:block ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
         <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm print:hidden">
           បញ្ជីពិន្ទុសិស្ស (List of Student Grades)
         </div>
@@ -644,41 +646,41 @@ const Gradebook = () => {
             កំពុងទាញយកទិន្នន័យ...
           </div>
         ) : (
-          <div className="p-0 print:p-0">
-            <div className="hidden print:block w-full font-khmer mb-6">
+          <div className="p-0 print:p-0 print:overflow-visible print:w-full">
+            <div className="hidden print:block w-full font-khmer mb-6 print:overflow-visible">
               <div className="flex justify-center mb-6">
                 <img src="/beltei-header.png" alt="BELTEI Header" className="w-full h-auto max-h-[120px] object-contain object-top" />
               </div>
               
               <div className="flex justify-between items-start mb-4">
-                <div className="flex flex-col gap-1.5 font-bold italic text-[15px]" style={{ fontFamily: '"Khmer OS Battambang", "Noto Sans Khmer", sans-serif' }}>
+                <div className="flex flex-col gap-1.5 font-bold italic text-[15px] w-[250px]" style={{ fontFamily: '"Khmer OS Battambang", "Noto Sans Khmer", sans-serif' }}>
                   <div>សាលាប៊ែលធីអន្តរជាតិទី ២៥</div>
                   <div>ថ្នាក់ទី៖ <span className="font-bold italic">{selectedClass ? classes.find(c => c.id === selectedClass)?.name : ''}</span></div>
                   <div>មុខវិជ្ជា៖ <span className="font-bold italic">កុំព្យូទ័រ</span></div>
-                  <div>ឈ្មោះគ្រូ៖ <span className="font-bold italic">ឆាយ សិរីវឌ្ឍនៈ</span></div>
+                  <div>ឈ្មោះគ្រូ៖ <span className="font-bold italic">{user?.user_metadata?.full_name || 'គ្មានឈ្មោះ'}</span></div>
                 </div>
                 <div className="flex flex-col items-center gap-3">
-                  <h2 className="text-[28px] font-bold" style={{ fontFamily: 'Moul, serif' }}>បញ្ជីស្រង់ពិន្ទុលម្អិត</h2>
+                  <h2 className="text-[28px] font-bold whitespace-nowrap" style={{ fontFamily: 'Moul, serif' }}>បញ្ជីស្រង់ពិន្ទុលម្អិត</h2>
                   <div className="font-bold text-[15px]" style={{ fontFamily: '"Khmer OS Battambang", "Noto Sans Khmer", sans-serif' }}>សម្រាប់ឆ្នាំសិក្សា {activeYear}</div>
                 </div>
-                <div className="w-40"></div>
+                <div className="w-[250px]"></div>
               </div>
             </div>
 
-            <table className="w-full text-left border-collapse print:text-[14px] print:border-2 print:border-black border-t-0 table-fixed">
+            <table className="w-full text-left border-collapse print:text-[15px] print:border-2 print:border-black border-t-0 table-fixed">
                 <thead className="bg-[#f8f9fa] print:bg-white text-gray-800 print:text-black">
                 <tr>
-                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center w-[5%] text-xs print:text-sm uppercase tracking-wider">ល.រ</th>
-                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-4 py-3 print:py-2 font-semibold print:font-bold text-left w-[32%] text-xs print:text-sm uppercase tracking-wider">គោតនាម-នាមសិស្ស</th>
-                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center w-[5%] text-xs print:text-sm uppercase tracking-wider">ភេទ</th>
-                  <th colSpan={(showPractice && gradeConfig.practice > 0 ? 1 : 0) + (showBook && gradeConfig.book > 0 ? 1 : 0) + (showExam && gradeConfig.exam > 0 ? 1 : 0) + 2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center text-xs print:text-sm uppercase tracking-wider">{currentMonth}</th>
+                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center w-[5%] text-xs print:text-[15px] uppercase tracking-wider">ល.រ</th>
+                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-4 py-3 print:py-2 font-semibold print:font-bold text-left w-[32%] print:w-[24%] text-xs print:text-[15px] uppercase tracking-wider">គោតនាម-នាមសិស្ស</th>
+                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center w-[5%] text-xs print:text-[15px] uppercase tracking-wider">ភេទ</th>
+                  <th colSpan={(showPractice && gradeConfig.practice > 0 ? 1 : 0) + (showBook && gradeConfig.book > 0 ? 1 : 0) + (showExam && gradeConfig.exam > 0 ? 1 : 0) + 2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center text-xs print:text-[15px] uppercase tracking-wider">{currentMonth}</th>
                 </tr>
                 <tr>
-                  {showPractice && gradeConfig.practice > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-sm">លំហាត់({gradeConfig.practice})</th>}
-                  {showBook && gradeConfig.book > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-sm">សៀវភៅ({gradeConfig.book})</th>}
-                  {showExam && gradeConfig.exam > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-sm">ប្រឡង({gradeConfig.exam})</th>}
-                  <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-sm">សរុប({totalMax})</th>
-                  <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[10%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-sm">ចំណាត់ថ្នាក់</th>
+                  {showPractice && gradeConfig.practice > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">លំហាត់({gradeConfig.practice})</th>}
+                  {showBook && gradeConfig.book > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">សៀវភៅ({gradeConfig.book})</th>}
+                  {showExam && gradeConfig.exam > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">ប្រឡង({gradeConfig.exam})</th>}
+                  <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">សរុប({totalMax})</th>
+                  <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[10%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">ចំណាត់ថ្នាក់</th>
                 </tr>
               </thead>
               <tbody>
