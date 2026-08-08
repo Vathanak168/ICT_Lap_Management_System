@@ -154,10 +154,14 @@ export const generateAIResponse = async (
       for (const call of calls) {
         try {
           const result: any = await executeTool(call.name || '', call.args, context?.academicYear);
+          // Gemini functionResponse expects a JSON object (Struct), not a JSON array.
+          // If the tool returns an array, wrap it in an object.
+          const safeResponse = Array.isArray(result) ? { items: result } : (result || {});
+          
           callResults.push({
             functionResponse: {
               name: call.name || '',
-              response: result || {}
+              response: safeResponse
             }
           });
           
