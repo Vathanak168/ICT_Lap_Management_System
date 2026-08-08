@@ -1013,6 +1013,7 @@ const SeatingPlan = () => {
                   className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
                   onClick={() => {
                     setIsEditMode(false);
+                    if (!activeYear) return;
                     const shift = classes.find(c => c.id === selectedClass)?.shift || 'Morning';
                     loadData(activeYear, selectedClass, shift, true); // reload to cancel changes
                   }}
