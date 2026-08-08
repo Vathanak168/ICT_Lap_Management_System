@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Users, CheckCircle, Monitor, AlertTriangle, Clock, Info } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { Student, PCIssue, AttendanceRecord } from '../store/db';
+import type { PCIssue } from '../store/db';
 import { Badge } from '../components/ui/Badge';
 import { useNavigate } from 'react-router-dom';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
@@ -55,9 +55,9 @@ const Dashboard = () => {
         const db = await initDB();
         
         const [students, pcIssues, allAttendance] = await Promise.all([
-          db.getAll<Student>('students', activeYear),
-          db.getAll<PCIssue>('pcIssues', activeYear),
-          db.getAll<AttendanceRecord>('attendance', activeYear)
+          db.getAll('students', activeYear),
+          db.getAll('pcIssues', activeYear),
+          db.getAll('attendance', activeYear)
         ]);
 
         if (requestId !== loadRequestRef.current) return;

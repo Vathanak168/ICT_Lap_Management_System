@@ -134,6 +134,8 @@ export interface SettingRecord {
 export interface AiHistoryRecord {
   id: string;
   messages: JsonValue;
+  title?: string;
+  updatedAt?: string;
 }
 
 const tableMap = {
@@ -456,6 +458,8 @@ const storeSchemas: Record<StoreName, StoreSchema> = {
     fields: {
       id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
       messages: field('messages', 'json', { requiredRead: true, requiredWrite: true }),
+      title: field('title', 'string', { nullable: true }),
+      updatedAt: field('updated_at', 'string', { nullable: true }),
     },
     indexColumns: new Set(['id']),
   },
@@ -570,11 +574,17 @@ const parseString = (
     return failValidation(`${label} cannot be null.`, 'validate', storeName);
   }
 
-  if (typeof value !== 'string' || (options.required && value.trim().length === 0)) {
+  if (typeof value !== 'string') {
     return failValidation(`${label} must be a valid string.`, 'validate', storeName);
   }
 
-  if (options.allowed && !options.allowed.includes(value)) {
+  const trimmedValue = value.trim();
+
+  if (options.required && trimmedValue.length === 0) {
+    return failValidation(`${label} is required and cannot be empty.`, 'validate', storeName);
+  }
+
+  if (options.allowed && !options.allowed.includes(trimmedValue)) {
     return failValidation(
       `${label} must be one of: ${options.allowed.join(', ')}.`,
       'validate',
@@ -582,7 +592,7 @@ const parseString = (
     );
   }
 
-  return value;
+  return trimmedValue;
 };
 
 const parseAttendanceRecords = (
@@ -835,7 +845,7 @@ export class SupabaseDBAdapter {
       }
 
       return {
-        get: <T = unknown>(id: string) => track(this.get<T>(storeName, id)),
+        get: (id: string) => track(this.get(storeName as StoreName, id)),
         put: (value: unknown) => track(this.put(storeName, value)),
         add: (value: unknown) => track(this.add(storeName, value)),
         delete: (id: string) => track(this.delete(storeName, id)),
@@ -857,20 +867,7 @@ export class SupabaseDBAdapter {
     indexName: string,
     key: string,
     academicYear?: string,
-  ): Promise<Array<StoreRecord<K>>>;
-  async getAllFromIndex<T = unknown>(
-    storeName: string,
-    indexName: string,
-    key: string,
-    academicYear?: string,
-  ): Promise<T[]>;
-  async getAllFromIndex(
-    storeNameInput: string,
-    indexName: string,
-    key: string,
-    academicYear?: string,
-  ): Promise<unknown[]> {
-    const storeName = this.toStoreName(storeNameInput);
+  ): Promise<Array<StoreRecord<K>>> {
     this.validateAcademicYear(storeName, academicYear);
     const context = await this.getAccessContext(storeName);
     const indexColumn = this.resolveIndexColumn(storeName, indexName);
@@ -885,20 +882,14 @@ export class SupabaseDBAdapter {
   async getAll<K extends StoreName>(
     storeName: K,
     academicYear?: string,
-  ): Promise<Array<StoreRecord<K>>>;
-  async getAll<T = unknown>(storeName: string, academicYear?: string): Promise<T[]>;
-  async getAll(storeNameInput: string, academicYear?: string): Promise<unknown[]> {
-    const storeName = this.toStoreName(storeNameInput);
+  ): Promise<Array<StoreRecord<K>>> {
     this.validateAcademicYear(storeName, academicYear);
     const context = await this.getAccessContext(storeName);
     const rows = await this.fetchAllPages(storeName, context, { academicYear });
     return rows.map((row) => this.mapToCamelCase(storeName, row));
   }
 
-  async get<K extends StoreName>(storeName: K, id: string): Promise<StoreRecord<K> | null>;
-  async get<T = unknown>(storeName: string, id: string): Promise<T | null>;
-  async get(storeNameInput: string, id: string): Promise<unknown | null> {
-    const storeName = this.toStoreName(storeNameInput);
+  async get<K extends StoreName>(storeName: K, id: string): Promise<StoreRecord<K> | null> {
     const schema = storeSchemas[storeName];
     const recordId = this.requireId(id, storeName);
     const context = await this.getAccessContext(storeName);
@@ -1374,7 +1365,16 @@ export class SupabaseDBAdapter {
     for (const [camelKey, fieldSchema] of Object.entries(schema.fields)) {
       const rawValue = input[camelKey];
 
-      if (rawValue === undefined && fieldSchema.omitWhenUndefined) continue;
+      if (rawValue === undefined) {
+        if (fieldSchema.requiredWrite) {
+          failValidation(
+            `${storeName}.${camelKey} is required.`,
+            'map-write',
+            storeName,
+          );
+        }
+        continue;
+      }
 
       const parsed = parseByKind(
         rawValue,
@@ -1384,12 +1384,9 @@ export class SupabaseDBAdapter {
         'write',
       );
 
-      if (parsed === undefined) {
-        if (fieldSchema.nullable) payload[fieldSchema.db] = null;
-        continue;
+      if (parsed !== undefined) {
+        payload[fieldSchema.db] = parsed;
       }
-
-      payload[fieldSchema.db] = parsed;
     }
 
     if (schema.branchScoped) {

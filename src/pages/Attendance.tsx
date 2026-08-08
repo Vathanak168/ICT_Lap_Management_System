@@ -48,7 +48,7 @@ const Attendance = () => {
     const loadClasses = async () => {
       try {
         const db = await initDB();
-        const allClasses = await db.getAll<ClassRecord>('classes', activeYear);
+        const allClasses = await db.getAll('classes', activeYear);
         if (requestId !== loadRequestRef.current) return;
         
         setClasses(allClasses);
@@ -85,8 +85,8 @@ const Attendance = () => {
         const db = await initDB();
         
         const [allStudents, record] = await Promise.all([
-          db.getAllFromIndex<Student>('students', 'class', selectedClass, activeYear),
-          db.get<AttendanceRecord>('attendance', `${activeYear}_${selectedClass}_${selectedDate}`)
+          db.getAllFromIndex('students', 'class', selectedClass, activeYear),
+          db.get('attendance', `${activeYear}_${selectedClass}_${selectedDate}`)
         ]);
 
         if (requestId !== loadRequestRef.current) return;
@@ -109,6 +109,15 @@ const Attendance = () => {
     };
     
     void loadStudentsAndAttendance();
+    
+    const handleDataChange = () => {
+      void loadStudentsAndAttendance();
+    };
+    window.addEventListener('appDataChanged', handleDataChange);
+    
+    return () => {
+      window.removeEventListener('appDataChanged', handleDataChange);
+    };
   }, [selectedClass, selectedDate, activeYear]);
 
   const handleStatusChange = (studentId: string, status: AttendanceStatus) => {

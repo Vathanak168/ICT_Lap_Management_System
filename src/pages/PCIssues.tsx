@@ -34,7 +34,7 @@ const PCIssues = () => {
     
     try {
       const db = await initDB();
-      const allIssues = await db.getAll<PCIssue>('pcIssues', targetYear);
+      const allIssues = await db.getAll('pcIssues', targetYear);
       
       if (requestId !== loadRequestRef.current) return;
       
@@ -51,11 +51,18 @@ const PCIssues = () => {
   };
 
   useEffect(() => {
-    if (activeYear) {
-      void loadIssues(activeYear);
-    } else {
-      setIssues([]);
-    }
+    const load = () => {
+      if (activeYear) {
+        void loadIssues(activeYear);
+      } else {
+        setIssues([]);
+      }
+    };
+    
+    load();
+    
+    window.addEventListener('appDataChanged', load);
+    return () => window.removeEventListener('appDataChanged', load);
   }, [activeYear]);
 
   const validateForm = () => {
@@ -77,14 +84,22 @@ const PCIssues = () => {
     setIsSaving(true);
     try {
       const db = await initDB();
+      const dateFoundStr = (currentIssue.dateFound || new Date().toISOString()).split('T')[0];
+      const dateResolvedStr = currentIssue.status === 'Good' 
+        ? ((currentIssue.dateResolved || new Date().toISOString()).split('T')[0]) 
+        : undefined;
+
       const issueToSave: PCIssue = {
         id: currentIssue.id || crypto.randomUUID(),
         pcNumber: currentIssue.pcNumber!,
         seatNumber: currentIssue.seatNumber || currentIssue.pcNumber,
         status: currentIssue.status || 'Issue',
         description: currentIssue.description!,
-        dateFound: currentIssue.dateFound || new Date().toISOString().split('T')[0],
-        dateResolved: currentIssue.status === 'Good' ? (currentIssue.dateResolved || new Date().toISOString().split('T')[0]) : undefined,
+        reportedBy: currentIssue.reportedBy || 'Teacher',
+        dateFound: dateFoundStr,
+        reportedDate: dateFoundStr,
+        dateResolved: dateResolvedStr,
+        resolvedDate: dateResolvedStr,
         resolution: currentIssue.resolution || '',
         notes: currentIssue.notes || '',
         academicYear: targetYear
@@ -316,7 +331,7 @@ const PCIssues = () => {
               <label className="block text-sm font-medium text-primary mb-1">ថ្ងៃរកឃើញ</label>
               <Input 
                 type="date"
-                value={currentIssue.dateFound || ''} 
+                value={(currentIssue.dateFound || '').split('T')[0]} 
                 onChange={(e) => setCurrentIssue({...currentIssue, dateFound: e.target.value})}
                 disabled={isSaving}
               />

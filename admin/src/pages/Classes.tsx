@@ -103,6 +103,18 @@ const Classes = () => {
           
         if (error) throw error;
         setClasses(classes.map(c => c.id === editingClass.id ? { ...c, ...formData } : c));
+
+        if (formData.name !== editingClass.name || formData.shift !== editingClass.shift) {
+          const updates: any = {};
+          if (formData.name !== editingClass.name) updates.class = formData.name;
+          if (formData.shift !== editingClass.shift) updates.shift = formData.shift;
+          
+          await supabase
+            .from('students')
+            .update(updates)
+            .eq('class', editingClass.name)
+            .eq('academic_year', formData.academic_year);
+        }
       } else {
         // If it's new, check if ID needs generating
         let finalId = formData.id;
@@ -132,6 +144,15 @@ const Classes = () => {
     if (!window.confirm(`តើអ្នកពិតជាចង់លុបថ្នាក់ "${name}" មែនទេ?`)) return;
     
     try {
+      // 1. Delete associated students first
+      const { error: studentError } = await supabase.from('students').delete().eq('class', name);
+      if (studentError) {
+        console.error('Failed to cascade delete students:', studentError);
+        // Continue to delete the class anyway, or throw?
+        // Let's not throw, but log it.
+      }
+
+      // 2. Delete the class
       const { error } = await supabase.from('classes').delete().eq('id', id);
       if (error) throw error;
       

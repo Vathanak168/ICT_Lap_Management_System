@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { BookOpen, CheckCircle2, Sparkles, Edit, Trash2, Calendar, FileText } from 'lucide-react';
+import { BookOpen, CheckCircle2, Sparkles, Edit, Trash2, Star, Target, Check } from 'lucide-react';
 import { initDB } from '../store/db';
 import type { ClassRecord, LessonPlanTrack } from '../store/db';
 import { Button } from '../components/ui/Button';
@@ -19,12 +19,15 @@ const LessonPlanPage = () => {
   const [successMessage, setSuccessMessage] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
-  // Single request ref to manage load overlap
   const loadRequestRef = useRef(0);
   
   const { language } = useLanguage();
   const { activeYear } = useAcademicYear();
+
+  // New Phase 1 UI States
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
+  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
+  const [editFormData, setEditFormData] = useState<Partial<LessonPlanTrack>>({});
 
   // Load Classes
   useEffect(() => {
@@ -39,7 +42,7 @@ const LessonPlanPage = () => {
     const loadClasses = async () => {
       try {
         const db = await initDB();
-        const allClasses = await db.getAll<ClassRecord>('classes', activeYear);
+        const allClasses = await db.getAll('classes', activeYear);
         
         if (requestId !== loadRequestRef.current) return;
         
@@ -69,7 +72,16 @@ const LessonPlanPage = () => {
       return;
     }
 
-    void fetchPlans(selectedClass, activeYear);
+    void fetchPlans(selectedClass, activeYear as string);
+
+    const handleDataChange = () => {
+      void fetchPlans(selectedClass, activeYear as string);
+    };
+    window.addEventListener('appDataChanged', handleDataChange);
+    
+    return () => {
+      window.removeEventListener('appDataChanged', handleDataChange);
+    };
   }, [selectedClass, activeYear]);
 
   const fetchPlans = async (targetClass: string, targetYear: string) => {
@@ -77,7 +89,7 @@ const LessonPlanPage = () => {
     setIsLoading(true);
     try {
       const db = await initDB();
-      const plans = await db.getAllFromIndex<LessonPlanTrack>('lessonPlans', 'class_id', targetClass, targetYear);
+      const plans = await db.getAllFromIndex('lessonPlans', 'class_id', targetClass, targetYear);
       
       if (requestId !== loadRequestRef.current) return;
       
@@ -94,23 +106,20 @@ const LessonPlanPage = () => {
   };
 
   const generateDeterministicId = (plan: any, classId: string, year: string) => {
-    // Generate an ID that will be exactly the same if the exact same lesson plan details are re-uploaded
     const rawString = `${year}_${classId}_${plan.month}_${plan.week}_${plan.lessonTitle}`;
-    // very simple hash since we don't have crypto.subtle in sync
     let hash = 0;
     for (let i = 0; i < rawString.length; i++) {
       const char = rawString.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
+      hash = hash & hash;
     }
-    return `plan_${Math.abs(hash)}_${Date.now().toString().slice(-4)}`; // append short timestamp just in case
+    return `plan_${Math.abs(hash)}_${Date.now().toString().slice(-4)}`;
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedClass || !activeYear) return;
 
-    // Validate file
     const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
     if (!allowedTypes.has(file.type)) {
       setUploadError(language === 'KH' ? 'អនុញ្ញាតតែឯកសាររូបភាព (JPEG, PNG, WEBP) ប៉ុណ្ណោះ។' : 'Only image files (JPEG, PNG, WEBP) are allowed.');
@@ -118,14 +127,12 @@ const LessonPlanPage = () => {
       return;
     }
 
-    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
-    if (file.size > MAX_FILE_SIZE) {
+    if (file.size > 5 * 1024 * 1024) {
       setUploadError(language === 'KH' ? 'ទំហំរូបភាពត្រូវតូចជាង ៥ មេហ្គាបៃ (5MB)។' : 'Image size must be less than 5 MB.');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
-    // Capture context
     const uploadClassId = selectedClass;
     const uploadAcademicYear = activeYear;
 
@@ -138,21 +145,17 @@ const LessonPlanPage = () => {
         new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => {
-            if (typeof reader.result !== 'string') {
-              reject(new Error('Invalid file result.'));
-            } else {
-              resolve(reader.result);
-            }
+            if (typeof reader.result !== 'string') reject(new Error('Invalid file result.'));
+            else resolve(reader.result);
           };
           reader.onerror = () => reject(reader.error ?? new Error('Failed to read file.'));
-          reader.onabort = () => reject(new Error('File reading was cancelled.'));
           reader.readAsDataURL(file);
         });
 
       const dataUrl = await readAsDataURL(file);
       const base64String = dataUrl.split(',')[1];
       
-      const { extractLessonPlanFromImage } = await import('../lib/aiService');
+      const { extractLessonPlanFromImage } = await import('../lib/ai/core');
       const extractedPlans = await extractLessonPlanFromImage(base64String, file.type);
       
       if (!Array.isArray(extractedPlans) || extractedPlans.length === 0) {
@@ -161,12 +164,9 @@ const LessonPlanPage = () => {
 
       const db = await initDB();
       const newPlans: LessonPlanTrack[] = extractedPlans.map(plan => {
-        // Basic schema validation / sanitization
         const safeMonth = String(plan.month || 'Unknown').trim();
         const safeWeek = String(plan.week || 'Unknown').trim();
         const safeTitle = String(plan.lessonTitle || 'Untitled').trim();
-        
-        // Generate deterministic ID so re-uploads don't spam infinite duplicates
         const deterministicId = generateDeterministicId({ month: safeMonth, week: safeWeek, lessonTitle: safeTitle }, uploadClassId, uploadAcademicYear);
 
         return {
@@ -184,10 +184,8 @@ const LessonPlanPage = () => {
       });
 
       await db.putMany('lessonPlans', newPlans);
+      setSuccessMessage(language === 'KH' ? `បានរក្សាទុកមេរៀនចំនួន ${newPlans.length} ដោយជោគជ័យ!` : `Saved ${newPlans.length} lessons!`);
       
-      setSuccessMessage(language === 'KH' ? `បានទាញយក និងរក្សាទុកមេរៀនចំនួន ${newPlans.length} ដោយជោគជ័យ!` : `Successfully extracted and saved ${newPlans.length} lessons!`);
-      
-      // If the user hasn't switched classes during upload, refresh
       if (selectedClass === uploadClassId && activeYear === uploadAcademicYear) {
         await fetchPlans(uploadClassId, uploadAcademicYear);
       }
@@ -201,26 +199,17 @@ const LessonPlanPage = () => {
 
   const toggleStatus = async (plan: LessonPlanTrack) => {
     if (!selectedClass || !activeYear) return;
-    
     setIsUpdating(true);
-    const currentClass = selectedClass;
-    const currentYear = activeYear;
-
     try {
       const db = await initDB();
       const newStatus = plan.status === 'Planned' ? 'Completed' : 'Planned';
-      
       await db.update('lessonPlans', plan.id, {
         status: newStatus,
         completedDate: newStatus === 'Completed' ? new Date().toISOString() : null
       });
-      
-      if (selectedClass === currentClass && activeYear === currentYear) {
-         await fetchPlans(currentClass, currentYear);
-      }
+      await fetchPlans(selectedClass, activeYear as string);
     } catch (error) {
       console.error('Failed to toggle status:', error);
-      alert('មានបញ្ហាក្នុងការអាប់ដេត!');
     } finally {
       setIsUpdating(false);
     }
@@ -231,183 +220,369 @@ const LessonPlanPage = () => {
     if (!window.confirm(language === 'KH' ? 'តើអ្នកពិតជាចង់លុបមែនទេ?' : 'Are you sure you want to delete this?')) return;
     
     setIsUpdating(true);
-    const currentClass = selectedClass;
-    const currentYear = activeYear;
-
     try {
       const db = await initDB();
       await db.delete('lessonPlans', id);
-      
-      if (selectedClass === currentClass && activeYear === currentYear) {
-         await fetchPlans(currentClass, currentYear);
-      }
+      await fetchPlans(selectedClass, activeYear as string);
     } catch (error) {
       console.error('Failed to delete lesson plan:', error);
-      alert('មានបញ្ហាក្នុងការលុបទិន្នន័យ!');
     } finally {
       setIsUpdating(false);
     }
   };
 
-  const groupedPlans = useMemo(() => {
-    return lessonPlans.reduce<Record<string, LessonPlanTrack[]>>((groups, plan) => {
-      (groups[plan.month] ??= []).push(plan);
-      return groups;
-    }, {});
+  const saveInlineEdit = async (id: string) => {
+    if (!id) return;
+    setIsUpdating(true);
+    try {
+      const db = await initDB();
+      const safeData = {
+        classId: editFormData.classId,
+        month: editFormData.month,
+        week: editFormData.week,
+        lessonTitle: editFormData.lessonTitle,
+        topics: editFormData.topics,
+        exercises: editFormData.exercises,
+        status: editFormData.status,
+        academicYear: editFormData.academicYear,
+        completedDate: editFormData.completedDate
+      };
+      // Clean up undefined properties to not mess up indexedDB updates if they are strictly typed
+      Object.keys(safeData).forEach(key => {
+        if ((safeData as any)[key] === undefined) {
+          delete (safeData as any)[key];
+        }
+      });
+      await db.update('lessonPlans', id, safeData);
+      setEditingPlanId(null);
+      await fetchPlans(selectedClass, activeYear as string);
+    } catch (error) {
+      console.error('Failed to update lesson plan:', error);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  // UI Derived State
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>();
+    lessonPlans.forEach(p => months.add(p.month));
+    return Array.from(months);
   }, [lessonPlans]);
+
+  useEffect(() => {
+    if (availableMonths.length > 0 && (!selectedMonth || !availableMonths.includes(selectedMonth))) {
+      setSelectedMonth(availableMonths[0]);
+    }
+  }, [availableMonths, selectedMonth]);
+
+  const monthPlans = useMemo(() => {
+    return lessonPlans.filter(p => p.month === selectedMonth);
+  }, [lessonPlans, selectedMonth]);
+
+  const nextLesson = useMemo(() => {
+    return lessonPlans.find(p => p.status === 'Planned');
+  }, [lessonPlans]);
+
+  const completedCount = monthPlans.filter(p => p.status === 'Completed').length;
+  const plannedCount = monthPlans.length - completedCount;
+  const progressPercent = monthPlans.length > 0 ? Math.round((completedCount / monthPlans.length) * 100) : 0;
+
+  // Placeholder weeks generation logic
+  const standardWeeks = language === 'KH' 
+    ? ['សប្តាហ៍ទី១', 'សប្តាហ៍ទី២', 'សប្តាហ៍ទី៣', 'សប្តាហ៍ទី៤'] 
+    : ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
+
+  const renderedWeeks = useMemo(() => {
+    if (monthPlans.length === 0) return [];
+    
+    // We try to match existing plans to standard weeks or just show them in order.
+    // To properly show "Missing Weeks", we need to figure out which weeks are present.
+    // For simplicity in Phase 1, we map standard weeks. If a standard week isn't found, we return a placeholder.
+    // We also include any non-standard weeks that exist.
+    
+    const rendered: (LessonPlanTrack | { isMissing: true, week: string })[] = [];
+    
+    standardWeeks.forEach(stdWeek => {
+      const normalizedStd = stdWeek.toLowerCase().replace(/\s/g, '');
+      const matchedPlans = monthPlans.filter(p => p.week.toLowerCase().replace(/\s/g, '').includes(normalizedStd) || normalizedStd.includes(p.week.toLowerCase().replace(/\s/g, '')));
+      
+      if (matchedPlans.length > 0) {
+        matchedPlans.forEach(mp => {
+          if (!rendered.some(r => 'id' in r && r.id === mp.id)) {
+            rendered.push(mp);
+          }
+        });
+      } else {
+        rendered.push({ isMissing: true, week: stdWeek });
+      }
+    });
+
+    // Add any remaining plans that didn't match standard week names
+    monthPlans.forEach(mp => {
+      if (!rendered.some(r => 'id' in r && r.id === mp.id)) {
+        rendered.push(mp);
+      }
+    });
+
+    return rendered;
+  }, [monthPlans, standardWeeks]);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-2">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2 text-[#2a5298]">
             <BookOpen className="text-[#2a5298]" size={28} />
-            {language === 'KH' ? 'គ្រប់គ្រងមេរៀន (Lesson Plan)' : 'Lesson Plan Management'}
+            {language === 'KH' ? 'កន្លែងធ្វើការបង្រៀនប្រចាំសប្តាហ៍' : 'Weekly Teaching Workspace'}
           </h1>
           <p className="text-gray-500 mt-1">
-            {language === 'KH' ? 'គ្រប់គ្រងកាលវិភាគមេរៀន និងតាមដានការបង្រៀនប្រចាំសប្តាហ៍' : 'Manage lesson schedules and track weekly progress'}
+            {language === 'KH' ? 'រៀបចំផែនការ និងតាមដានដំណើរការបង្រៀន' : 'Plan and track your teaching progress'}
           </p>
         </div>
         <div className="flex gap-3">
-             <input 
-                type="file" 
-                accept="image/*" 
-                className="hidden" 
-                ref={fileInputRef} 
-                onChange={(e) => void handleFileUpload(e)} 
-             />
-             <Button 
-                variant="primary" 
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading || isUpdating || isLoading || !selectedClass || !activeYear}
-                icon={Sparkles}
-             >
-                {isUploading ? (language === 'KH' ? 'កំពុងអានរូបភាព...' : 'Parsing Image...') : (language === 'KH' ? 'ទាញទិន្នន័យពីរូបភាព (AI)' : 'Extract from Image (AI)')}
+             <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={(e) => void handleFileUpload(e)} />
+             <Button variant="primary" onClick={() => fileInputRef.current?.click()} disabled={isUploading || isUpdating || isLoading || !selectedClass || !activeYear} icon={Sparkles}>
+                {isUploading ? (language === 'KH' ? 'កំពុងអានរូបភាព...' : 'Parsing Image...') : (language === 'KH' ? 'ទាញពីកាលវិភាគរូបថត' : 'Extract from Image')}
              </Button>
         </div>
       </div>
 
-      <div className={`bg-white p-4 rounded-xl border border-gray-200 shadow-sm ${isLoading || isUpdating ? 'opacity-50 pointer-events-none' : ''}`}>
-        <div className="max-w-xs">
-          <label className="block text-sm font-medium text-gray-700 mb-1">{language === 'KH' ? 'ជ្រើសរើសថ្នាក់៖' : 'Select Class:'}</label>
+      {/* Top Bar: Class Selector */}
+      <div className={`bg-white px-6 py-4 rounded-xl border border-gray-200 shadow-sm flex items-center gap-6 ${isLoading || isUpdating ? 'opacity-50 pointer-events-none' : ''}`}>
+        <div className="w-full max-w-xs">
+          <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{language === 'KH' ? 'ថ្នាក់រៀន' : 'Class'}</label>
           <select 
-            className="w-full bg-white border border-gray-300 text-gray-800 text-sm rounded-lg px-3 py-2 outline-none focus:border-[#2a5298] disabled:opacity-50"
+            className="w-full bg-slate-50 border border-gray-200 text-gray-800 text-sm font-semibold rounded-lg px-3 py-2 outline-none focus:border-[#2a5298]"
             value={selectedClass}
             onChange={(e) => setSelectedClass(e.target.value)}
-            disabled={isUploading || isUpdating || isLoading}
           >
             {classes.map(c => (
-              <option key={c.id} value={c.id}>{c.name} ({c.shift === 'Morning' ? (language === 'KH' ? 'ព្រឹក' : 'Morning') : c.shift === 'Afternoon' ? (language === 'KH' ? 'រសៀល' : 'Afternoon') : (language === 'KH' ? 'យប់' : 'Evening')})</option>
+              <option key={c.id} value={c.id}>{c.name} ({c.shift})</option>
             ))}
             {classes.length === 0 && <option value="">{language === 'KH' ? 'មិនមានថ្នាក់' : 'No Classes'}</option>}
           </select>
         </div>
       </div>
 
-      {uploadError && (
-        <div className="bg-red-50 text-red-600 p-4 rounded-lg border border-red-200">
-          {uploadError}
-        </div>
-      )}
-
-      {successMessage && (
-        <div className="bg-green-50 text-green-600 p-4 rounded-lg border border-green-200 flex justify-between items-center">
-          <span>{successMessage}</span>
-          <button onClick={() => setSuccessMessage('')} className="text-green-800 font-bold">&times;</button>
-        </div>
-      )}
+      {uploadError && <div className="bg-red-50 text-red-600 p-4 rounded-lg border border-red-200">{uploadError}</div>}
+      {successMessage && <div className="bg-green-50 text-green-600 p-4 rounded-lg border border-green-200 flex justify-between items-center"><span>{successMessage}</span><button onClick={() => setSuccessMessage('')}>&times;</button></div>}
 
       {isLoading && !isUpdating ? (
         <div className="bg-white p-12 text-center rounded-xl border border-gray-200 shadow-sm">
-           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-           <p className="text-gray-500">{language === 'KH' ? 'កំពុងទាញយកកាលវិភាគបង្រៀន...' : 'Loading lesson plans...'}</p>
+           <div className="animate-spin h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+           <p className="text-gray-500">{language === 'KH' ? 'កំពុងទាញយក...' : 'Loading...'}</p>
         </div>
       ) : lessonPlans.length === 0 && !isUploading ? (
-        <div className="bg-white p-12 text-center rounded-xl border border-gray-200 shadow-sm">
-          <BookOpen size={48} className="mx-auto text-gray-300 mb-4" />
-          <h3 className="text-lg font-semibold text-gray-800 mb-2">{language === 'KH' ? 'មិនទាន់មានមេរៀនទេ' : 'No Lesson Plans Found'}</h3>
-          <p className="text-gray-500 max-w-md mx-auto">
+        <div className="bg-white p-12 text-center rounded-xl border border-gray-200 shadow-sm flex flex-col items-center">
+          <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mb-4">
+            <BookOpen size={40} className="text-[#2a5298]" />
+          </div>
+          <h3 className="text-xl font-bold text-gray-800 mb-2">
+            {language === 'KH' ? `មិនទាន់មានផែនការបង្រៀនសម្រាប់ថ្នាក់នេះទេ` : 'No Lesson Plans Yet'}
+          </h3>
+          <p className="text-gray-500 max-w-md mx-auto mb-6 text-sm">
             {language === 'KH' 
-              ? 'សូមចុចប៊ូតុង "ទាញទិន្នន័យពីរូបភាព (AI)" ដើម្បី Upload រូបថតកាលវិភាគបង្រៀនរបស់អ្នក ហើយប្រព័ន្ធនឹងរៀបចំវាដោយស្វ័យប្រវត្តិ។' 
-              : 'Click "Extract from Image (AI)" to upload a photo of your syllabus, and the system will organize it automatically.'}
+              ? 'លោកគ្រូអាចទាញយកទិន្នន័យពីកាលវិភាគរូបថត ឬប្រាប់ AI Assistant ឲ្យបង្កើតមេរៀនដោយស្វ័យប្រវត្តិ។' 
+              : 'Extract from a syllabus photo, or ask the AI Assistant to generate a lesson plan.'}
           </p>
+          <div className="flex gap-4">
+             <Button variant="primary" onClick={() => fileInputRef.current?.click()} icon={Sparkles}>
+                {language === 'KH' ? 'ទាញពីកាលវិភាគរូបថត (Image)' : 'Import from Image'}
+             </Button>
+          </div>
         </div>
       ) : (
-        <div className={`space-y-8 ${isUpdating ? 'opacity-50 pointer-events-none' : ''}`}>
-          {Object.entries(groupedPlans).map(([month, plans]) => (
-            <div key={month} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="bg-[#2a5298] px-6 py-3 text-white font-bold text-lg flex items-center gap-2">
-                <Calendar size={20} />
-                {language === 'KH' ? `ខែ៖ ${month}` : `Month: ${month}`}
-              </div>
-              <div className="p-6">
-                <div className="relative border-l-2 border-blue-100 ml-4 space-y-8">
-                  {plans.map((plan) => (
-                    <div key={plan.id} className="relative pl-6">
-                      <div className={`absolute -left-2.5 mt-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center
-                        ${plan.status === 'Completed' ? 'bg-green-500 border-green-500' : 'bg-white border-blue-300'}`}
-                      >
-                        {plan.status === 'Completed' && <CheckCircle2 size={12} className="text-white" />}
-                      </div>
-                      
-                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center hover:shadow-md transition-shadow">
-                        <div className="flex-1 space-y-2">
-                          <div className="flex items-center gap-3">
-                            <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-0.5 rounded uppercase">
-                              {plan.week}
-                            </span>
-                            <h4 className="font-bold text-gray-800 text-lg">{plan.lessonTitle}</h4>
-                          </div>
-                          
-                          <div className="text-sm text-gray-600 space-y-1">
-                            <p className="flex items-start gap-2">
-                              <FileText size={16} className="text-gray-400 mt-0.5 flex-shrink-0" />
-                              <span><strong className="text-gray-700">{language === 'KH' ? 'ចំណុចសំខាន់ៗ៖' : 'Topics:'}</strong> {plan.topics}</span>
-                            </p>
-                            {plan.exercises && (
-                              <p className="flex items-start gap-2">
-                                <Edit size={16} className="text-orange-400 mt-0.5 flex-shrink-0" />
-                                <span><strong className="text-gray-700">{language === 'KH' ? 'លំហាត់៖' : 'Exercises:'}</strong> <span className="text-orange-700">{plan.exercises}</span></span>
-                              </p>
-                            )}
-                          </div>
-                          
-                          {plan.status === 'Completed' && plan.completedDate && (
-                            <p className="text-xs text-green-600 font-medium">
-                              {language === 'KH' ? 'បានបង្រៀនរួចនៅ៖ ' : 'Completed on: '} 
-                              {new Date(plan.completedDate).toLocaleDateString()}
-                            </p>
-                          )}
-                        </div>
-                        
-                        <div className="flex flex-row md:flex-col gap-2">
-                          <button 
-                            onClick={() => void toggleStatus(plan)}
-                            disabled={isUpdating}
-                            className={`px-3 py-1.5 rounded-md text-sm font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50
-                              ${plan.status === 'Completed' 
-                                ? 'bg-green-100 text-green-700 hover:bg-green-200' 
-                                : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200'}`}
-                          >
-                            <CheckCircle2 size={16} /> 
-                            {plan.status === 'Completed' ? (language === 'KH' ? 'បង្រៀនរួច' : 'Completed') : (language === 'KH' ? 'សម្គាល់ថាបានបង្រៀន' : 'Mark Complete')}
-                          </button>
-                          
-                          <button 
-                            onClick={() => void handleDelete(plan.id)}
-                            disabled={isUpdating}
-                            className="px-3 py-1.5 rounded-md text-sm font-medium text-red-500 hover:bg-red-50 transition-colors flex items-center justify-center gap-1.5 border border-transparent disabled:opacity-50"
-                          >
-                            <Trash2 size={16} /> {language === 'KH' ? 'លុប' : 'Delete'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+        <div className={`space-y-6 ${isUpdating ? 'opacity-50 pointer-events-none' : ''}`}>
+          
+          {/* Phase 1: Next Lesson Card */}
+          {nextLesson && (
+            <div className="bg-gradient-to-r from-[#2a5298] to-[#1e3c72] rounded-xl p-6 text-white shadow-lg relative overflow-hidden">
+               <div className="absolute top-0 right-0 p-4 opacity-10">
+                 <Star size={100} />
+               </div>
+               <div className="relative z-10">
+                 <div className="flex items-center gap-2 text-blue-200 font-bold text-sm tracking-wider uppercase mb-3">
+                   <Target size={16} /> {language === 'KH' ? 'មេរៀនបន្ទាប់ (Next Lesson)' : 'Next Lesson'}
+                 </div>
+                 <h2 className="text-2xl md:text-3xl font-bold mb-2">{nextLesson.lessonTitle}</h2>
+                 <div className="flex items-center gap-3 text-blue-100 mb-4 text-sm">
+                   <span className="bg-white/20 px-2 py-1 rounded">{nextLesson.month}</span>
+                   <span className="bg-white/20 px-2 py-1 rounded">{nextLesson.week}</span>
+                 </div>
+                 <p className="text-blue-50 mb-6 max-w-2xl"><strong className="text-white">Topics:</strong> {nextLesson.topics}</p>
+                 <div className="flex gap-3">
+                    <button 
+                      onClick={() => void toggleStatus(nextLesson)}
+                      className="bg-white text-[#2a5298] hover:bg-blue-50 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors shadow-sm"
+                    >
+                      <Check size={18} /> {language === 'KH' ? 'សម្គាល់ថាបានបង្រៀន' : 'Mark Completed'}
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setSelectedMonth(nextLesson.month);
+                        setEditingPlanId(nextLesson.id);
+                        setEditFormData(nextLesson);
+                        // scroll to it if needed
+                      }}
+                      className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors border border-white/30"
+                    >
+                      <Edit size={16} /> {language === 'KH' ? 'កែប្រែ' : 'Edit'}
+                    </button>
+                 </div>
+               </div>
             </div>
-          ))}
+          )}
+
+          {/* Phase 1: Month Selector & Progress */}
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+             <div className="flex flex-wrap gap-2 mb-6">
+                {availableMonths.map(month => (
+                  <button 
+                    key={month}
+                    onClick={() => setSelectedMonth(month)}
+                    className={`px-4 py-2 rounded-full font-bold text-sm transition-colors border
+                      ${selectedMonth === month 
+                        ? 'bg-[#2a5298] text-white border-[#2a5298] shadow-sm' 
+                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                  >
+                    {month}
+                  </button>
+                ))}
+             </div>
+
+             <div className="bg-slate-50 border border-slate-200 rounded-lg p-5">
+                <div className="flex justify-between items-end mb-3">
+                   <div>
+                     <h3 className="font-bold text-gray-800 text-lg">{language === 'KH' ? `ខែ៖ ${selectedMonth}` : `${selectedMonth} Progress`}</h3>
+                     <p className="text-sm text-gray-500 mt-1">
+                       <span className="font-semibold text-gray-700">{monthPlans.length}</span> Lessons &bull; <span className="font-semibold text-green-600">{completedCount}</span> Completed &bull; <span className="font-semibold text-blue-600">{plannedCount}</span> Planned
+                     </p>
+                   </div>
+                   <div className="text-2xl font-black text-[#2a5298]">{progressPercent}%</div>
+                </div>
+                <div className="h-3 w-full bg-gray-200 rounded-full overflow-hidden">
+                   <div className="h-full bg-green-500 transition-all duration-500" style={{ width: `${progressPercent}%` }}></div>
+                </div>
+             </div>
+          </div>
+
+          {/* Lesson List */}
+          <div className="space-y-4">
+             {renderedWeeks.map((item, idx) => {
+               // 1. Missing Week Placeholder
+               if ('isMissing' in item) {
+                 return (
+                   <div key={`missing-${idx}`} className="bg-white border border-dashed border-gray-300 rounded-xl p-5 flex items-center justify-between opacity-70 hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 font-bold text-sm">
+                           {item.week.slice(-1) || '?'}
+                        </div>
+                        <div>
+                          <div className="font-bold text-gray-700">{item.week}</div>
+                          <div className="text-sm text-gray-500">{language === 'KH' ? 'មិនទាន់មានមេរៀន' : 'No lesson planned'}</div>
+                        </div>
+                      </div>
+                      <Button variant="secondary" className="text-sm" icon={Sparkles} onClick={() => alert(language === 'KH' ? 'សូមប្រាប់ AI Assistant ដើម្បីបង្កើតមេរៀននេះ!' : 'Ask the AI Assistant to generate this week!')}>
+                        {language === 'KH' ? 'បង្កើត (AI)' : 'Generate AI'}
+                      </Button>
+                   </div>
+                 );
+               }
+
+               const plan = item as LessonPlanTrack;
+               const isEditing = editingPlanId === plan.id;
+
+               // 2. Inline Edit Mode
+               if (isEditing) {
+                 return (
+                   <div key={plan.id} className="bg-blue-50 border border-blue-200 rounded-xl p-6 shadow-md">
+                      <div className="flex justify-between items-center mb-4">
+                        <div className="font-bold text-blue-800 flex items-center gap-2"><Edit size={18}/> {language === 'KH' ? 'កែប្រែមេរៀន' : 'Edit Lesson'}</div>
+                        <div className="flex gap-2">
+                           <input type="text" className="w-20 px-2 py-1 rounded border border-gray-300 text-sm" value={editFormData.month || ''} onChange={e => setEditFormData({...editFormData, month: e.target.value})} placeholder="Month" />
+                           <input type="text" className="w-24 px-2 py-1 rounded border border-gray-300 text-sm" value={editFormData.week || ''} onChange={e => setEditFormData({...editFormData, week: e.target.value})} placeholder="Week" />
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                         <div>
+                           <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'ចំណងជើងមេរៀន' : 'Lesson Title'}</label>
+                           <input type="text" className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1" value={editFormData.lessonTitle || ''} onChange={e => setEditFormData({...editFormData, lessonTitle: e.target.value})} />
+                         </div>
+                         <div>
+                           <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'ចំណុចសំខាន់ៗ' : 'Topics'}</label>
+                           <textarea className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1" rows={2} value={editFormData.topics || ''} onChange={e => setEditFormData({...editFormData, topics: e.target.value})} />
+                         </div>
+                         <div>
+                           <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'លំហាត់' : 'Exercises'}</label>
+                           <input type="text" className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1" value={editFormData.exercises || ''} onChange={e => setEditFormData({...editFormData, exercises: e.target.value})} />
+                         </div>
+                      </div>
+                      <div className="flex justify-end gap-3 mt-5">
+                         <button onClick={() => setEditingPlanId(null)} className="px-4 py-2 text-gray-600 font-bold hover:bg-gray-100 rounded-lg transition-colors">{language === 'KH' ? 'បោះបង់' : 'Cancel'}</button>
+                         <button onClick={() => void saveInlineEdit(plan.id)} className="px-6 py-2 bg-[#2a5298] text-white font-bold rounded-lg hover:bg-blue-800 transition-colors shadow-sm">{language === 'KH' ? 'រក្សាទុក' : 'Save'}</button>
+                      </div>
+                   </div>
+                 );
+               }
+
+               // 3. Normal View Mode
+               return (
+                 <div key={plan.id} className="bg-white border border-gray-200 rounded-xl p-5 flex flex-col md:flex-row gap-5 hover:border-blue-300 transition-colors shadow-sm group">
+                    <div className="md:w-32 flex-shrink-0 border-b md:border-b-0 md:border-r border-gray-100 pb-3 md:pb-0 md:pr-4 flex flex-row md:flex-col items-center md:items-start justify-between md:justify-start gap-2">
+                       <div>
+                         <div className="font-black text-gray-800 text-lg">{plan.week}</div>
+                         <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">{plan.month}</div>
+                       </div>
+                       <div className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 mt-0 md:mt-2
+                         ${plan.status === 'Completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                         {plan.status === 'Completed' ? <CheckCircle2 size={12}/> : <div className="w-2 h-2 rounded-full bg-amber-500" />}
+                         {plan.status === 'Completed' ? (language === 'KH' ? 'បានបង្រៀន' : 'Completed') : (language === 'KH' ? 'គ្រោងទុក' : 'Planned')}
+                       </div>
+                    </div>
+                    
+                    <div className="flex-1 space-y-2">
+                       <h4 className="font-bold text-gray-900 text-xl">{plan.lessonTitle}</h4>
+                       <p className="text-gray-600 text-sm leading-relaxed"><strong className="text-gray-800">{language === 'KH' ? 'ចំណុចសំខាន់ៗ៖' : 'Topics:'}</strong> {plan.topics}</p>
+                       {plan.exercises && <p className="text-gray-600 text-sm leading-relaxed"><strong className="text-gray-800">{language === 'KH' ? 'លំហាត់៖' : 'Exercises:'}</strong> {plan.exercises}</p>}
+                       {plan.status === 'Completed' && plan.completedDate && (
+                         <p className="text-xs text-green-600 font-medium mt-2">
+                           {language === 'KH' ? 'បានបង្រៀននៅ៖ ' : 'Completed on: '} {new Date(plan.completedDate).toLocaleDateString()}
+                         </p>
+                       )}
+                    </div>
+                    
+                    <div className="flex flex-row md:flex-col gap-2 justify-start md:justify-start pt-2 md:pt-0">
+                       <button 
+                         onClick={() => void toggleStatus(plan)}
+                         className={`p-2 rounded-lg transition-colors flex items-center justify-center
+                           ${plan.status === 'Completed' ? 'text-green-600 bg-green-50 hover:bg-green-100' : 'text-blue-600 bg-blue-50 hover:bg-blue-100'}`}
+                         title={plan.status === 'Completed' ? 'Mark Planned' : 'Mark Completed'}
+                       >
+                         <CheckCircle2 size={20} />
+                       </button>
+                       <button 
+                         onClick={() => {
+                           setEditingPlanId(plan.id);
+                           setEditFormData(plan);
+                         }}
+                         className="p-2 rounded-lg text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors flex items-center justify-center opacity-100 md:opacity-0 group-hover:opacity-100"
+                         title="Edit"
+                       >
+                         <Edit size={20} />
+                       </button>
+                       <button 
+                         onClick={() => void handleDelete(plan.id)}
+                         className="p-2 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors flex items-center justify-center opacity-100 md:opacity-0 group-hover:opacity-100"
+                         title="Delete"
+                       >
+                         <Trash2 size={20} />
+                       </button>
+                    </div>
+                 </div>
+               );
+             })}
+          </div>
         </div>
       )}
     </div>

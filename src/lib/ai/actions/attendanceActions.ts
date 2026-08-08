@@ -1,0 +1,47 @@
+import { initDB } from '../../../store/db';
+
+export const handleAttendanceAction = async (action: string, data: any, activeYear: string) => {
+  const db = await initDB();
+  
+  if (action === 'UPDATE_ATTENDANCE') {
+    if (!data.classId || !data.studentId || !data.date || !data.status) {
+      throw new Error('ទិន្នន័យមិនពេញលេញ (Missing classId, studentId, date, or status)');
+    }
+    
+    const validStatuses = ['P', 'A', 'L', 'P_LATE'];
+    if (!validStatuses.includes(data.status)) {
+      throw new Error(`ស្ថានភាពមិនត្រឹមត្រូវ (Invalid status: ${data.status})`);
+    }
+
+    const attendanceRecordId = `${activeYear}-${data.classId}-${data.date}`;
+    let record = await db.get('attendance', attendanceRecordId);
+    
+    if (!record) {
+      const classes = await db.getAll('classes', activeYear);
+      const cls = classes.find(c => c.id === data.classId);
+      
+      if (!cls) {
+        throw new Error('រកមិនឃើញថ្នាក់នេះទេ (Class not found)');
+      }
+      
+      record = {
+        id: attendanceRecordId,
+        date: data.date,
+        classId: data.classId,
+        class: data.classId, // For backwards compatibility
+        shift: cls.shift || 'Morning',
+        academicYear: activeYear,
+        records: {}
+      };
+    }
+    
+    // Update the specific student's attendance
+    record.records[data.studentId] = data.status;
+    
+    await db.put('attendance', record);
+    
+    return true;
+  }
+  
+  return false;
+};

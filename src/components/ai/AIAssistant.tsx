@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
-import { X, Send, Bot, User, Check, XCircle, Loader2, UserPlus, FileText, Edit, Trash2, AlertTriangle, Wrench } from 'lucide-react';
-import { generateAIResponse, hasApiKey } from '../../lib/aiService';
-import { initDB } from '../../store/db';
+import { useState, useEffect, useRef } from 'react';
+import { Send, Bot, Paperclip, LayoutGrid, Mic, Loader2, X, Trash2, Edit, ChevronRight, MessageSquare, AlertTriangle, Check, XCircle, FileText, User, Pin, Minimize2, Maximize2, RefreshCw, Sparkles, Settings, UserPlus, Wrench, PlusCircle } from 'lucide-react';
+import { initDB, type AiHistoryRecord, type JsonValue } from '../../store/db';
+import { generateAIResponse, hasApiKey } from '../../lib/ai/core';
+import { handleAction } from '../../lib/ai/actions';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -9,256 +10,314 @@ type Message = {
   id: string;
   sender: 'ai' | 'user';
   text: string;
-  pendingAction?: any;
+  pendingActions?: any[];
 };
 
 const AIAssistant = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [historyRecordId, setHistoryRecordId] = useState<string | null>(null);
+  const [historyList, setHistoryList] = useState<AiHistoryRecord[]>([]);
+  const [isDbLoaded, setIsDbLoaded] = useState(false);
+  const [processingActionId, setProcessingActionId] = useState<string | null>(null);
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const { activeYear } = useAcademicYear();
   const { branch } = useAuth();
-  const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', sender: 'ai', text: 'សួស្តីលោកគ្រូ! តើមានអ្វីឲ្យខ្ញុំជួយថ្ងៃនេះ?' }
-  ]);
-  const [isDbLoaded, setIsDbLoaded] = useState(false);
-  const [historyRecordId, setHistoryRecordId] = useState<string | null>(null);
+
+  const historyRecordIdRef = useRef<string | null>(null);
+  const historySaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const knownHistoryIdsRef = useRef<Set<string>>(new Set());
+  const skipNextHistorySaveRef = useRef(false);
+  const historyLoadRequestRef = useRef(0);
+
+  const setActiveHistoryId = (id: string | null) => {
+    historyRecordIdRef.current = id;
+    setHistoryRecordId(id);
+  };
+
+  const ensureActiveHistoryId = (): string => {
+    const existing = historyRecordIdRef.current;
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    setActiveHistoryId(id);
+    return id;
+  };
+
+  const makeHistoryTitle = (snapshot: Message[]): string => {
+    const firstUserMessage = snapshot.find(message => message.sender === 'user');
+    if (!firstUserMessage) return 'ការសន្ទនាថ្មី';
+    const text = firstUserMessage.text.trim();
+    if (text.length <= 30) return text || 'ការសន្ទនាថ្មី';
+    return `${text.slice(0, 30)}...`;
+  };
+
+  const serializeMessages = (snapshot: Message[]): JsonValue => {
+    return JSON.parse(JSON.stringify(snapshot)) as JsonValue;
+  };
+
+  const updateHistoryListLocally = (record: AiHistoryRecord) => {
+    setHistoryList(previous => {
+      const others = previous.filter(item => item.id !== record.id);
+      return [record, ...others].sort((a, b) => {
+        const aTime = Date.parse(a.updatedAt ?? '') || 0;
+        const bTime = Date.parse(b.updatedAt ?? '') || 0;
+        return bTime - aTime;
+      });
+    });
+  };
+
+  const enqueueHistorySave = (recordId: string, snapshot: Message[]) => {
+    const storedMessages = serializeMessages(snapshot);
+    const title = makeHistoryTitle(snapshot);
+    const updatedAt = new Date().toISOString();
+
+    historySaveQueueRef.current = historySaveQueueRef.current
+      .catch(previousError => {
+        console.error('Previous history save failed:', previousError);
+      })
+      .then(async () => {
+        const db = await initDB();
+        if (knownHistoryIdsRef.current.has(recordId)) {
+          await db.update('aiHistory', recordId, {
+            messages: storedMessages,
+            title,
+            updatedAt,
+          });
+        } else {
+          await db.add('aiHistory', {
+            id: recordId,
+            messages: storedMessages,
+            title,
+            updatedAt,
+          });
+          knownHistoryIdsRef.current.add(recordId);
+        }
+        updateHistoryListLocally({ id: recordId, messages: storedMessages, title, updatedAt });
+      })
+      .catch(error => {
+        console.error('Failed to save chat history:', error);
+      });
+  };
 
   useEffect(() => {
+    if (!isOpen) return;
+
+    const requestId = ++historyLoadRequestRef.current;
+
     const loadHistory = async () => {
       try {
         const db = await initDB();
         const records = await db.getAll('aiHistory');
-        if (records && records.length > 0) {
-          const rec = records[0];
-          setHistoryRecordId(rec.id);
-          if (rec.messages && Array.isArray(rec.messages) && rec.messages.length > 0) {
-            setMessages(rec.messages as Message[]);
-          }
+
+        if (requestId !== historyLoadRequestRef.current) return;
+
+        const sorted = [...records].sort((a, b) => {
+          const aTime = Date.parse(a.updatedAt ?? '') || 0;
+          const bTime = Date.parse(b.updatedAt ?? '') || 0;
+          return bTime - aTime;
+        });
+
+        knownHistoryIdsRef.current = new Set(sorted.map(record => record.id));
+        setHistoryList(sorted);
+      } catch (error) {
+        if (requestId === historyLoadRequestRef.current) {
+          console.error('Failed to load AI history:', error);
         }
-      } catch (e) {
-        console.error('Failed to load chat history from Supabase DB', e);
       } finally {
-        setIsDbLoaded(true);
+        if (requestId === historyLoadRequestRef.current) {
+          setIsDbLoaded(true);
+        }
       }
     };
-    loadHistory();
-  }, []);
+
+    void loadHistory();
+
+    return () => {
+      if (requestId === historyLoadRequestRef.current) {
+        historyLoadRequestRef.current++;
+      }
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isDbLoaded) return;
-    const saveHistory = async () => {
-      try {
-        const db = await initDB();
-        if (historyRecordId) {
-          await db.update('aiHistory', historyRecordId, { messages });
-        } else {
-          const newId = crypto.randomUUID();
-          await db.put('aiHistory', { id: newId, messages });
-          setHistoryRecordId(newId);
-        }
-      } catch (e) {
-        console.error('Failed to save chat history to Supabase DB', e);
+    if (messages.length === 0) return;
+
+    if (skipNextHistorySaveRef.current) {
+      skipNextHistorySaveRef.current = false;
+      return;
+    }
+
+    const recordId = historyRecordIdRef.current;
+
+    if (!recordId) {
+      console.warn('Skipping history save because there is no active history ID.');
+      return;
+    }
+
+    enqueueHistorySave(recordId, messages);
+  }, [messages, isDbLoaded]);
+
+  const handleSelectHistory = (id: string) => {
+    const record = historyList.find(item => item.id === id);
+    if (!record) return;
+    if (!Array.isArray(record.messages)) {
+      console.error('Invalid AI history messages:', record);
+      return;
+    }
+
+    let loadedMessages = record.messages as unknown as Message[];
+    if (loadedMessages[0]?.id === '1' && loadedMessages[0]?.sender === 'ai') {
+      loadedMessages = loadedMessages.slice(1);
+    }
+
+    setActiveHistoryId(id);
+    skipNextHistorySaveRef.current = true;
+    setMessages(loadedMessages);
+  };
+
+  const handleNewChat = () => {
+    setActiveHistoryId(null);
+    setMessages([]);
+    setInput('');
+  };
+
+  const handleDeleteHistory = async (id: string) => {
+    try {
+      const db = await initDB();
+      await db.delete('aiHistory', id);
+      setHistoryList(prev => prev.filter(item => item.id !== id));
+      
+      if (historyRecordId === id) {
+        handleNewChat();
       }
-    };
-    saveHistory();
-  }, [messages, isDbLoaded, historyRecordId]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [processingActionId, setProcessingActionId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+    } catch (error) {
+      console.error('Failed to delete history:', error);
+      alert('បរាជ័យក្នុងការលុបប្រវត្តិសន្ទនា');
+    }
+  };
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  const handleQuickAction = (text: string, sendImmediately: boolean = false) => {
+    setInput(text);
+    if (sendImmediately) {
+      handleSend(text);
+    }
+  };
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
-    
+  const handleSend = async (overrideInput?: string | React.MouseEvent) => {
+    const textToSend = typeof overrideInput === 'string' ? overrideInput : input;
+    if (!textToSend.trim()) return;
+
     if (!hasApiKey()) {
       alert('សូមបញ្ចូល Gemini API Key នៅក្នុងទំព័រ "ការកំណត់ (Settings)" ជាមុនសិន!');
       return;
     }
 
-    const userMsg: Message = { id: Date.now().toString(), sender: 'user', text: input };
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
+    ensureActiveHistoryId();
+
+    const userMessage: Message = {
+      id: crypto.randomUUID(),
+      sender: 'user',
+      text: textToSend.trim(),
+    };
+
+    setMessages(previous => [...previous, userMessage]);
+    if (typeof overrideInput !== 'string') setInput('');
     setLoading(true);
 
     try {
-      const history: { role: 'user' | 'model'; text: string }[] = messages.map(m => ({ 
-        role: m.sender === 'user' ? 'user' : 'model', 
-        text: m.text 
-      }));
-      
+      const history: { role: 'user' | 'model'; text: string }[] = messages.map(
+        message => ({
+          role: message.sender === 'user' ? 'user' : 'model',
+          text: message.text,
+        }),
+      );
+
       const context = {
         branch: branch || localStorage.getItem('userBranch') || 'BELTEI IS 1',
-        academicYear: activeYear || ''
+        academicYear: activeYear || '',
       };
 
-      const response = await generateAIResponse(history, userMsg.text, context);
-      
-      const aiMsg: Message = { 
-        id: crypto.randomUUID(), 
-        sender: 'ai', 
+      const response = await generateAIResponse(history, textToSend, context);
+
+      const aiMessage: Message = {
+        id: crypto.randomUUID(),
+        sender: 'ai',
         text: response.text || '',
-        pendingAction: response.pendingAction
+        pendingActions: response.pendingActions,
       };
-      
-      setMessages(prev => [...prev, aiMsg]);
+
+      setMessages(previous => [...previous, aiMessage]);
     } catch (error: unknown) {
       console.error('[AI Assistant] Request failed:', error);
       const message = error instanceof Error ? error.message : 'Unknown AI error';
       
-      let friendlyMessage = `❌ មានបញ្ហាបច្ចេកទេសបន្តិចបន្តួច៖\n${message}`;
-      
+      let friendlyMessage = `❌ មានបញ្ហាបច្ចេកទេសបន្តិចបន្តួច៖
+${message}`;
       if (message.includes('429') || message.toLowerCase().includes('quota') || message.includes('RESOURCE_EXHAUSTED')) {
-        friendlyMessage = `⚠️ **ប្រព័ន្ធ AI កំពុងរវល់ខ្លាំង (Limit Reached)**\nសូមមេត្តារង់ចាំប្រហែល ១ ទៅ ២ នាទី រួចសាកល្បងសួរម្តងទៀត។\n\n*(បញ្ជាក់៖ ដោយសារនេះជាគម្រោងសាកល្បងឥតគិតថ្លៃ (Free Tier) វាមានការកំណត់ចំនួនដងនៃការប្រើប្រាស់។ បើអ្នកឃើញសារនេះញឹកញាប់ សូមពិចារណាដូរ API Key ថ្មី។)*`;
+        friendlyMessage = `⚠️ **ធនធានរបស់ AI ឈានដល់កម្រិតកំណត់ (Limit Reached)**
+សូមរង់ចាំបន្តិចសិន ចាំសួរម្តងទៀត ព្រោះយើងកំពុងប្រើប្រាស់កញ្ចប់ឥតគិតថ្លៃ (Free Tier) ដែលមានការកំណត់ចំនួនសួរក្នុងមួយនាទី។ បើអ្នកចង់ប្រើប្រាស់ដោយគ្មានដែនកំណត់ សូមបញ្ចូល API Key ផ្ទាល់ខ្លួន!`;
       } else if (message.includes('API Key not found')) {
-        friendlyMessage = `🔑 **មិនទាន់មាន API Key**\nសូមចូលទៅកាន់ទំព័រការកំណត់ (Settings) ដើម្បីបញ្ចូល Gemini API Key ជាមុនសិន។`;
+        friendlyMessage = `🔑 **មិនទាន់មាន API Key**
+សូមចូលទៅកំណត់វានៅទំព័រ ការកំណត់ (Settings) ដោយបញ្ចូល Gemini API Key ជាមុនសិន!`;
       }
       
-      const errorMsg: Message = {
+      const errorMessage: Message = {
         id: crypto.randomUUID(),
         sender: 'ai',
-        text: friendlyMessage
+        text: friendlyMessage,
       };
-      setMessages(prev => [...prev, errorMsg]);
+
+      setMessages(previous => [...previous, errorMessage]);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleApproveAction = async (msgId: string, action: any) => {
-    if (processingActionId) return;
+const handleApproveAllActions = async (msgId: string, actions: any[]) => {
+    if (processingActionId === msgId) return;
     setProcessingActionId(msgId);
     
-    try {
-      const db = await initDB();
-      
-      switch (action.action) {
-        case 'ADD_STUDENT':
-          if (!action.data.studentId || !action.data.classId) {
-            throw new Error('ទិន្នន័យមិនពេញលេញ (Missing studentId or classId)');
-          }
-          const existing = await db.getAllFromIndex('students', 'studentId', action.data.studentId);
-          if (existing && existing.length > 0) {
-            throw new Error('លេខអត្តសញ្ញាណសិស្សនេះមានរួចហើយ (Student ID already exists)');
-          }
-          const newStudent = {
-            id: crypto.randomUUID(),
-            studentId: action.data.studentId,
-            name: action.data.name,
-            gender: action.data.gender,
-            class: action.data.classId,
-            shift: 'Morning', // Should ideally come from the class info
-            status: 'Active',
-            academicYear: action.data.academicYear || '2026-2027'
-          };
-          await db.put('students', newStudent);
-          break;
-          
-        case 'UPDATE_STUDENT':
-          const studentsToUpdate = await db.getAllFromIndex('students', 'studentId', action.data.studentId);
-          if (!studentsToUpdate || studentsToUpdate.length === 0) throw new Error('រកមិនឃើញសិស្សនេះទេ (Student not found)');
-          const studentToUpdate = studentsToUpdate[0];
-          await db.update('students', studentToUpdate.id, {
-            name: action.data.name || studentToUpdate.name,
-            gender: action.data.gender || studentToUpdate.gender,
-            class: action.data.classId || studentToUpdate.class,
-            status: action.data.status || studentToUpdate.status
-          });
-          break;
-          
-        case 'DELETE_STUDENT':
-          const studentsToDelete = await db.getAllFromIndex('students', 'studentId', action.data.studentId);
-          if (!studentsToDelete || studentsToDelete.length === 0) throw new Error('រកមិនឃើញសិស្សនេះទេ (Student not found)');
-          await db.delete('students', studentsToDelete[0].id);
-          break;
-          
-        case 'ADD_PC_ISSUE':
-          if (!action.data.pcNumber) throw new Error('បញ្ជាក់លេខកុំព្យូទ័រ (Missing PC Number)');
-          const newIssue = {
-            id: crypto.randomUUID(),
-            pcNumber: action.data.pcNumber,
-            description: action.data.description || '',
-            status: 'Pending',
-            reportedBy: action.data.reportedBy || 'AI Assistant',
-            reportedDate: new Date().toISOString(),
-            academicYear: action.data.academicYear || '2026-2027'
-          };
-          await db.put('pcIssues', newIssue);
-          break;
-          
-        case 'RESOLVE_PC_ISSUE':
-          if (!action.data.id) throw new Error('បញ្ជាក់លេខកូដបញ្ហា (Missing Issue ID)');
-          await db.update('pcIssues', action.data.id, {
-            status: 'Resolved',
-            resolution: action.data.resolution || 'Resolved by AI',
-            resolvedDate: new Date().toISOString()
-          });
-          break;
-          
-        case 'DELETE_CLASS':
-          if (!action.data.classId) throw new Error('បញ្ជាក់លេខកូដថ្នាក់ (Missing classId)');
-          const classRecs = await db.getAll('classes');
-          const classToDelete = classRecs.find(c => c.id === action.data.classId || c.name === action.data.classId);
-          if (!classToDelete) throw new Error('រកមិនឃើញថ្នាក់នេះទេ (Class not found)');
-          await db.delete('classes', classToDelete.id);
-          break;
-          
-        case 'ADD_CLASS':
-          if (!action.data.name || !action.data.shift) throw new Error('ទិន្នន័យមិនពេញលេញ (Missing class name or shift)');
-          const newClass = {
-            id: crypto.randomUUID(),
-            name: action.data.name,
-            shift: action.data.shift,
-            academicYear: activeYear || '2026-2027',
-            notes: action.data.notes || ''
-          };
-          await db.put('classes', newClass);
-          break;
+    let successCount = 0;
+    let failCount = 0;
+    let errors: string[] = [];
 
-        case 'UPDATE_CLASS':
-          if (!action.data.classId) throw new Error('បញ្ជាក់លេខកូដថ្នាក់ (Missing classId)');
-          const classesToUpdate = await db.getAll('classes');
-          const classToUpdate = classesToUpdate.find(c => c.id === action.data.classId || c.name === action.data.classId);
-          if (!classToUpdate) throw new Error('រកមិនឃើញថ្នាក់នេះទេ (Class not found)');
-          
-          await db.update('classes', classToUpdate.id, {
-            name: action.data.name || classToUpdate.name,
-            shift: action.data.shift || classToUpdate.shift,
-            notes: action.data.notes !== undefined ? action.data.notes : classToUpdate.notes
-          });
-          break;
-
-        default:
-          throw new Error(`មិនគាំទ្រសកម្មភាពប្រភេទនេះទេ (Unsupported action: ${action.action})`);
+    for (const action of actions) {
+      try {
+        await handleAction(action.action, action.data, activeYear || '2026-2027');
+        successCount++;
+      } catch (e: any) {
+        console.error(e);
+        failCount++;
+        errors.push(e.message || String(e));
       }
-      
-      // Update message to remove the pending action and add success text
-      setMessages(prev => prev.map(m => {
-        if (m.id === msgId) {
-          return { ...m, pendingAction: undefined, text: m.text + '\n\n✅ បានអនុម័ត និងរក្សាទុករួចរាល់!' };
-        }
-        return m;
-      }));
-      
-    } catch (e: any) {
-      console.error(e);
-      setMessages(prev => prev.map(m => {
-        if (m.id === msgId) {
-          return { ...m, pendingAction: undefined, text: m.text + '\n\n❌ បរាជ័យក្នុងការអនុម័ត៖ ' + e.message };
-        }
-        return m;
-      }));
-    } finally {
-      setProcessingActionId(null);
     }
-  };
 
-  const handleRejectAction = (msgId: string) => {
+    const statusMessage = `
+
+${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្រម និងអនុវត្តទិន្នន័យចំនួន ${successCount}/${actions.length} ដោយជោគជ័យ។${failCount > 0 ? ` បរាជ័យ ${failCount} ដោយសារ៖ ${errors.join(', ')}` : ''}`;
+
     setMessages(prev => prev.map(m => {
       if (m.id === msgId) {
-        return { ...m, pendingAction: undefined, text: m.text + '\n\n❌ ការស្នើសុំត្រូវបានបដិសេធ។' };
+        const { pendingActions, ...rest } = m;
+        return { ...rest, text: m.text + statusMessage };
+      }
+      return m;
+    }));
+
+    window.dispatchEvent(new CustomEvent('appDataChanged'));
+    setProcessingActionId(null);
+  };
+
+  const handleRejectAllActions = (msgId: string) => {
+    setMessages(prev => prev.map(m => {
+      if (m.id === msgId) {
+        const { pendingActions, ...rest } = m;
+        return { ...rest, text: m.text + '\\n\\n❌ អ្នកបានបដិសេធមិនអនុវត្តប្រតិបត្តិការនេះទេ។' };
       }
       return m;
     }));
@@ -331,6 +390,12 @@ const AIAssistant = () => {
               <div className="font-medium text-gray-800">{d.gender === 'F' ? 'ស្រី' : d.gender === 'M' ? 'ប្រុស' : d.gender}</div>
               <div className="text-gray-500 text-xs flex items-center">កូដថ្នាក់៖</div>
               <div className="font-mono text-xs text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded w-fit break-all">{d.classId}</div>
+              {d.shift && (
+                <>
+                  <div className="text-gray-500 text-xs flex items-center">វេន៖</div>
+                  <div className="font-medium text-gray-800">{d.shift}</div>
+                </>
+              )}
             </div>
           </div>
         );
@@ -346,7 +411,10 @@ const AIAssistant = () => {
               {d.name && <div className="flex justify-between"><span className="text-gray-500">ឈ្មោះថ្មី៖</span> <span className="font-medium text-orange-700">{d.name}</span></div>}
               {d.gender && <div className="flex justify-between"><span className="text-gray-500">ភេទថ្មី៖</span> <span className="font-medium">{d.gender}</span></div>}
               {d.classId && <div className="flex justify-between"><span className="text-gray-500">ថ្នាក់ថ្មី៖</span> <span className="font-medium">{d.classId}</span></div>}
+              {d.shift && <div className="flex justify-between"><span className="text-gray-500">វេនថ្មី៖</span> <span className="font-medium">{d.shift}</span></div>}
               {d.status && <div className="flex justify-between"><span className="text-gray-500">ស្ថានភាព៖</span> <span className="font-medium">{d.status}</span></div>}
+              {d.isShiftSwitching !== undefined && <div className="flex justify-between"><span className="text-gray-500">សិស្សប្តូរវេន៖</span> <span className="font-medium text-orange-600">{d.isShiftSwitching ? 'បាទ/ចាស' : 'ទេ'}</span></div>}
+              {d.alternateClassId && <div className="flex justify-between"><span className="text-gray-500">ថ្នាក់បម្រុង៖</span> <span className="font-medium">{d.alternateClassId}</span></div>}
             </div>
           </div>
         );
@@ -402,6 +470,46 @@ const AIAssistant = () => {
           </div>
         );
         
+      case 'ADD_LESSON_PLAN':
+        return (
+          <div className="bg-white border border-blue-200 rounded-md overflow-hidden mb-3 shadow-sm">
+            <div className="bg-blue-50 px-3 py-2 border-b border-blue-100 text-blue-700 font-bold flex items-center gap-2 text-sm">
+              <PlusCircle size={16} /> បន្ថែមផែនការបង្រៀនថ្មី
+            </div>
+            <div className="p-3 flex flex-col gap-1.5 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">ថ្នាក់៖</span> <span className="font-bold text-blue-700">{d.classId}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ខែ/សប្តាហ៍៖</span> <span className="font-medium">{d.month} - {d.week}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">មេរៀន៖</span> <span className="font-medium text-blue-700">{d.lessonTitle}</span></div>
+            </div>
+          </div>
+        );
+        
+      case 'UPDATE_LESSON_PLAN':
+        return (
+          <div className="bg-white border border-orange-200 rounded-md overflow-hidden mb-3 shadow-sm">
+            <div className="bg-orange-50 px-3 py-2 border-b border-orange-100 text-orange-700 font-bold flex items-center gap-2 text-sm">
+              <Edit size={16} /> កែប្រែផែនការបង្រៀន
+            </div>
+            <div className="p-3 flex flex-col gap-1.5 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">ID៖</span> <span className="font-mono text-xs truncate max-w-[150px]">{d.planId}</span></div>
+              {d.lessonTitle && <div className="flex justify-between"><span className="text-gray-500">មេរៀនថ្មី៖</span> <span className="font-medium">{d.lessonTitle}</span></div>}
+              {d.status && <div className="flex justify-between"><span className="text-gray-500">ស្ថានភាព៖</span> <span className="font-medium">{d.status}</span></div>}
+            </div>
+          </div>
+        );
+        
+      case 'DELETE_LESSON_PLAN':
+        return (
+          <div className="bg-white border border-red-200 rounded-md overflow-hidden mb-3 shadow-sm">
+            <div className="bg-red-50 px-3 py-2 border-b border-red-100 text-red-700 font-bold flex items-center gap-2 text-sm">
+              <Trash2 size={16} /> លុបផែនការបង្រៀន
+            </div>
+            <div className="p-3 text-center text-sm text-gray-700">
+              តើអ្នកពិតជាចង់លុបផែនការបង្រៀនលេខ <span className="font-mono text-xs text-red-600 truncate max-w-[150px] inline-block align-bottom">{d.planId}</span> មែនទេ?
+            </div>
+          </div>
+        );
+
       default:
         return (
           <div className="bg-white border border-gray-200 rounded-md overflow-hidden mb-3 shadow-sm text-sm">
@@ -425,103 +533,251 @@ const AIAssistant = () => {
     <>
       {/* Chat Window */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 z-50 bg-white rounded-lg shadow-2xl border border-gray-200 w-[95vw] md:w-[600px] lg:w-[800px] h-[85vh] max-h-[850px] flex flex-col mb-4 overflow-hidden animate-in slide-in-from-bottom-5">
-          {/* Header */}
-          <div className="bg-[#2a5298] text-white p-3 flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <Bot size={20} />
-              <span className="font-bold text-sm">ជំនួយការ AI</span>
-            </div>
-            <div className="flex items-center gap-1">
+        <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-2 md:p-6 lg:p-8 animate-in fade-in duration-200">
+          <div className={`w-full bg-white rounded-2xl shadow-2xl flex overflow-hidden animate-in zoom-in-95 duration-300 transition-all ${isFullscreen ? 'h-full max-w-none rounded-none' : 'max-w-6xl h-[90vh] max-h-[900px]'}`}>
+            
+            {/* Left Sidebar */}
+            <div className="hidden md:flex w-64 bg-[#f8f9fa] border-r border-gray-200 flex-col">
+              {/* Header */}
+              <div className="p-4 flex items-center gap-3 text-[#1a73e8] font-bold text-lg border-b border-gray-100">
+                <Bot size={24} /> ជំនួយការគ្រូ AI
+              </div>
+              
+              {/* New Chat Button */}
               <button 
-                onClick={() => {
-                  if (confirm('តើអ្នកពិតជាចង់លុបប្រវត្តិសារជជែកនេះមែនទេ?')) {
-                    setMessages([{ id: '1', sender: 'ai', text: 'សួស្តីលោកគ្រូ! តើមានអ្វីឲ្យខ្ញុំជួយថ្ងៃនេះ?' }]);
-                  }
-                }} 
-                className="hover:bg-white/20 p-1.5 rounded-full transition-colors flex items-center justify-center"
-                title="លុបប្រវត្តិ (Clear History)"
+                onClick={handleNewChat}
+                className="mx-4 mt-5 mb-3 bg-white hover:bg-gray-50 border border-gray-200 text-[#1a73e8] font-bold py-2.5 px-4 rounded-xl flex items-center gap-2 shadow-sm transition-all hover:shadow-md"
               >
-                <Trash2 size={16} />
+                <MessageSquare size={18} /> សំណួរថ្មី
               </button>
-              <button onClick={() => setIsOpen(false)} className="hover:bg-white/20 p-1.5 rounded-full transition-colors flex items-center justify-center">
-                <X size={18} />
-              </button>
-            </div>
-          </div>
-          
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-gray-50">
-            {messages.map(msg => (
-              <div key={msg.id} className={`flex gap-2 max-w-[85%] ${msg.sender === 'user' ? 'self-end flex-row-reverse' : 'self-start'}`}>
-                <div className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center ${msg.sender === 'user' ? 'bg-[#48b5c9] text-white' : 'bg-orange-100 text-orange-600'}`}>
-                  {msg.sender === 'user' ? <User size={16} /> : <Bot size={16} />}
-                </div>
-                <div className={`p-3 rounded-lg text-sm ${msg.sender === 'user' ? 'bg-[#48b5c9] text-white rounded-tr-none' : 'bg-white border border-gray-200 text-gray-800 rounded-tl-none shadow-sm'}`}>
-                  <p className="whitespace-pre-wrap">{msg.text}</p>
-                  
-                  {/* Approval Request Card */}
-                  {msg.pendingAction && (
-                    <div className="mt-3 bg-yellow-50 border border-yellow-200 p-3 rounded-md">
-                      <p className="font-bold text-xs text-yellow-800 uppercase mb-2">ទាមទារការអនុម័ត</p>
-                      
-                      {renderActionData(msg.pendingAction)}
+              
 
-                      <div className="flex gap-2">
+              {/* History */}
+              <div className="px-4 py-3 flex-1 overflow-y-auto">
+                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase tracking-wider">ប្រវត្តិខាងក្រោយ</h3>
+                <div className="flex flex-col gap-1 max-h-[200px] md:max-h-none overflow-y-auto pr-1 custom-scrollbar">
+                  {historyList.length === 0 ? (
+                    <div className="text-xs text-gray-400 p-2 text-center">មិនទាន់មានប្រវត្តិទេ</div>
+                  ) : (
+                    historyList.map(rec => (
+                      <div key={rec.id} className={`group w-full flex items-center justify-between rounded-lg transition-colors ${historyRecordId === rec.id ? 'bg-blue-50 text-[#1a73e8]' : 'text-gray-700 hover:bg-gray-100'}`}>
                         <button 
-                          className="flex-1 bg-green-500 hover:bg-green-600 text-white py-1.5 rounded-sm flex items-center justify-center gap-1 font-bold transition-colors disabled:opacity-50"
-                          onClick={() => handleApproveAction(msg.id, msg.pendingAction)}
-                          disabled={processingActionId === msg.id}
+                          onClick={() => handleSelectHistory(rec.id)}
+                          className="flex-1 text-left p-2.5 text-sm font-medium flex items-center gap-2 truncate"
                         >
-                          {processingActionId === msg.id ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 
-                          យល់ព្រម
+                          <MessageSquare size={14} className={`shrink-0 ${historyRecordId === rec.id ? "text-[#1a73e8]" : "text-gray-400"}`} /> 
+                          <span className="truncate">{rec.title || 'ការសន្ទនាថ្មី'}</span>
                         </button>
-                        <button 
-                          className="flex-1 bg-red-100 text-red-600 hover:bg-red-200 py-1.5 rounded-sm flex items-center justify-center gap-1 font-bold transition-colors disabled:opacity-50"
-                          onClick={() => handleRejectAction(msg.id)}
-                          disabled={!!processingActionId}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteHistory(rec.id); }}
+                          className={`p-2 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity focus:opacity-100 ${historyRecordId === rec.id ? "text-[#1a73e8]" : "text-gray-400"}`}
+                          title="លុប"
                         >
-                          <XCircle size={14} /> បដិសេធ
+                          <Trash2 size={14} />
                         </button>
                       </div>
-                    </div>
+                    ))
                   )}
                 </div>
               </div>
-            ))}
-            {loading && (
-              <div className="self-start flex gap-2">
-                 <div className="w-8 h-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center">
-                  <Bot size={16} />
+              
+              <div className="flex-1" />
+              
+              {/* Settings */}
+              <button className="p-4 border-t border-gray-200 text-sm font-bold text-gray-600 flex items-center gap-3 hover:bg-gray-100 w-full text-left transition-colors">
+                <Settings size={18} /> ការកំណត់
+              </button>
+            </div>
+            
+            {/* Main Content */}
+            <div className="flex-1 flex flex-col bg-white relative">
+              {/* Top Window Controls */}
+              <div className="h-14 flex items-center justify-between md:justify-end px-4 border-b border-gray-100 bg-white z-10 shrink-0">
+                <div className="md:hidden flex items-center gap-2 text-[#1a73e8] font-bold">
+                  <Bot size={20} /> AI
                 </div>
-                <div className="bg-white border border-gray-200 p-3 rounded-lg rounded-tl-none shadow-sm flex items-center gap-2">
-                  <Loader2 size={16} className="animate-spin text-gray-400" />
-                  <span className="text-xs text-gray-500">កំពុងគិត...</span>
+                <div className="flex items-center gap-2 text-gray-400">
+                  <button className="p-1.5 hover:bg-gray-100 rounded-md transition-colors" title="Pin window">
+                    <Pin size={16} />
+                  </button>
+                  <button onClick={() => setIsFullscreen(!isFullscreen)} className="hidden md:block p-1.5 hover:bg-gray-100 rounded-md transition-colors">
+                    {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                  <button onClick={() => setIsOpen(false)} className="p-1.5 hover:bg-red-50 hover:text-red-500 rounded-md transition-colors ml-1">
+                    <X size={20} />
+                  </button>
                 </div>
               </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-          
-          {/* Input */}
-          <div className="p-3 bg-white border-t border-gray-200">
-            <div className="flex items-center gap-2 relative">
-              <input 
-                type="text" 
-                className="flex-1 bg-gray-100 text-gray-900 border-none rounded-full pl-4 pr-10 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#48b5c9]/50 transition-all"
-                placeholder="សួរអ្វីមួយ..."
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                disabled={loading}
-              />
-              <button 
-                className="absolute right-1 w-8 h-8 flex items-center justify-center bg-[#48b5c9] hover:bg-[#3aa3b7] text-white rounded-full transition-colors disabled:opacity-50"
-                onClick={handleSend}
-                disabled={loading || !input.trim()}
-              >
-                <Send size={14} className="ml-0.5" />
-              </button>
+              
+              {/* Scrollable Chat Area */}
+              <div className="flex-1 overflow-y-auto p-4 md:p-8 flex flex-col">
+                
+                {messages.length === 0 ? (
+                  /* Welcome Screen (Empty State) */
+                  <div className="flex-1 flex flex-col justify-center items-center max-w-3xl mx-auto w-full py-10">
+                    <div className="bg-[#f0f4f9] rounded-3xl p-6 md:p-10 text-center w-full mb-10 shadow-sm border border-gray-100">
+                      <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-md mx-auto mb-6 text-[#1a73e8]">
+                        <Bot size={40} />
+                      </div>
+                      <h2 className="text-2xl md:text-3xl font-bold text-gray-800 mb-4 leading-tight">សួស្តី! ខ្ញុំជាជំនួយការគ្រូកុំព្យូទ័រ</h2>
+                      <p className="text-gray-600 text-lg">តើខ្ញុំអាចជួយអ្វីបានសម្រាប់អ្នកនៅថ្ងៃនេះ?</p>
+                    </div>
+                    
+
+                    {/* Suggested Prompts */}
+                    <div className="w-full">
+                      <h3 className="text-sm font-bold text-gray-500 mb-3 flex items-center gap-2">
+                        សំណួរណែនាំ <button className="hover:text-blue-500 transition-colors p-1"><RefreshCw size={14} /></button>
+                      </h3>
+                      <div className="space-y-2">
+                        <button onClick={() => handleQuickAction('តើយើងមានថ្នាក់រៀនសរុបចំនួនប៉ុន្មាន?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                          <Sparkles size={16} className="text-blue-500 shrink-0" />
+                          <span>តើយើងមានថ្នាក់រៀនសរុបចំនួនប៉ុន្មាន?</span>
+                          <ChevronRight size={16} className="text-gray-400 ml-auto" />
+                        </button>
+                        <button onClick={() => handleQuickAction('ជួយរាយការណ៍បញ្ហាកុំព្យូទ័រលេខ PC-10 ដែលខូច Mouse', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                          <Sparkles size={16} className="text-blue-500 shrink-0" />
+                          <span>ជួយរាយការណ៍បញ្ហាកុំព្យូទ័រលេខ PC-10 ដែលខូច Mouse</span>
+                          <ChevronRight size={16} className="text-gray-400 ml-auto" />
+                        </button>
+                        <button onClick={() => handleQuickAction('តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                          <Sparkles size={16} className="text-blue-500 shrink-0" />
+                          <span>តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?</span>
+                          <ChevronRight size={16} className="text-gray-400 ml-auto" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Chat Bubbles */
+                  <div className="flex flex-col gap-6 max-w-4xl mx-auto w-full pb-6">
+                    {messages.map((msg) => {
+                      const isUser = msg.sender === 'user';
+                      
+                      return (
+                        <div key={msg.id} className={`flex gap-3 max-w-[90%] md:max-w-[85%] ${isUser ? 'self-end flex-row-reverse' : 'self-start'}`}>
+                          <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex-shrink-0 flex items-center justify-center shadow-sm ${isUser ? 'bg-[#1a73e8] text-white' : 'bg-white border border-gray-200 text-[#1a73e8]'}`}>
+                            {isUser ? <User size={isUser ? 16 : 20} /> : <Bot size={20} />}
+                          </div>
+                          
+                          <div className={`flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
+                            <div className="text-xs text-gray-400 font-medium px-1 mb-0.5">
+                              {isUser ? 'អ្នក' : 'AI'}
+                            </div>
+                            <div className={`p-3.5 md:p-4 text-sm md:text-base ${isUser ? 'bg-[#1a73e8] text-white rounded-2xl rounded-tr-sm shadow-sm' : 'bg-[#f0f4f9] text-gray-800 rounded-2xl rounded-tl-sm'}`}>
+                              <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                              
+                              {/* Approval Request Cards (Multiple) */}
+                              {msg.pendingActions && msg.pendingActions.length > 0 && (
+                                <div className="mt-4 flex flex-col gap-3">
+                                  <div className="bg-yellow-50 px-4 py-2.5 border border-yellow-200 rounded-xl mb-1 shadow-sm">
+                                    <p className="font-bold text-xs text-yellow-800 uppercase flex items-center gap-1.5">
+                                      <AlertTriangle size={14} /> ទាមទារការអនុម័តចំនួន {msg.pendingActions.length} កំណត់ត្រា
+                                    </p>
+                                  </div>
+                                  
+                                  <div className="bg-white border border-gray-200 shadow-sm rounded-xl overflow-hidden">
+                                      <div className="p-4 flex flex-col gap-4">
+                                        <div className="max-h-[300px] overflow-y-auto pr-2 space-y-3">
+                                          {msg.pendingActions.map((action, idx) => (
+                                            <div key={idx} className="border-b border-gray-100 last:border-0 pb-3 last:pb-0">
+                                               {renderActionData(action)}
+                                            </div>
+                                          ))}
+                                        </div>
+
+                                        <div className="flex gap-2.5 mt-2 pt-3 border-t border-gray-100">
+                                          <button 
+                                            className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg flex items-center justify-center gap-2 font-bold transition-colors disabled:opacity-50 text-sm shadow-sm"
+                                            onClick={() => handleApproveAllActions(msg.id, msg.pendingActions!)}
+                                            disabled={processingActionId === msg.id}
+                                          >
+                                            {processingActionId === msg.id ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} 
+                                            យល់ព្រមទាំងអស់
+                                          </button>
+                                          <button 
+                                            className="flex-1 bg-white border border-gray-200 text-gray-700 hover:bg-red-50 hover:text-red-600 hover:border-red-200 py-2 rounded-lg flex items-center justify-center gap-2 font-bold transition-colors disabled:opacity-50 text-sm"
+                                            onClick={() => handleRejectAllActions(msg.id)}
+                                            disabled={!!processingActionId}
+                                          >
+                                            <XCircle size={16} /> បដិសេធទាំងអស់
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    
+                    {loading && (
+                      <div className="self-start flex gap-3 max-w-[90%] md:max-w-[85%]">
+                        <div className="w-8 h-8 md:w-10 md:h-10 rounded-full flex-shrink-0 bg-white border border-gray-200 text-[#1a73e8] flex items-center justify-center shadow-sm">
+                          <Bot size={20} />
+                        </div>
+                        <div className="flex flex-col gap-1 items-start">
+                          <div className="text-xs text-gray-400 font-medium px-1 mb-0.5">AI</div>
+                          <div className="bg-[#f0f4f9] p-4 rounded-2xl rounded-tl-sm flex items-center gap-3">
+                            <div className="flex gap-1.5">
+                              <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                              <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                              <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                            </div>
+                            <span className="text-sm font-medium text-gray-500">កំពុងគិត...</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <div ref={messagesEndRef} className="h-4" />
+                  </div>
+                )}
+              </div>
+              
+              {/* Input Area */}
+              <div className="p-4 md:p-6 bg-white border-t border-gray-50 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)] shrink-0 z-10">
+                <div className="max-w-4xl mx-auto w-full">
+                  <div className="bg-white border border-gray-200 shadow-sm hover:shadow-md hover:border-blue-300 transition-all rounded-2xl p-2 flex flex-col relative focus-within:shadow-md focus-within:border-blue-400">
+                    <textarea 
+                      className="w-full bg-transparent border-none outline-none resize-none px-4 py-3 text-gray-800 placeholder:text-gray-400 min-h-[60px] max-h-[200px] text-base"
+                      placeholder="សួរអ្វីមួយ..."
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSend();
+                        }
+                      }}
+                      disabled={loading}
+                      rows={1}
+                    />
+                    <div className="flex items-center justify-between px-2 pt-2 pb-1">
+                      <div className="flex items-center gap-1 text-gray-500">
+                        <button className="p-2 hover:bg-gray-100 rounded-full transition-colors" title="ភ្ចាប់ឯកសារ">
+                          <Paperclip size={18} />
+                        </button>
+                        <button className="p-2 hover:bg-gray-100 rounded-full transition-colors" title="មុខងារបន្ថែម">
+                          <LayoutGrid size={18} />
+                        </button>
+                        <button className="p-2 hover:bg-gray-100 rounded-full transition-colors" title="និយាយបញ្ចូលសំឡេង">
+                          <Mic size={18} />
+                        </button>
+                      </div>
+                      <button 
+                        className="w-10 h-10 flex items-center justify-center bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-full transition-colors shadow-sm disabled:opacity-50 disabled:bg-gray-300 disabled:text-gray-500"
+                        onClick={() => handleSend()}
+                        disabled={loading || !input.trim()}
+                      >
+                        <Send size={18} className="ml-0.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
             </div>
           </div>
         </div>
@@ -529,10 +785,10 @@ const AIAssistant = () => {
 
       {/* Topbar Button */}
       <button 
-        className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-sm border transition-all text-sm font-medium bg-white/10 hover:bg-white/20 text-white border-white/20 hover:border-white/40`}
+        className={`hidden md:flex items-center gap-2 px-4 py-1.5 rounded-full shadow-sm border transition-all text-sm font-bold bg-white text-[#2a5298] hover:bg-blue-50 border-white/20`}
         onClick={() => setIsOpen(true)}
       >
-        <Bot size={16} />
+        <Bot size={18} />
         <span>Gemini AI</span>
       </button>
     </>

@@ -46,13 +46,19 @@ const Students = () => {
     setShowModal(false);
     setActiveMenuId(null);
 
-    void fetchData(activeYear);
+    const load = () => {
+      if (activeYear) void fetchData(activeYear);
+    };
+    load();
+    
+    window.addEventListener('appDataChanged', load);
     
     // Click outside to close menu
     const handleClickOutside = () => setActiveMenuId(null);
     document.addEventListener('click', handleClickOutside);
     return () => {
       document.removeEventListener('click', handleClickOutside);
+      window.removeEventListener('appDataChanged', load);
     };
   }, [activeYear]);
 
@@ -64,8 +70,8 @@ const Students = () => {
     try {
       const db = await initDB();
       const [allStudents, allClasses] = await Promise.all([
-        db.getAll<Student>('students', targetYear),
-        db.getAll<ClassRecord>('classes', targetYear)
+        db.getAll('students', targetYear),
+        db.getAll('classes', targetYear)
       ]);
 
       if (requestId !== loadRequestRef.current) return;

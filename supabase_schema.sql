@@ -237,3 +237,20 @@ ALTER TABLE mini_apps ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow authenticated users full access to mini_apps" ON mini_apps;
 CREATE POLICY "Allow authenticated users full access to mini_apps" ON mini_apps FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
+
+ - -   1 1 .   C r e a t e   a i _ h i s t o r y   t a b l e 
+ C R E A T E   T A B L E   I F   N O T   E X I S T S   a i _ h i s t o r y   ( 
+     i d   U U I D   P R I M A R Y   K E Y , 
+     t i t l e   T E X T   N O T   N U L L , 
+     m e s s a g e s   J S O N B   N O T   N U L L , 
+     u p d a t e d _ a t   T I M E S T A M P   W I T H   T I M E   Z O N E   D E F A U L T   N O W ( ) , 
+     b r a n c h   T E X T   N O T   N U L L   D E F A U L T   ' B E L T E I   I S   1 ' , 
+     u s e r _ i d   U U I D   R E F E R E N C E S   a u t h . u s e r s ( i d )   O N   D E L E T E   C A S C A D E 
+ ) ; 
+ A L T E R   T A B L E   a i _ h i s t o r y   E N A B L E   R O W   L E V E L   S E C U R I T Y ; 
+ C R E A T E   P O L I C Y   " B r a n c h - s c o p e d   a c c e s s   t o   a i _ h i s t o r y "   O N   a i _ h i s t o r y 
+     F O R   A L L   T O   a u t h e n t i c a t e d 
+     U S I N G   ( b r a n c h   =   ( S E L E C T   b r a n c h   F R O M   p r o f i l e s   W H E R E   i d   =   a u t h . u i d ( ) ) ) 
+     W I T H   C H E C K   ( b r a n c h   =   ( S E L E C T   b r a n c h   F R O M   p r o f i l e s   W H E R E   i d   =   a u t h . u i d ( ) ) ) ; 
+  
+ 

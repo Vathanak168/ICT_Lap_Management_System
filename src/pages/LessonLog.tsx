@@ -37,8 +37,8 @@ const LessonLog = () => {
       const db = await initDB();
       // Concurrent fetching for performance
       const [allLogs, allClasses] = await Promise.all([
-        db.getAll<LogType>('lessonLogs', targetYear),
-        db.getAll<ClassRecord>('classes', targetYear)
+        db.getAll('lessonLogs', targetYear),
+        db.getAll('classes', targetYear)
       ]);
       
       if (requestId !== loadRequestRef.current) return;
@@ -63,6 +63,15 @@ const LessonLog = () => {
       setLogs([]);
       setClasses([]);
     }
+
+    const handleDataChange = () => {
+      if (activeYear) {
+        void loadData(activeYear);
+      }
+    };
+    
+    window.addEventListener('appDataChanged', handleDataChange);
+    return () => window.removeEventListener('appDataChanged', handleDataChange);
   }, [activeYear]);
 
   const validateForm = () => {

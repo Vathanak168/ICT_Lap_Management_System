@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Monitor, User, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle, Grid, RotateCw } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { Student, ClassRecord, PCIssue, SeatingPlan as SeatingPlanType, SettingRecord } from '../store/db';
+import type { Student, ClassRecord, PCIssue, SeatingPlan as SeatingPlanType } from '../store/db';
 
 type ExtendedSeatingPlan = SeatingPlanType & { deskRotations?: Record<string, number> };
 import { supabase } from '../lib/supabase';
@@ -68,7 +68,7 @@ const SeatingPlan = () => {
     const loadClasses = async () => {
       try {
         const db = await initDB();
-        const result = await db.getAll<ClassRecord>('classes', activeYear);
+        const result = await db.getAll('classes', activeYear);
 
         if (requestId !== loadClassRequestRef.current) return;
 
@@ -96,9 +96,9 @@ const SeatingPlan = () => {
       const db = await initDB();
 
       const [studentRows, issueRows, planRows] = await Promise.all([
-        db.getAllFromIndex<Student>('students', 'class', targetClass, targetYear),
-        db.getAll<PCIssue>('pcIssues', targetYear),
-        db.getAllFromIndex<SeatingPlanType>('seatingPlans', 'class_id', targetClass, targetYear)
+        db.getAllFromIndex('students', 'class', targetClass, targetYear),
+        db.getAll('pcIssues', targetYear),
+        db.getAllFromIndex('seatingPlans', 'class_id', targetClass, targetYear)
       ]);
 
       if (requestId !== loadDataRequestRef.current) return;
@@ -131,7 +131,7 @@ const SeatingPlan = () => {
       let deskRotations = {};
       if (plan) {
         try {
-          const rotationSetting = await db.get<SettingRecord>('settings', `rotations_${plan.id}`);
+          const rotationSetting = await db.get('settings', `rotations_${plan.id}`);
           if (rotationSetting && rotationSetting.config) {
             deskRotations = rotationSetting.config as Record<string, number>;
           }
@@ -476,13 +476,13 @@ const SeatingPlan = () => {
       const db = await initDB();
       const studentsToUpdate = [];
       
-      const sourceStudent = await db.get<Student>('students', sourceStudentId);
+      const sourceStudent = await db.get('students', sourceStudentId);
       if (sourceStudent) {
         studentsToUpdate.push({ ...sourceStudent, pcNumber: targetDesk.pcNumber });
       }
 
       if (targetStudentId) {
-        const targetStudent = await db.get<Student>('students', targetStudentId);
+        const targetStudent = await db.get('students', targetStudentId);
         if (targetStudent) {
           studentsToUpdate.push({ ...targetStudent, pcNumber: sourceDesk.pcNumber });
         }

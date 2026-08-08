@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Plus, Search, Edit2, Trash2, Users, BookOpen } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { ClassRecord, Student, AttendanceRecord, GradeRecord, SeatingPlan, LessonLog, LessonPlanTrack } from '../store/db';
+import type { ClassRecord } from '../store/db';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
@@ -31,7 +31,7 @@ const Classes = () => {
     
     try {
       const db = await initDB();
-      const allClasses = await db.getAll<ClassRecord>('classes', targetYear);
+      const allClasses = await db.getAll('classes', targetYear);
       
       if (requestId !== loadRequestRef.current) return;
       
@@ -88,7 +88,7 @@ const Classes = () => {
 
       // Ensure symmetrical links
       // 1. Fetch all classes in this year to see who currently links to us
-      const allClasses = await db.getAll<ClassRecord>('classes', targetYear);
+      const allClasses = await db.getAll('classes', targetYear);
       
       const updatePromises: Promise<void>[] = [];
       
@@ -152,13 +152,13 @@ const Classes = () => {
           allLessonPlans,
           allClasses
         ] = await Promise.all([
-          db.getAll<Student>('students', targetYear),
-          db.getAll<AttendanceRecord>('attendance', targetYear),
-          db.getAll<GradeRecord>('grades', targetYear),
-          db.getAll<SeatingPlan>('seatingPlans', targetYear),
-          db.getAll<LessonLog>('lessonLogs', targetYear),
-          db.getAll<LessonPlanTrack>('lessonPlans', targetYear),
-          db.getAll<ClassRecord>('classes', targetYear)
+          db.getAll('students', targetYear),
+          db.getAll('attendance', targetYear),
+          db.getAll('grades', targetYear),
+          db.getAll('seatingPlans', targetYear),
+          db.getAll('lessonLogs', targetYear),
+          db.getAll('lessonPlans', targetYear),
+          db.getAll('classes', targetYear)
         ]);
         
         // Filter those belonging to this class

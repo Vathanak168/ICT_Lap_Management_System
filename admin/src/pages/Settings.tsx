@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Settings as SettingsIcon, Save, User, Shield, Key } from 'lucide-react';
+import { Settings as SettingsIcon, Save, User, Shield, Key, Bot } from 'lucide-react';
 
 const Settings = () => {
   const [profile, setProfile] = useState<any>(null);
@@ -8,8 +8,14 @@ const Settings = () => {
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
   
+  // AI Keys State
+  const [geminiKeys, setGeminiKeys] = useState('');
+  const [groqKey, setGroqKey] = useState('');
+  const [savingAi, setSavingAi] = useState(false);
+  
   useEffect(() => {
     fetchProfile();
+    fetchAiSettings();
   }, []);
 
   const fetchProfile = async () => {
@@ -34,6 +40,30 @@ const Settings = () => {
       console.error('Error fetching profile:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAiSettings = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('settings')
+        .select('*')
+        .eq('id', 'ai_keys')
+        .single();
+        
+      if (error && error.code !== 'PGRST116') throw error;
+      
+      if (data?.config_json) {
+        const config = data.config_json as any;
+        if (config.geminiKeys && Array.isArray(config.geminiKeys)) {
+          setGeminiKeys(config.geminiKeys.join(', '));
+        }
+        if (config.groqKey) {
+          setGroqKey(config.groqKey);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching AI settings:', error);
     }
   };
 
@@ -62,6 +92,33 @@ const Settings = () => {
       alert('មានបញ្ហាក្នុងការរក្សាទុក។');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveAiKeys = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setSavingAi(true);
+      
+      const config = {
+        geminiKeys: geminiKeys.split(',').map(k => k.trim()).filter(k => k),
+        groqKey: groqKey.trim()
+      };
+
+      const { error } = await supabase
+        .from('settings')
+        .upsert({
+          id: 'ai_keys',
+          config_json: config
+        });
+
+      if (error) throw error;
+      alert('រក្សាទុក AI API Keys ជោគជ័យ។ AI នឹងប្រើប្រាស់ Keys ទាំងនេះសម្រាប់ប្រព័ន្ធទាំងមូល។');
+    } catch (error) {
+      console.error('Error saving AI settings:', error);
+      alert('មានបញ្ហាក្នុងការរក្សាទុក AI Settings។ សូមប្រាកដថាអ្នកមានសិទ្ធិជា Admin។');
+    } finally {
+      setSavingAi(false);
     }
   };
 
@@ -126,7 +183,7 @@ const Settings = () => {
               </form>
             )}
           </div>
-          
+
           <div className="card p-6 border-red-200">
             <h3 className="text-lg font-bold text-red-600 mb-4 flex items-center gap-2 border-b border-red-100 pb-3">
               <Key size={20} />
@@ -138,6 +195,52 @@ const Settings = () => {
             <button className="btn-danger w-full sm:w-auto">
               ផ្លាស់ប្តូរពាក្យសម្ងាត់
             </button>
+          </div>
+
+          <div className="card p-6 border-indigo-200">
+            <h3 className="text-lg font-bold text-indigo-700 mb-4 flex items-center gap-2 border-b border-indigo-100 pb-3">
+              <Bot size={20} />
+              កំណត់រចនាសម្ព័ន្ធ AI (System-wide AI)
+            </h3>
+            <p className="text-slate-600 font-khmer text-sm mb-4 leading-relaxed">
+              Keys ដែលដាក់បញ្ចូលនៅទីនេះ នឹងត្រូវបានអនុញ្ញាតឱ្យប្រើប្រាស់ដោយគ្រប់អ្នកប្រើប្រាស់ (Users) ទាំងអស់នៅក្នុងប្រព័ន្ធ។
+            </p>
+            
+            <form onSubmit={handleSaveAiKeys} className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Gemini API Keys (ខណ្ឌដោយសញ្ញាក្បៀស)</label>
+                <textarea
+                  className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-mono text-sm text-slate-700 h-24"
+                  value={geminiKeys}
+                  onChange={(e) => setGeminiKeys(e.target.value)}
+                  placeholder="AIzaSy..., AIzaSy..., AIzaSy..."
+                />
+                <p className="text-xs text-slate-500 mt-1">អ្នកអាចដាក់បញ្ជូល Keys ច្រើនបាន ដើម្បីឲ្យប្រព័ន្ធផ្លាស់ប្តូរស្វ័យប្រវត្តិពេលមាន Key ណាមួយពេញ Limit។</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Groq API Key (Fallback)</label>
+                <input
+                  type="text"
+                  className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-mono text-sm text-slate-700"
+                  value={groqKey}
+                  onChange={(e) => setGroqKey(e.target.value)}
+                  placeholder="gsk_..."
+                />
+                <p className="text-xs text-slate-500 mt-1">ប្រសិនបើ Gemini គាំងទាំងអស់ ប្រព័ន្ធនឹងប្តូរទៅប្រើ Groq ស្វ័យប្រវត្តិ។</p>
+              </div>
+              
+              <div className="pt-2 flex justify-end">
+                <button 
+                  type="submit" 
+                  disabled={savingAi}
+                  className="btn-primary flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700"
+                >
+                  <Save size={18} />
+                  {savingAi ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក AI Keys'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       </div>

@@ -34,6 +34,16 @@ const ShiftSwitching = () => {
     }
   }, [activeYear]);
 
+  useEffect(() => {
+    const handleDataChange = () => {
+      if (activeYear) {
+        loadData(activeYear);
+      }
+    };
+    window.addEventListener('appDataChanged', handleDataChange);
+    return () => window.removeEventListener('appDataChanged', handleDataChange);
+  }, [activeYear]);
+
   const loadData = async (targetYear: string) => {
     if (!targetYear) return;
     
@@ -43,8 +53,8 @@ const ShiftSwitching = () => {
     try {
       const db = await initDB();
       const [allStudents, allClasses] = await Promise.all([
-        db.getAll<Student>('students', targetYear),
-        db.getAll<ClassRecord>('classes', targetYear)
+        db.getAll('students', targetYear),
+        db.getAll('classes', targetYear)
       ]);
       
       if (requestId !== loadRequestRef.current) return;

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Save, Download, Upload, Lock, Unlock, Edit, X, Globe, Languages } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { Student, ClassRecord, GradeRecord, SettingRecord } from '../store/db';
+import type { Student, ClassRecord, GradeRecord } from '../store/db';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Settings } from 'lucide-react';
@@ -127,7 +127,7 @@ const Gradebook = () => {
     const loadClasses = async () => {
       try {
         const db = await initDB();
-        const allClasses = await db.getAll<ClassRecord>('classes', activeYear);
+        const allClasses = await db.getAll('classes', activeYear);
         
         if (requestId !== loadClassRequestRef.current) return;
         
@@ -155,7 +155,7 @@ const Gradebook = () => {
     const loadConfig = async () => {
       try {
         const db = await initDB();
-        const setting = await db.get<SettingRecord>('settings', 'gradeConfig');
+        const setting = await db.get('settings', 'gradeConfig');
         if (setting?.config) {
            setGradeConfig(setting.config as any);
            setTempConfig(setting.config as any);
@@ -179,7 +179,7 @@ const Gradebook = () => {
     const loadData = async () => {
       try {
         const db = await initDB();
-        const allClasses = await db.getAll<ClassRecord>('classes', activeYear);
+        const allClasses = await db.getAll('classes', activeYear);
         const targetClass = selectedClass;
         const currentClassObj = allClasses.find(c => c.id === targetClass);
         
@@ -190,13 +190,13 @@ const Gradebook = () => {
 
         // Load students concurrently. FIXED: use 'class' index instead of 'class_id' for students table
         const studentGroups = await Promise.all(
-          classesToFetch.map(cid => db.getAllFromIndex<Student>('students', 'class', cid, activeYear))
+          classesToFetch.map(cid => db.getAllFromIndex('students', 'class', cid, activeYear))
         );
         const studentsToFetch = studentGroups.flat().filter(s => s.status === 'Active');
 
         // Load grades concurrently
         const gradeRecords = await Promise.all(
-          classesToFetch.map(cid => db.getAllFromIndex<GradeRecord>('grades', 'class_id', cid, activeYear))
+          classesToFetch.map(cid => db.getAllFromIndex('grades', 'class_id', cid, activeYear))
         );
         const allGrades = gradeRecords.flat().filter(g => g.month === currentMonth && g.type === currentGradeType);
 
@@ -328,7 +328,7 @@ const Gradebook = () => {
       // Fetch the latest grades from the database to perform a client-side JSON merge
       const latestGrades = await Promise.all(
         classIdsToSave.map(cid => 
-          db.get<GradeRecord>('grades', `${targetYear}-${cid}-${currentMonth}-${currentGradeType}`)
+          db.get('grades', `${targetYear}-${cid}-${currentMonth}-${currentGradeType}`)
         )
       );
 

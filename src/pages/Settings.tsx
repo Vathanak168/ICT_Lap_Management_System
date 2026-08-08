@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { DownloadCloud, UploadCloud, Trash2, ShieldAlert, FileSpreadsheet } from 'lucide-react';
 import { exportDatabase, importDatabase, clearDatabase } from '../utils/backup';
 import { initDB } from '../store/db';
-import type { Student } from '../store/db';
+
 import { exportToExcel } from '../utils/excel';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
@@ -121,7 +121,7 @@ const Settings = () => {
     
     try {
       const db = await initDB();
-      const students = await db.getAll<Student>('students', activeYear);
+      const students = await db.getAll('students', activeYear);
       
       const formattedData = students.map((s, i) => {
         let statusDisplay = 'អសកម្ម';
