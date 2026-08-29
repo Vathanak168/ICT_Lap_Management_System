@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useOutletContext } from 'react-router-dom';
-import { BookOpen, Search, BookMarked, Calendar, CheckSquare, Award, Trash2 } from 'lucide-react';
+import { BookOpen, BookMarked, Calendar, CheckSquare, Award, Trash2 } from 'lucide-react';
 
 const Academic = () => {
   const { selectedBranch } = useOutletContext<{ selectedBranch: string }>();

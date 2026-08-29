@@ -9,13 +9,19 @@ export const handleClassAction = async (action: string, data: any, activeYear: s
     const classToDelete = classRecs.find((c: any) => c.id === data.classId || c.name === data.classId);
     if (!classToDelete) throw new Error('រកមិនឃើញថ្នាក់នេះទេ (Class not found)');
     
-    // Cascade delete students in this class
-    const studentsInClass = await db.getAllFromIndex('students', 'class', classToDelete.name);
-    if (studentsInClass && studentsInClass.length > 0) {
-      for (const student of studentsInClass) {
-        await db.delete('students', student.id);
-      }
-    }
+    const [students, attendance, grades, seatingPlans, lessonLogs] = await Promise.all([
+      db.getAllFromIndex('students', 'class', classToDelete.id),
+      db.getAllFromIndex('attendance', 'classId', classToDelete.id),
+      db.getAllFromIndex('grades', 'classId', classToDelete.id),
+      db.getAllFromIndex('seatingPlans', 'classId', classToDelete.id),
+      db.getAllFromIndex('lessonLogs', 'classId', classToDelete.id)
+    ]);
+
+    for (const item of students || []) await db.delete('students', item.id);
+    for (const item of attendance || []) await db.delete('attendance', item.id);
+    for (const item of grades || []) await db.delete('grades', item.id);
+    for (const item of seatingPlans || []) await db.delete('seatingPlans', item.id);
+    for (const item of lessonLogs || []) await db.delete('lessonLogs', item.id);
     
     await db.delete('classes', classToDelete.id);
     return true;
@@ -41,7 +47,6 @@ export const handleClassAction = async (action: string, data: any, activeYear: s
     if (!classToUpdate) throw new Error('រកមិនឃើញថ្នាក់នេះទេ (Class not found)');
     
     const newName = data.name || classToUpdate.name;
-    const oldName = classToUpdate.name;
     const newShift = data.shift || classToUpdate.shift;
 
     await db.update('classes', classToUpdate.id, {
@@ -50,17 +55,20 @@ export const handleClassAction = async (action: string, data: any, activeYear: s
       notes: data.notes !== undefined ? data.notes : classToUpdate.notes
     });
 
-    if (newName !== oldName || newShift !== classToUpdate.shift) {
-      // Update all students associated with this class
-      const studentsInClass = await db.getAllFromIndex('students', 'class', oldName);
-      if (studentsInClass && studentsInClass.length > 0) {
-        for (const student of studentsInClass) {
-          const updateData: any = {};
-          if (newName !== oldName) updateData.class = newName;
-          if (newShift !== classToUpdate.shift) updateData.shift = newShift;
-          await db.update('students', student.id, updateData);
-        }
-      }
+    if (newShift !== classToUpdate.shift) {
+      const [students, attendance, grades, seatingPlans, lessonLogs] = await Promise.all([
+        db.getAllFromIndex('students', 'class', classToUpdate.id),
+        db.getAllFromIndex('attendance', 'classId', classToUpdate.id),
+        db.getAllFromIndex('grades', 'classId', classToUpdate.id),
+        db.getAllFromIndex('seatingPlans', 'classId', classToUpdate.id),
+        db.getAllFromIndex('lessonLogs', 'classId', classToUpdate.id)
+      ]);
+
+      for (const item of students || []) await db.update('students', item.id, { shift: newShift });
+      for (const item of attendance || []) await db.update('attendance', item.id, { shift: newShift });
+      for (const item of grades || []) await db.update('grades', item.id, { shift: newShift });
+      for (const item of seatingPlans || []) await db.update('seatingPlans', item.id, { shift: newShift });
+      for (const item of lessonLogs || []) await db.update('lessonLogs', item.id, { shift: newShift });
     }
 
     return true;

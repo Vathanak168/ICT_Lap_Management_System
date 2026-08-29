@@ -16,7 +16,7 @@ const Classes = () => {
   const [isLoading, setIsLoading] = useState(false);
   
   const [currentClass, setCurrentClass] = useState<Partial<ClassRecord>>({
-    name: '', shift: 'Morning', academicYear: activeYear || '2026-2027', notes: '', linkedClassIds: []
+    name: '', shift: 'Morning', academicYear: activeYear || '', notes: '', linkedClassIds: []
   });
   
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -57,7 +57,18 @@ const Classes = () => {
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
-    if (!currentClass.name) newErrors.name = 'សូមបញ្ចូលឈ្មោះថ្នាក់';
+    if (!currentClass.name) {
+      newErrors.name = 'សូមបញ្ចូលឈ្មោះថ្នាក់';
+    } else {
+      const duplicate = classes.find(c => 
+        c.id !== currentClass.id && 
+        c.name === currentClass.name && 
+        c.shift === currentClass.shift
+      );
+      if (duplicate) {
+        newErrors.name = `ថ្នាក់ "${currentClass.name}" វេន${currentClass.shift === 'Morning' ? 'ព្រឹក' : currentClass.shift === 'Afternoon' ? 'រសៀល' : 'យប់'} មានរួចហើយ`;
+      }
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -76,7 +87,7 @@ const Classes = () => {
     try {
       const db = await initDB();
       
-      const id = currentClass.id || `${targetYear}_${currentClass.name}_${currentClass.shift}`;
+      const id = currentClass.id || crypto.randomUUID();
       const newClass: ClassRecord = {
         id,
         name: currentClass.name!,
@@ -119,6 +130,39 @@ const Classes = () => {
 
       // Save our class
       updatePromises.push(db.put('classes', newClass));
+
+      if (currentClass.id) {
+        // If editing existing class, check if shift changed
+        const oldClass = classes.find(c => c.id === currentClass.id);
+        if (oldClass && oldClass.shift !== newClass.shift) {
+          const classStudents = await db.getAll('students', targetYear);
+          const affectedStudents = classStudents.filter(s => s.class === currentClass.id);
+          for (const student of affectedStudents) {
+            updatePromises.push(db.update('students', student.id, { shift: newClass.shift }));
+          }
+
+          // Sync shift to other tables that store it
+          const [allAttendance, allGrades, allSeating, allLogs] = await Promise.all([
+            db.getAll('attendance', targetYear),
+            db.getAll('grades', targetYear),
+            db.getAll('seatingPlans', targetYear),
+            db.getAll('lessonLogs', targetYear)
+          ]);
+
+          allAttendance.filter(a => a.classId === currentClass.id).forEach(a => {
+            updatePromises.push(db.update('attendance', a.id, { shift: newClass.shift }));
+          });
+          allGrades.filter(g => g.classId === currentClass.id).forEach(g => {
+            updatePromises.push(db.update('grades', g.id, { shift: newClass.shift }));
+          });
+          allSeating.filter(s => s.classId === currentClass.id).forEach(s => {
+            updatePromises.push(db.update('seatingPlans', s.id, { shift: newClass.shift }));
+          });
+          allLogs.filter(l => l.classId === currentClass.id || l.class === currentClass.id).forEach(l => {
+            updatePromises.push(db.update('lessonLogs', l.id, { shift: newClass.shift }));
+          });
+        }
+      }
 
       // Execute all updates concurrently
       await Promise.all(updatePromises);
@@ -213,7 +257,7 @@ const Classes = () => {
   
   const openAddModal = () => {
     setErrors({});
-    setCurrentClass({ name: '', shift: 'Morning', academicYear: activeYear || '2026-2027', notes: '', linkedClassIds: [] });
+    setCurrentClass({ name: '', shift: 'Morning', academicYear: activeYear || '', notes: '', linkedClassIds: [] });
     setShowModal(true);
   };
 

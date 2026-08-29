@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { initDB } from '../store/db';
 
 interface AcademicYear {
   id: string;
@@ -11,8 +12,9 @@ interface AcademicYearContextType {
   activeYear: string | null;
   academicYears: AcademicYear[];
   isLoading: boolean;
-  changeYear: (year: string) => void;
+  changeYear: (year: string, skipValidation?: boolean) => void;
   createYear: (year: string) => Promise<boolean>;
+  deleteYear: (year: string) => Promise<boolean>;
   refreshYears: () => Promise<void>;
 }
 
@@ -113,14 +115,62 @@ export const AcademicYearProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   }, [academicYears, fetchYears, changeYear]);
 
+  const deleteYear = useCallback(async (yearToDelete: string) => {
+    try {
+      const exists = academicYears.some(y => y.year === yearToDelete);
+      if (!exists) return false;
+
+      // Manual cascade delete for all records in this academic year across all stores
+      const db = await initDB();
+      const stores = [
+        'students',
+        'attendance',
+        'grades',
+        'seatingPlans',
+        'lessonLogs',
+        'lessonPlans',
+        'classes' // Delete classes last
+      ] as const;
+
+      const deletePromises: Promise<void>[] = [];
+      
+      for (const store of stores) {
+        // Fetch all items for this year in the store
+        // DB uses the academicYear parameter directly
+        const items = await db.getAll(store as any, yearToDelete);
+        const ids = items.map(item => item.id);
+        if (ids.length > 0) {
+          deletePromises.push(db.deleteMany(store as any, ids));
+        }
+      }
+
+      await Promise.all(deletePromises);
+
+      // Now it is safe to delete the year itself from academic_years
+      const { error } = await supabase
+        .from('academic_years')
+        .delete()
+        .eq('year', yearToDelete);
+
+      if (error) throw error;
+      
+      await fetchYears();
+      return true;
+    } catch (error) {
+      console.error('Error deleting academic year:', error);
+      return false;
+    }
+  }, [academicYears, fetchYears]);
+
   const contextValue = useMemo(() => ({
     activeYear,
     academicYears,
     isLoading,
     changeYear,
     createYear,
+    deleteYear,
     refreshYears: fetchYears
-  }), [activeYear, academicYears, isLoading, changeYear, createYear, fetchYears]);
+  }), [activeYear, academicYears, isLoading, changeYear, createYear, deleteYear, fetchYears]);
 
   return (
     <AcademicYearContext.Provider value={contextValue}>

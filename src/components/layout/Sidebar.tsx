@@ -11,7 +11,8 @@ import {
   ShieldAlert,
   ArrowLeftRight,
   User,
-  AppWindow
+  AppWindow,
+  DownloadCloud
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -29,6 +30,7 @@ const Sidebar = () => {
     { name: 'កាលវិភាគមេរៀន', path: '/lesson-plan', icon: <BookOpen size={20} /> },
     { name: 'កំណត់ហេតុ', path: '/lesson-log', icon: <BookOpen size={20} /> },
     { name: 'បញ្ហាកុំព្យូទ័រ', path: '/issues', icon: <Wrench size={20} /> },
+    { name: 'PC Sync', path: '/pc-sync', icon: <DownloadCloud size={20} /> },
     { name: 'Mini App', path: '/miniapps', icon: <AppWindow size={20} /> },
   ];
 

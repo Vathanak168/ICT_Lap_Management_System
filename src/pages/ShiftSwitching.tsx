@@ -37,7 +37,7 @@ const ShiftSwitching = () => {
   useEffect(() => {
     const handleDataChange = () => {
       if (activeYear) {
-        loadData(activeYear);
+        void loadData(activeYear);
       }
     };
     window.addEventListener('appDataChanged', handleDataChange);

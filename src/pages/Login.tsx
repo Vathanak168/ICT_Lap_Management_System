@@ -44,6 +44,8 @@ const Login: React.FC = () => {
       const isEmail = emailToLogin.includes('@');
 
       if (!isEmail) {
+        // NOTE: Login-by-name inherently has some user enumeration risk.
+        // Using generic error messages to minimize information leakage.
         const { data: matches, error: lookupError } = await supabase
           .from('profiles')
           .select('email, name')
@@ -52,7 +54,7 @@ const Login: React.FC = () => {
         if (lookupError) throw lookupError;
 
         if (!matches || matches.length === 0) {
-          throw new Error('មិនមានឈ្មោះនេះក្នុងប្រព័ន្ធទេ សូមពិនិត្យម្តងទៀត។');
+          throw new Error('ឈ្មោះ ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ។ សូមពិនិត្យម្តងទៀត។');
         }
 
         if (matches.length > 1) {

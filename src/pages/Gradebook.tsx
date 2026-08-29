@@ -202,7 +202,7 @@ const Gradebook = () => {
 
         if (requestId !== loadDataRequestRef.current) return;
 
-        // Build a lookup dictionary for fast access
+        // Build a lookup dictionary for fast access — preserve first-seen values per student
         const scoresLookup: Record<string, {
           practice?: number | null;
           book?: number | null;
@@ -211,7 +211,11 @@ const Gradebook = () => {
           adjustmentNote?: string;
         }> = {};
         allGrades.forEach(g => {
-          Object.assign(scoresLookup, g.scores);
+          for (const [studentId, scores] of Object.entries(g.scores || {})) {
+            if (!scoresLookup[studentId]) {
+              scoresLookup[studentId] = scores as any;
+            }
+          }
         });
 
         const rows: StudentRow[] = studentsToFetch.map((s) => {
@@ -233,7 +237,7 @@ const Gradebook = () => {
               adjustmentNote,
               pointsBalance: s.pointsBalance || 0,
               originalPointsBalance: s.pointsBalance || 0,
-              effectiveBank: (s.pointsBalance || 0) + (adjustment || 0),
+              effectiveBank: s.pointsBalance || 0,
               total: 0,
               rank: 0
             };

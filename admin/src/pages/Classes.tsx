@@ -104,22 +104,27 @@ const Classes = () => {
         if (error) throw error;
         setClasses(classes.map(c => c.id === editingClass.id ? { ...c, ...formData } : c));
 
-        if (formData.name !== editingClass.name || formData.shift !== editingClass.shift) {
-          const updates: any = {};
-          if (formData.name !== editingClass.name) updates.class = formData.name;
-          if (formData.shift !== editingClass.shift) updates.shift = formData.shift;
+        if (formData.shift !== editingClass.shift) {
+          const updates = { shift: formData.shift };
           
           await supabase
             .from('students')
             .update(updates)
-            .eq('class', editingClass.name)
+            .eq('class', editingClass.id)
             .eq('academic_year', formData.academic_year);
+            
+          await Promise.all([
+            supabase.from('attendance').update(updates).eq('class_id', editingClass.id),
+            supabase.from('grades').update(updates).eq('class_id', editingClass.id),
+            supabase.from('seating_plans').update(updates).eq('class_id', editingClass.id),
+            supabase.from('lesson_logs').update(updates).eq('class_id', editingClass.id)
+          ]);
         }
       } else {
         // If it's new, check if ID needs generating
         let finalId = formData.id;
         if (!finalId) {
-           finalId = `${formData.name}_${formData.shift}`;
+           finalId = crypto.randomUUID();
         }
         
         const newClass = { ...formData, id: finalId };
@@ -144,10 +149,17 @@ const Classes = () => {
     if (!window.confirm(`តើអ្នកពិតជាចង់លុបថ្នាក់ "${name}" មែនទេ?`)) return;
     
     try {
-      // 1. Delete associated students first
-      const { error: studentError } = await supabase.from('students').delete().eq('class', name);
-      if (studentError) {
-        console.error('Failed to cascade delete students:', studentError);
+      const [studentRes] = await Promise.all([
+        supabase.from('students').delete().eq('class', id),
+        supabase.from('attendance').delete().eq('class_id', id),
+        supabase.from('grades').delete().eq('class_id', id),
+        supabase.from('seating_plans').delete().eq('class_id', id),
+        supabase.from('lesson_logs').delete().eq('class_id', id),
+        supabase.from('lesson_plans').delete().eq('class_id', id) // Also clean up lesson plans linked to class
+      ]);
+      
+      if (studentRes.error) {
+        console.error('Failed to cascade delete students:', studentRes.error);
         // Continue to delete the class anyway, or throw?
         // Let's not throw, but log it.
       }

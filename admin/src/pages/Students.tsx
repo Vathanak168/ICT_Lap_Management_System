@@ -19,6 +19,7 @@ interface Student {
 const Students = () => {
   const { selectedBranch, selectedYear } = useOutletContext<{ selectedBranch: string, selectedYear: string }>();
   const [students, setStudents] = useState<Student[]>([]);
+  const [classesList, setClassesList] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [filterClass, setFilterClass] = useState('All');
@@ -61,10 +62,17 @@ const Students = () => {
         query = query.eq('academic_year', selectedYear);
       }
 
-      const { data, error } = await query;
+      let classQuery = supabase.from('classes').select('*');
+      if (selectedBranch !== 'All') classQuery = classQuery.eq('branch', selectedBranch);
+      if (selectedYear !== 'All') classQuery = classQuery.eq('academic_year', selectedYear);
 
-      if (error) throw error;
-      setStudents(data || []);
+      const [studentsRes, classesRes] = await Promise.all([query, classQuery]);
+
+      if (studentsRes.error) throw studentsRes.error;
+      if (classesRes.error) throw classesRes.error;
+      
+      setStudents(studentsRes.data || []);
+      setClassesList(classesRes.data || []);
     } catch (error) {
       console.error('Error fetching students:', error);
     } finally {
@@ -138,6 +146,27 @@ const Students = () => {
     if (!window.confirm(`តើអ្នកពិតជាចង់លុបសិស្ស "${name}" មែនទេ?`)) return;
     
     try {
+      const studentToDelete = students.find(s => s.id === id);
+      if (studentToDelete && studentToDelete.pc_number) {
+        try {
+          const newTask = {
+            id: crypto.randomUUID(),
+            pc_number: studentToDelete.pc_number,
+            student_id: studentToDelete.student_id,
+            student_name: studentToDelete.name,
+            action: 'REMOVE',
+            password: null,
+            status: 'PENDING',
+            created_at: new Date().toISOString(),
+            branch: studentToDelete.branch || '',
+            academic_year: studentToDelete.academic_year || ''
+          };
+          await supabase.from('pc_sync_tasks').insert([newTask]);
+        } catch (err) {
+          console.error('Failed to create pc sync task in admin', err);
+        }
+      }
+      
       const { error } = await supabase.from('students').delete().eq('id', id);
       if (error) throw error;
       
@@ -205,7 +234,7 @@ const Students = () => {
             >
               <option value="All">គ្រប់ថ្នាក់ទាំងអស់</option>
               {uniqueClasses.map(c => (
-                <option key={c} value={c}>ថ្នាក់ {c}</option>
+                <option key={c} value={c}>ថ្នាក់ {classesList.find(cl => cl.id === c)?.name || c}</option>
               ))}
             </select>
             <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none">
@@ -268,7 +297,9 @@ const Students = () => {
                       </td>
                       <td className="px-6 py-4 text-slate-700 font-khmer">{s.gender === 'M' ? 'ប្រុស' : 'ស្រី'}</td>
                       <td className="px-6 py-4">
-                        <p className="font-medium text-slate-800 font-khmer">{s.class}</p>
+                        <p className="font-medium text-slate-800 font-khmer">
+                          {classesList.find(c => c.id === s.class)?.name || s.class}
+                        </p>
                         <p className="text-xs text-slate-500 font-khmer">{s.shift}</p>
                       </td>
                       <td className="px-6 py-4">
@@ -373,13 +404,25 @@ const Students = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5 font-khmer">ថ្នាក់រៀន</label>
-                  <input
-                    type="text"
+                  <select
                     value={formData.class}
-                    onChange={(e) => setFormData({...formData, class: e.target.value})}
+                    onChange={(e) => {
+                      const newClassId = e.target.value;
+                      const matchedClass = classesList.find(c => c.id === newClassId);
+                      setFormData({
+                        ...formData, 
+                        class: newClassId,
+                        shift: matchedClass ? matchedClass.shift : formData.shift
+                      });
+                    }}
                     className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer"
-                    placeholder="ឧ. C6"
-                  />
+                    required
+                  >
+                    <option value="">ជ្រើសរើសថ្នាក់</option>
+                    {classesList.map(c => (
+                      <option key={c.id} value={c.id}>{c.name} - វេន{c.shift === 'Morning' ? 'ព្រឹក' : c.shift === 'Afternoon' ? 'រសៀល' : 'យប់'}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>

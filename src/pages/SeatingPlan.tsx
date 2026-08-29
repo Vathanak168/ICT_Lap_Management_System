@@ -20,6 +20,34 @@ interface Desk {
   status: 'Good' | 'Issue';
 }
 
+const addPcSyncTask = async (
+  db: any,
+  pcNumber: string,
+  studentId: string,
+  studentName: string,
+  action: 'ADD' | 'REMOVE' | 'UPDATE_PASSWORD',
+  password?: string | null,
+  academicYear?: string
+) => {
+  const newTask = {
+    id: crypto.randomUUID(),
+    pcNumber,
+    studentId,
+    studentName,
+    action,
+    password: password || null,
+    status: 'PENDING',
+    createdAt: new Date().toISOString(),
+    branch: '', // Auto-injected by db.ts
+    academicYear: academicYear || '2026-2027'
+  };
+  try {
+    await db.put('pcSyncTasks', newTask);
+  } catch (error) {
+    console.error('Failed to create PC Sync Task. Did you run the SQL migration?', error);
+  }
+};
+
 const SeatingPlan = () => {
   const [selectedClass, setSelectedClass] = useState('');
   const [classes, setClasses] = useState<ClassRecord[]>([]);
@@ -478,12 +506,18 @@ const SeatingPlan = () => {
       
       const sourceStudent = await db.get('students', sourceStudentId);
       if (sourceStudent) {
+        // Swap: Remove from old PC, add to new PC
+        if (sourceStudent.pcNumber) await addPcSyncTask(db, sourceStudent.pcNumber, sourceStudent.studentId, sourceStudent.name, 'REMOVE', null, currentYear);
+        await addPcSyncTask(db, targetDesk.pcNumber, sourceStudent.studentId, sourceStudent.name, 'ADD', sourceStudent.password, currentYear);
         studentsToUpdate.push({ ...sourceStudent, pcNumber: targetDesk.pcNumber });
       }
 
       if (targetStudentId) {
         const targetStudent = await db.get('students', targetStudentId);
         if (targetStudent) {
+          // Swap: Remove from old PC, add to new PC
+          if (targetStudent.pcNumber) await addPcSyncTask(db, targetStudent.pcNumber, targetStudent.studentId, targetStudent.name, 'REMOVE', null, currentYear);
+          await addPcSyncTask(db, sourceDesk.pcNumber, targetStudent.studentId, targetStudent.name, 'ADD', targetStudent.password, currentYear);
           studentsToUpdate.push({ ...targetStudent, pcNumber: sourceDesk.pcNumber });
         }
       }
@@ -570,6 +604,11 @@ const SeatingPlan = () => {
       // Partial update to avoid overwriting concurrent changes
       await db.update('students', studentId, { password: newPassword });
       
+      const student = getStudentForDesk(studentId);
+      if (student && student.pcNumber) {
+        await addPcSyncTask(db, student.pcNumber, student.studentId, student.name, 'UPDATE_PASSWORD', newPassword, currentYear);
+      }
+      
       const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
       await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
@@ -599,6 +638,10 @@ const SeatingPlan = () => {
         // It's acceptable to do a full put if it's a bulk operation, or just update the objects.
         const updatedStudent = { ...students[i], password: newPassword };
         studentsToUpdate.push(updatedStudent);
+        
+        if (students[i].pcNumber) {
+           await addPcSyncTask(db, students[i].pcNumber!, students[i].studentId, students[i].name, 'UPDATE_PASSWORD', newPassword, currentYear);
+        }
       }
       
       await db.putMany('students', studentsToUpdate);
@@ -624,7 +667,12 @@ const SeatingPlan = () => {
     setIsSaving(true);
     try {
       const db = await initDB();
+      const student = getStudentForDesk(studentId);
+      if (student) {
+        await addPcSyncTask(db, selectedDesk.pcNumber, student.studentId, student.name, 'ADD', student.password, currentYear);
+      }
       await db.update('students', studentId, { pcNumber: selectedDesk.pcNumber });
+      
       const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
       await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
@@ -644,7 +692,13 @@ const SeatingPlan = () => {
     try {
       const db = await initDB();
       // Partial update to safely clear pcNumber and password
+      const student = getStudentForDesk(studentId);
+      if (student && student.pcNumber) {
+        await addPcSyncTask(db, student.pcNumber, student.studentId, student.name, 'REMOVE', null, currentYear);
+      }
+      // Partial update to safely clear pcNumber and password
       await db.update('students', studentId, { pcNumber: null, password: null });
+      
       const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
       await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
@@ -670,6 +724,9 @@ const SeatingPlan = () => {
 
       for (let i = 0; i < students.length; i++) {
         if (students[i].pcNumber || students[i].password) {
+          if (students[i].pcNumber) {
+             await addPcSyncTask(db, students[i].pcNumber!, students[i].studentId, students[i].name, 'REMOVE', null, currentYear);
+          }
           const updatedStudent = { ...students[i], pcNumber: null, password: null };
           studentsToUpdate.push(updatedStudent);
         }

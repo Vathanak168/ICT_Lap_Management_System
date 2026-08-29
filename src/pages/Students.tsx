@@ -9,6 +9,34 @@ import { Modal } from '../components/ui/Modal';
 import { translateKhmerToEnglish } from '../utils/khmerTranslator';
 import { useLanguage } from '../contexts/LanguageContext';
 
+const addPcSyncTask = async (
+  db: any,
+  pcNumber: string,
+  studentId: string,
+  studentName: string,
+  action: 'ADD' | 'REMOVE' | 'UPDATE_PASSWORD',
+  password?: string | null,
+  academicYear?: string
+) => {
+  const newTask = {
+    id: crypto.randomUUID(),
+    pcNumber,
+    studentId,
+    studentName,
+    action,
+    password: password || null,
+    status: 'PENDING',
+    createdAt: new Date().toISOString(),
+    branch: '', // Auto-injected
+    academicYear: academicYear || '2026-2027'
+  };
+  try {
+    await db.put('pcSyncTasks', newTask);
+  } catch (error) {
+    console.error('Failed to create PC Sync Task. Did you run the SQL migration?', error);
+  }
+};
+
 const Students = () => {
   const [students, setStudents] = useState<Student[]>([]);
   const [classes, setClasses] = useState<ClassRecord[]>([]);
@@ -94,8 +122,10 @@ const Students = () => {
     if (!activeYear) return;
     const targetYear = activeYear;
     
-    // Uniqueness check for studentId in the current academic year
-    const isDuplicate = students.some(
+    // Uniqueness check for studentId across ALL students in the current academic year
+    const db = await initDB();
+    const allStudentsForYear = await db.getAll('students', targetYear);
+    const isDuplicate = allStudentsForYear.some(
       s => s.studentId.trim().toLowerCase() === currentStudent.studentId?.trim().toLowerCase() && 
       s.id !== currentStudent.id
     );
@@ -107,7 +137,6 @@ const Students = () => {
 
     setIsSaving(true);
     try {
-      const db = await initDB();
       
       if (currentStudent.id) {
         // Edit mode: Use partial update to prevent overwriting PC, Password, etc.
@@ -155,6 +184,40 @@ const Students = () => {
       setIsSaving(true);
       try {
         const db = await initDB();
+
+        // Cascade: clean student references from attendance records
+        const allAttendance = await db.getAll('attendance', targetYear);
+        for (const att of allAttendance) {
+          if (att.records && att.records[id] !== undefined) {
+            const { [id]: _, ...cleanRecords } = att.records;
+            await db.update('attendance', att.id, { records: cleanRecords });
+          }
+        }
+
+        // Cascade: clean student references from seating plans
+        const allSeating = await db.getAll('seatingPlans', targetYear);
+        for (const seat of allSeating) {
+          const newGrid = seat.gridLayout.map((row: Array<string | null>) =>
+            row.map((cell: string | null) => cell === id ? null : cell)
+          );
+          if (JSON.stringify(newGrid) !== JSON.stringify(seat.gridLayout)) {
+            await db.update('seatingPlans', seat.id, { gridLayout: newGrid });
+          }
+        }
+
+        // Cascade: clean student references from grades
+        const allGrades = await db.getAll('grades', targetYear);
+        for (const grade of allGrades) {
+          if (grade.scores && grade.scores[id] !== undefined) {
+            const { [id]: _, ...cleanScores } = grade.scores;
+            await db.update('grades', grade.id, { scores: cleanScores });
+          }
+        }
+        const studentToDelete = students.find(s => s.id === id);
+        if (studentToDelete && studentToDelete.pcNumber) {
+          await addPcSyncTask(db, studentToDelete.pcNumber, studentToDelete.studentId, studentToDelete.name, 'REMOVE', null, targetYear);
+        }
+
         await db.delete('students', id);
         await fetchData(targetYear);
       } catch (error) {
@@ -177,6 +240,11 @@ const Students = () => {
           status: 'ResetRequired', 
           password: null // Actually clear the password
         });
+        
+        if (student.pcNumber) {
+          await addPcSyncTask(db, student.pcNumber, student.studentId, student.name, 'REMOVE', null, targetYear);
+        }
+        
         await fetchData(targetYear);
       } catch (error) {
         console.error('Failed to reset password:', error);
@@ -344,7 +412,7 @@ const Students = () => {
             </button>
             <button 
               className="bg-[#48b5c9] hover:bg-[#3aa3b7] hover:shadow-md text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-all border border-transparent disabled:opacity-50"
-              disabled={!activeYear || isProcessing || isSaving}
+              disabled={!activeYear || isProcessing || isSaving || classes.length === 0}
               onClick={() => {
                 const initialClass = classes.length > 0 ? classes[0] : null;
                 setCurrentStudent({

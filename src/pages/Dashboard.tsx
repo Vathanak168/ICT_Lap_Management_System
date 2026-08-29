@@ -15,10 +15,14 @@ const getLocalDate = (dateObj: Date = new Date()) => {
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const [stats, setStats] = useState({
+  const [stats, setStats] = useState<{
+    totalStudents: number;
+    pcIssues: number;
+    attendanceRate: number | null;
+  }>({
     totalStudents: 0,
     pcIssues: 0,
-    attendanceRate: 0
+    attendanceRate: null
   });
   
   const [activePCIssues, setActivePCIssues] = useState<PCIssue[]>([]);
@@ -33,7 +37,7 @@ const Dashboard = () => {
       setStats({
         totalStudents: 0,
         pcIssues: 0,
-        attendanceRate: 0
+        attendanceRate: null
       });
       setActivePCIssues([]);
       setIsLoading(false);
@@ -82,7 +86,7 @@ const Dashboard = () => {
           totalStudentsPresent += explicitStatuses.filter(s => s === 'P' || s === 'L').length;
         });
         
-        let calculatedRate = 0;
+        let calculatedRate: number | null = null;
         if (totalStudentsRecorded > 0) {
           calculatedRate = Math.round((totalStudentsPresent / totalStudentsRecorded) * 100);
         }
@@ -163,7 +167,7 @@ const Dashboard = () => {
             </div>
             <div>
               <p className="text-base font-medium text-emerald-100 mb-0.5">អត្រាវត្តមានថ្ងៃនេះ (Attendance Rate)</p>
-              <h3 className="text-4xl font-bold">{stats.attendanceRate}%</h3>
+              <h3 className="text-4xl font-bold">{stats.attendanceRate !== null ? `${stats.attendanceRate}%` : 'N/A'}</h3>
             </div>
           </div>
         </div>

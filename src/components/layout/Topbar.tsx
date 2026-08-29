@@ -8,7 +8,7 @@ import AIAssistant from '../ai/AIAssistant';
 
 const Topbar = () => {
   const { profileImage } = useAuth();
-  const { activeYear, academicYears, changeYear, createYear } = useAcademicYear();
+  const { activeYear, academicYears, changeYear, createYear, deleteYear } = useAcademicYear();
   const navigate = useNavigate();
   
   const [showNewYearModal, setShowNewYearModal] = useState(false);
@@ -70,6 +70,22 @@ const Topbar = () => {
             ))}
             <option value="new" className="text-[#2a5298] font-bold">+ បង្កើតឆ្នាំសិក្សាថ្មី</option>
           </select>
+          {activeYear && (
+            <button
+              onClick={async () => {
+                if (window.confirm(`តើអ្នកពិតជាចង់លុបឆ្នាំសិក្សា ${activeYear} មែនទេ?\nបញ្ជាក់: ទិន្នន័យថ្នាក់និងសិស្សទាំងអស់ក្នុងឆ្នាំនេះនឹងត្រូវបានលុប! (អាស្រ័យលើការកំណត់ Database Cascade)`)) {
+                  setCreating(true);
+                  await deleteYear(activeYear);
+                  setCreating(false);
+                }
+              }}
+              className="ml-2 text-red-200 hover:text-red-400 hover:bg-white/10 p-1 rounded-sm transition-colors"
+              title="លុបឆ្នាំសិក្សានេះ"
+              disabled={creating}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+            </button>
+          )}
         </div>
 
         {/* User Profile */}

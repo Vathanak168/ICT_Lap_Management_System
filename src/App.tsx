@@ -16,6 +16,7 @@ import ShiftSwitching from './pages/ShiftSwitching';
 import LessonPlan from './pages/LessonPlan';
 import MiniApps from './pages/MiniApps';
 import Profile from './pages/Profile';
+import PcSync from './pages/PcSync';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { AuthProvider } from './contexts/AuthContext';
@@ -45,6 +46,7 @@ function App() {
                 <Route path="/shift-switching" element={<ShiftSwitching />} />
                 <Route path="/miniapps" element={<MiniApps />} />
                 <Route path="/profile" element={<Profile />} />
+                <Route path="/pc-sync" element={<PcSync />} />
                 <Route path="/settings" element={<Settings />} />
                 
                 {/* Admin only route */}

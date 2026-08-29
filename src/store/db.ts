@@ -138,6 +138,19 @@ export interface AiHistoryRecord {
   updatedAt?: string;
 }
 
+export interface PcSyncTask {
+  id: string;
+  pcNumber: string;
+  studentId: string;
+  studentName: string;
+  action: 'ADD' | 'REMOVE' | 'UPDATE_PASSWORD';
+  password?: string | null;
+  status: 'PENDING' | 'COMPLETED';
+  createdAt: string;
+  branch: string;
+  academicYear: string;
+}
+
 const tableMap = {
   classes: 'classes',
   students: 'students',
@@ -149,6 +162,7 @@ const tableMap = {
   lessonPlans: 'lesson_plans',
   settings: 'settings',
   aiHistory: 'ai_history',
+  pcSyncTasks: 'pc_sync_tasks',
 } as const;
 
 export type StoreName = keyof typeof tableMap;
@@ -165,6 +179,7 @@ export interface StoreRecordMap {
   lessonPlans: LessonPlanTrack;
   settings: SettingRecord;
   aiHistory: AiHistoryRecord;
+  pcSyncTasks: PcSyncTask;
 }
 
 export type StoreRecord<K extends StoreName> = StoreRecordMap[K];
@@ -462,6 +477,24 @@ const storeSchemas: Record<StoreName, StoreSchema> = {
       updatedAt: field('updated_at', 'string', { nullable: true }),
     },
     indexColumns: new Set(['id']),
+  },
+  pcSyncTasks: {
+    table: 'pc_sync_tasks',
+    branchScoped: true,
+    academicYear: true,
+    fields: {
+      id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
+      pcNumber: field('pc_number', 'string', { requiredRead: true, requiredWrite: true }),
+      studentId: field('student_id', 'string', { requiredRead: true, requiredWrite: true }),
+      studentName: field('student_name', 'string', { requiredRead: true, requiredWrite: true }),
+      action: field('action', 'string', { requiredRead: true, requiredWrite: true, allowed: ['ADD', 'REMOVE', 'UPDATE_PASSWORD'] }),
+      password: field('password', 'string', { nullable: true }),
+      status: field('status', 'string', { requiredRead: true, requiredWrite: true, allowed: ['PENDING', 'COMPLETED'] }),
+      createdAt: field('created_at', 'string', { requiredRead: true, requiredWrite: true }),
+      branch: field('branch', 'string', { requiredRead: true, requiredWrite: true }),
+      academicYear: field('academic_year', 'string', { requiredRead: true, requiredWrite: true }),
+    },
+    indexColumns: new Set(['id', 'pc_number', 'student_id', 'status', 'branch', 'academic_year']),
   },
 };
 
@@ -1350,15 +1383,21 @@ export class SupabaseDBAdapter {
     const input = this.preprocessInput(storeName, value, 'write');
     const payload: DatabaseRow = {};
 
+    // Build set of known legacy alias fields that preprocessInput will handle
+    const legacyAliases = new Set<string>();
+    if (storeName === 'attendance') legacyAliases.add('class');
+    if (storeName === 'pcIssues') {
+      legacyAliases.add('dateFound');
+      legacyAliases.add('dateResolved');
+    }
+
     for (const key of Object.keys(input)) {
-      if (key !== 'class' || storeName !== 'attendance') {
-        if (!schema.fields[key] && key !== 'dateFound' && key !== 'dateResolved') {
-          return failValidation(
-            `Unknown field "${key}" for store "${storeName}".`,
-            'map-write',
-            storeName,
-          );
-        }
+      if (!schema.fields[key] && !legacyAliases.has(key)) {
+        return failValidation(
+          `Unknown field "${key}" for store "${storeName}".`,
+          'map-write',
+          storeName,
+        );
       }
     }
 

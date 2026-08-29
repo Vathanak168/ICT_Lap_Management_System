@@ -67,7 +67,7 @@ const Attendance = () => {
     };
     
     void loadClasses();
-  }, [activeYear]);
+  }, [activeYear, selectedClass]);
 
   useEffect(() => {
     if (!selectedClass || !activeYear) {

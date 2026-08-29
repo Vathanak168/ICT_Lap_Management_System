@@ -41,7 +41,7 @@ const Register: React.FC = () => {
         const { data, error } = await supabase
           .from('profiles')
           .select('branch')
-          .eq('role', 'teacher');
+          .in('role', ['teacher', 'admin']);
           
         if (error) throw error;
         
@@ -169,11 +169,34 @@ const Register: React.FC = () => {
     }
 
     try {
+      // Re-validate branch availability right before signup to reduce race window
+      const { data: recheckData } = await supabase
+        .from('profiles')
+        .select('branch')
+        .in('role', ['teacher', 'admin'])
+        .eq('branch', branch);
+
+      if (recheckData && recheckData.length > 0) {
+        setError('សាខានេះត្រូវបានយកទៅហើយ សូមជ្រើសរើសសាខាផ្សេង។');
+        // Refresh available branches
+        const { data: freshData } = await supabase
+          .from('profiles')
+          .select('branch')
+          .in('role', ['teacher', 'admin']);
+        const takenBranches = freshData?.map(p => p.branch) || [];
+        const allBranches = Array.from({ length: 32 }, (_, i) => `BELTEI IS ${i + 1}`);
+        const free = allBranches.filter(b => !takenBranches.includes(b));
+        setAvailableBranches(free);
+        if (free.length > 0) setBranch(free[0]);
+        setLoading(false);
+        return;
+      }
+
       if (imagePreview) {
         localStorage.setItem('pending_profile_image', imagePreview);
       }
 
-      // 2. Sign up user in Auth and store profile data in metadata
+      // Sign up user in Auth and store profile data in metadata
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: gmail,
         password,
@@ -193,6 +216,8 @@ const Register: React.FC = () => {
       setSuccess(true);
       
     } catch (err: any) {
+      // Clean up localStorage on failure to prevent orphaned base64 images
+      localStorage.removeItem('pending_profile_image');
       setError(err.message || 'បញ្ហាពេលចុះឈ្មោះ សូមព្យាយាមម្តងទៀត');
     } finally {
       setLoading(false);
