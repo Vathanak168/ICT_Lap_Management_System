@@ -59,6 +59,9 @@ const ShiftSwitching = () => {
       
       if (requestId !== loadRequestRef.current) return;
       
+      allStudents.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      
       setStudents(allStudents);
       setClasses(allClasses);
     } catch (error) {

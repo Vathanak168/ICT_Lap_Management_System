@@ -42,7 +42,7 @@ const Classes = () => {
   const fetchClasses = async () => {
     try {
       setLoading(true);
-      let query = supabase.from('classes').select('*');
+      let query = supabase.from('classes').select('*').order('name', { ascending: true });
       
       if (selectedBranch !== 'All') {
         query = query.eq('branch', selectedBranch);

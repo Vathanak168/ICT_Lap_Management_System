@@ -71,8 +71,14 @@ const Students = () => {
       if (studentsRes.error) throw studentsRes.error;
       if (classesRes.error) throw classesRes.error;
       
-      setStudents(studentsRes.data || []);
-      setClassesList(classesRes.data || []);
+      const loadedStudents = studentsRes.data || [];
+      const loadedClasses = classesRes.data || [];
+      
+      loadedStudents.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }));
+      loadedClasses.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }));
+      
+      setStudents(loadedStudents);
+      setClassesList(loadedClasses);
     } catch (error) {
       console.error('Error fetching students:', error);
     } finally {

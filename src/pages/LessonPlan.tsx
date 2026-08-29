@@ -45,7 +45,7 @@ const LessonPlanPage = () => {
         const allClasses = await db.getAll('classes', activeYear);
         
         if (requestId !== loadRequestRef.current) return;
-        
+        allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         setClasses(allClasses);
         const exists = allClasses.some(c => c.id === selectedClass);
         if (allClasses.length > 0 && (!selectedClass || !exists)) {

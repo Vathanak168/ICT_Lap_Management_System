@@ -104,6 +104,9 @@ const Students = () => {
 
       if (requestId !== loadRequestRef.current) return;
       
+      allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      allStudents.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      
       setClasses(allClasses);
       setStudents(allStudents);
     } catch (error) {

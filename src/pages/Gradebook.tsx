@@ -130,7 +130,7 @@ const Gradebook = () => {
         const allClasses = await db.getAll('classes', activeYear);
         
         if (requestId !== loadClassRequestRef.current) return;
-        
+        allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         setClasses(allClasses);
         const selectedExists = allClasses.some(c => c.id === selectedClass);
         if (allClasses.length > 0 && (!selectedClass || !selectedExists)) {
@@ -193,6 +193,7 @@ const Gradebook = () => {
           classesToFetch.map(cid => db.getAllFromIndex('students', 'class', cid, activeYear))
         );
         const studentsToFetch = studentGroups.flat().filter(s => s.status === 'Active');
+        studentsToFetch.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
         // Load grades concurrently
         const gradeRecords = await Promise.all(

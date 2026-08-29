@@ -34,7 +34,7 @@ const Classes = () => {
       const allClasses = await db.getAll('classes', targetYear);
       
       if (requestId !== loadRequestRef.current) return;
-      
+      allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       setClasses(allClasses);
     } catch (error) {
       if (requestId === loadRequestRef.current) {

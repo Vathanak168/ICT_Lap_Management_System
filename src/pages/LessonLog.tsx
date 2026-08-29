@@ -43,6 +43,7 @@ const LessonLog = () => {
       
       if (requestId !== loadRequestRef.current) return;
       
+      allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       setLogs(allLogs);
       setClasses(allClasses);
     } catch (error) {

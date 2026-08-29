@@ -50,7 +50,7 @@ const Attendance = () => {
         const db = await initDB();
         const allClasses = await db.getAll('classes', activeYear);
         if (requestId !== loadRequestRef.current) return;
-        
+        allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         setClasses(allClasses);
         if (allClasses.length > 0) {
           // Preserve currently selected class if it exists in the new year's classes
@@ -90,8 +90,9 @@ const Attendance = () => {
         ]);
 
         if (requestId !== loadRequestRef.current) return;
-        
-        setStudents(allStudents.filter(s => s.status !== 'Inactive'));
+        const activeStudents = allStudents.filter(s => s.status !== 'Inactive');
+        activeStudents.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        setStudents(activeStudents);
         
         if (record) {
           const loadedRecords = { ...(record.records as Record<string, AttendanceStatus>) };

@@ -57,6 +57,7 @@ export const executeClassTool = async (name: string, args: any, academicYear?: s
   
   if (name === 'getClasses') {
     const classes = await db.getAll('classes', academicYear);
+    classes.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     return {
       resultType: 'class_summary',
       count: classes.length,

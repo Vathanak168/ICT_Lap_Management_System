@@ -99,7 +99,7 @@ const SeatingPlan = () => {
         const result = await db.getAll('classes', activeYear);
 
         if (requestId !== loadClassRequestRef.current) return;
-
+        result.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         setClasses(result);
         setSelectedClass(previous =>
           result.some(item => item.id === previous) ? previous : result[0]?.id ?? ''
@@ -132,6 +132,7 @@ const SeatingPlan = () => {
       if (requestId !== loadDataRequestRef.current) return;
 
       const activeStudents = studentRows.filter(student => student.status === 'Active');
+      activeStudents.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       setStudents(activeStudents);
       setPcIssues(issueRows);
       
