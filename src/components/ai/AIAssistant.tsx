@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Send, Bot, Paperclip, LayoutGrid, Mic, Loader2, X, Trash2, Edit, ChevronRight, MessageSquare, AlertTriangle, Check, XCircle, FileText, User, Pin, Minimize2, Maximize2, RefreshCw, Sparkles, Settings, UserPlus, Wrench, PlusCircle } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { initDB, type AiHistoryRecord, type JsonValue } from '../../store/db';
 import { generateAIResponse, hasApiKey } from '../../lib/ai/core';
 import { handleAction } from '../../lib/ai/actions';
@@ -27,6 +28,20 @@ const AIAssistant = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { activeYear } = useAcademicYear();
   const { branch } = useAuth();
+  const location = useLocation();
+
+  const getPageContext = () => {
+    const path = location.pathname;
+    if (path.includes('/classes')) return 'Classes';
+    if (path.includes('/students')) return 'Students';
+    if (path.includes('/attendance')) return 'Attendance';
+    if (path.includes('/gradebook')) return 'Gradebook';
+    if (path.includes('/lesson-plans')) return 'Lesson Plans';
+    if (path.includes('/pc-issues')) return 'PC Issues';
+    return 'Dashboard';
+  };
+  
+  const activePage = getPageContext();
 
   const historyRecordIdRef = useRef<string | null>(null);
   const historySaveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -240,6 +255,7 @@ const AIAssistant = () => {
       const context = {
         branch: branch || localStorage.getItem('userBranch') || 'BELTEI IS 1',
         academicYear: activeYear || '',
+        activePage: activePage
       };
 
       const response = await generateAIResponse(history, textToSend, context);
@@ -510,6 +526,52 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
           </div>
         );
 
+      case 'UPDATE_GRADES':
+        return (
+          <div className="bg-white border border-purple-200 rounded-md overflow-hidden mb-3 shadow-sm">
+            <div className="bg-purple-50 px-3 py-2 border-b border-purple-100 text-purple-700 font-bold flex items-center gap-2 text-sm">
+              <FileText size={16} /> កែប្រែពិន្ទុសិស្ស
+            </div>
+            <div className="p-3 flex flex-col gap-1.5 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">សិស្ស៖</span> <span className="font-bold text-purple-700">{d.studentId}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ថ្នាក់៖</span> <span className="font-medium">{d.classId}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ខែ៖</span> <span className="font-medium">{d.month}</span></div>
+              {d.practice !== undefined && <div className="flex justify-between"><span className="text-gray-500">ពិន្ទុអនុវត្ត៖</span> <span className="font-medium">{d.practice}</span></div>}
+              {d.book !== undefined && <div className="flex justify-between"><span className="text-gray-500">ពិន្ទុសៀវភៅ៖</span> <span className="font-medium">{d.book}</span></div>}
+              {d.exam !== undefined && <div className="flex justify-between"><span className="text-gray-500">ពិន្ទុប្រឡង៖</span> <span className="font-medium">{d.exam}</span></div>}
+            </div>
+          </div>
+        );
+
+      case 'UPDATE_ATTENDANCE':
+        return (
+          <div className="bg-white border border-teal-200 rounded-md overflow-hidden mb-3 shadow-sm">
+            <div className="bg-teal-50 px-3 py-2 border-b border-teal-100 text-teal-700 font-bold flex items-center gap-2 text-sm">
+              <Check size={16} /> កត់ត្រាអវត្តមាន
+            </div>
+            <div className="p-3 flex flex-col gap-1.5 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">សិស្ស៖</span> <span className="font-bold text-teal-700">{d.studentId}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ថ្ងៃទី៖</span> <span className="font-medium">{d.date}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ស្ថានភាព៖</span> <span className="font-medium">{d.status === 'P' ? 'វត្តមាន' : d.status === 'A' ? 'អវត្តមាន' : d.status === 'L' ? 'ច្បាប់' : 'យឺត'}</span></div>
+            </div>
+          </div>
+        );
+
+      case 'ADD_LESSON_LOG':
+        return (
+          <div className="bg-white border border-indigo-200 rounded-md overflow-hidden mb-3 shadow-sm">
+            <div className="bg-indigo-50 px-3 py-2 border-b border-indigo-100 text-indigo-700 font-bold flex items-center gap-2 text-sm">
+              <FileText size={16} /> បន្ថែមកំណត់ត្រាបង្រៀន
+            </div>
+            <div className="p-3 flex flex-col gap-1.5 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">ថ្នាក់៖</span> <span className="font-bold text-indigo-700">{d.classId}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ថ្ងៃទី៖</span> <span className="font-medium">{d.date}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">មេរៀន៖</span> <span className="font-medium">{d.topic}</span></div>
+              {d.exercises && <div className="flex justify-between"><span className="text-gray-500">លំហាត់៖</span> <span className="font-medium">{d.exercises}</span></div>}
+            </div>
+          </div>
+        );
+
       default:
         return (
           <div className="bg-white border border-gray-200 rounded-md overflow-hidden mb-3 shadow-sm text-sm">
@@ -596,6 +658,17 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
                 <div className="md:hidden flex items-center gap-2 text-[#1a73e8] font-bold">
                   <Bot size={20} /> AI
                 </div>
+                
+                {/* Context Chips */}
+                <div className="hidden md:flex items-center gap-2 ml-4 flex-1">
+                  <div className="bg-blue-50 text-blue-700 text-xs px-2.5 py-1 rounded-md font-medium border border-blue-100">
+                    {activePage}
+                  </div>
+                  <div className="bg-gray-50 text-gray-600 text-xs px-2.5 py-1 rounded-md font-medium border border-gray-200">
+                    ឆ្នាំ {activeYear}
+                  </div>
+                </div>
+
                 <div className="flex items-center gap-2 text-gray-400">
                   <button className="p-1.5 hover:bg-gray-100 rounded-md transition-colors" title="Pin window">
                     <Pin size={16} />
@@ -630,21 +703,46 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
                         សំណួរណែនាំ <button className="hover:text-blue-500 transition-colors p-1"><RefreshCw size={14} /></button>
                       </h3>
                       <div className="space-y-2">
-                        <button onClick={() => handleQuickAction('តើយើងមានថ្នាក់រៀនសរុបចំនួនប៉ុន្មាន?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
-                          <Sparkles size={16} className="text-blue-500 shrink-0" />
-                          <span>តើយើងមានថ្នាក់រៀនសរុបចំនួនប៉ុន្មាន?</span>
-                          <ChevronRight size={16} className="text-gray-400 ml-auto" />
-                        </button>
-                        <button onClick={() => handleQuickAction('ជួយរាយការណ៍បញ្ហាកុំព្យូទ័រលេខ PC-10 ដែលខូច Mouse', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
-                          <Sparkles size={16} className="text-blue-500 shrink-0" />
-                          <span>ជួយរាយការណ៍បញ្ហាកុំព្យូទ័រលេខ PC-10 ដែលខូច Mouse</span>
-                          <ChevronRight size={16} className="text-gray-400 ml-auto" />
-                        </button>
-                        <button onClick={() => handleQuickAction('តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
-                          <Sparkles size={16} className="text-blue-500 shrink-0" />
-                          <span>តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?</span>
-                          <ChevronRight size={16} className="text-gray-400 ml-auto" />
-                        </button>
+                        {activePage === 'Students' ? (
+                          <>
+                            <button onClick={() => handleQuickAction('តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('រកសិស្សដែលប្តូរវេនបណ្តោះអាសន្ន', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>រកសិស្សដែលប្តូរវេនបណ្តោះអាសន្ន</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                          </>
+                        ) : activePage === 'Gradebook' ? (
+                          <>
+                            <button onClick={() => handleQuickAction('សង្ខេបពិន្ទុថ្នាក់ 6A1 ខែនេះ', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>សង្ខេបពិន្ទុថ្នាក់ 6A1 ខែនេះ</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('រកសិស្សមានពិន្ទុទាបជាង 50', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>រកសិស្សមានពិន្ទុទាបជាង 50</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                          </>
+                        ) : activePage === 'PC Issues' ? (
+                          <>
+                            <button onClick={() => handleQuickAction('រាយការណ៍បញ្ហាកុំព្យូទ័រលេខ PC-10 ដែលខូច Mouse', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>រាយការណ៍កុំព្យូទ័រខូច (ឧទាហរណ៍ PC-10 ខូច Mouse)</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('តើមានកុំព្យូទ័រប៉ុន្មានគ្រឿងកំពុងខូច?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>តើមានកុំព្យូទ័រប៉ុន្មានគ្រឿងកំពុងខូច?</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => handleQuickAction('តើយើងមានថ្នាក់រៀនសរុបចំនួនប៉ុន្មាន?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>តើយើងមានថ្នាក់រៀនសរុបចំនួនប៉ុន្មាន?</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('ជួយរាយការណ៍បញ្ហាកុំព្យូទ័រលេខ PC-10 ដែលខូច Mouse', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>ជួយរាយការណ៍បញ្ហាកុំព្យូទ័រលេខ PC-10 ដែលខូច Mouse</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>

@@ -34,10 +34,23 @@ export const executeAttendanceTool = async (name: string, args: any, academicYea
   
   if (name === 'getAttendance') {
     const records = await db.getAll('attendance', academicYear);
-    return records.filter(r => 
+    const filtered = records.filter(r => 
       (!args.classId || r.classId === args.classId) && 
       (!args.date || r.date === args.date)
     );
+    return {
+      resultType: 'attendance_summary',
+      count: filtered.length,
+      classId: args.classId || null,
+      date: args.date || null,
+      details: filtered.map(r => ({
+        ref: `attendance_${r.id}`,
+        classId: r.classId,
+        date: r.date,
+        records: r.records
+      })),
+      responseGuidance: 'Summarize attendance records. If there are many, provide counts (e.g., 5 absent, 2 late).'
+    };
   }
   
   if (name === 'proposeUpdateAttendance') {

@@ -35,10 +35,25 @@ export const executeLessonLogTool = async (name: string, args: any, academicYear
   
   if (name === 'getLessonLogs') {
     const records = await db.getAll('lessonLogs', academicYear);
-    return records.filter(r => 
+    const filtered = records.filter(r => 
       (!args.classId || r.classId === args.classId) && 
       (!args.date || r.date === args.date)
     );
+    
+    return {
+      resultType: 'lesson_log_summary',
+      count: filtered.length,
+      classId: args.classId || null,
+      date: args.date || null,
+      details: filtered.map(r => ({
+        ref: `log_${r.id}`,
+        classId: r.classId,
+        date: r.date,
+        topic: r.topic,
+        exercises: r.exercises
+      })),
+      responseGuidance: 'Summarize the teaching history conversationally. Do not list all details unless requested.'
+    };
   }
   
   if (name === 'proposeAddLessonLog') {

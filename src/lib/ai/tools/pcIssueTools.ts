@@ -44,10 +44,22 @@ export const executePcIssueTool = async (name: string, args: any, academicYear?:
   
   if (name === 'getPcIssues') {
     const issues = await db.getAll('pcIssues', academicYear);
-    if (args.status) {
-      return issues.filter(i => i.status.toLowerCase() === args.status.toLowerCase());
-    }
-    return issues;
+    const filtered = args.status 
+      ? issues.filter(i => i.status.toLowerCase() === args.status.toLowerCase())
+      : issues;
+      
+    return {
+      resultType: 'pc_issue_summary',
+      count: filtered.length,
+      status: args.status || 'all',
+      details: filtered.map(i => ({
+        ref: `pcIssue_${i.id}`,
+        pcNumber: i.pcNumber,
+        status: i.status,
+        description: i.description
+      })),
+      responseGuidance: 'Summarize PC issues. Mention specific PCs and their problems naturally.'
+    };
   }
   
   const proposeActions = ['proposeAddPcIssue', 'proposeResolvePcIssue'];

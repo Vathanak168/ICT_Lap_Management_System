@@ -65,10 +65,26 @@ export const executeLessonPlanTool = async (name: string, args: any, academicYea
 
   if (name === 'getLessonPlans') {
     const plans = await db.getAll('lessonPlans', academicYear);
-    if (args.classId) {
-      return plans.filter((p: any) => p.classId === args.classId);
-    }
-    return plans;
+    const filtered = args.classId 
+      ? plans.filter((p: any) => p.classId === args.classId)
+      : plans;
+      
+    return {
+      resultType: 'lesson_plan_summary',
+      count: filtered.length,
+      classId: args.classId || null,
+      details: filtered.map((p: any) => ({
+        ref: `plan_${p.id}`,
+        classId: p.classId,
+        month: p.month,
+        week: p.week,
+        lessonTitle: p.lessonTitle,
+        topics: p.topics,
+        exercises: p.exercises,
+        status: p.status
+      })),
+      responseGuidance: 'Summarize lesson plans naturally. Do not list all details unless requested.'
+    };
   }
   
   if (name === 'proposeAddLessonPlan') {

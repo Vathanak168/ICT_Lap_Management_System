@@ -38,10 +38,23 @@ export const executeGradeTool = async (name: string, args: any, academicYear?: s
   
   if (name === 'getGrades') {
     const records = await db.getAll('grades', academicYear);
-    return records.filter(r => 
+    const filtered = records.filter(r => 
       (!args.classId || r.classId === args.classId) && 
       (!args.month || r.month === args.month)
     );
+    return {
+      resultType: 'grade_summary',
+      count: filtered.length,
+      classId: args.classId || null,
+      month: args.month || null,
+      details: filtered.map(r => ({
+        ref: `grade_${r.id}`,
+        classId: r.classId,
+        month: r.month,
+        scores: r.scores
+      })),
+      responseGuidance: 'Summarize grades conversationally. Mention individual scores only if requested.'
+    };
   }
   
   if (name === 'proposeUpdateGrades') {

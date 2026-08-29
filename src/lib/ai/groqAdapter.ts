@@ -3,7 +3,7 @@
  * Groq uses OpenAI-compatible API, so we need to convert our tools and messages.
  */
 
-import { systemInstruction } from './core';
+import { systemInstruction, type AIContext } from './core';
 import { tools as geminiTools, executeTool } from './tools';
 
 // Convert Google tool format → OpenAI tool format
@@ -81,12 +81,19 @@ export async function sendGroqRequest(
   model: string,
   history: { role: 'user' | 'model', text: string }[],
   prompt: string,
-  context?: { branch: string; academicYear: string }
+  context?: AIContext
 ): Promise<{ text: string; pendingActions?: any[] }> {
   
   let instruction = systemInstruction;
   if (context) {
-    instruction += `\n\nCURRENT CONTEXT:\n- Branch: ${context.branch}\n- Academic Year: ${context.academicYear}`;
+    instruction += `\n\n<runtime_context>\n`;
+    instruction += `Current branch: ${context.branch}\n`;
+    instruction += `Academic year: ${context.academicYear}\n`;
+    if (context.semester) instruction += `Semester: ${context.semester}\n`;
+    if (context.activeClass) instruction += `Active class: ${context.activeClass}\n`;
+    if (context.activeStudent) instruction += `Active student: ${context.activeStudent}\n`;
+    if (context.activePage) instruction += `Current application screen: ${context.activePage}\n`;
+    instruction += `\nThese values are private application context.\nDo not mention them unless relevant to the user's request.\n</runtime_context>`;
   }
   
   const openAITools = convertToolsToOpenAI(geminiTools);
