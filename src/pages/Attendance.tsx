@@ -9,6 +9,9 @@ import {
   AlertCircle, 
   ChevronLeft, 
   ChevronRight, 
+  ChevronsLeft,
+  ChevronsRight,
+  ChevronDown,
   User, 
   Search, 
   RotateCcw,
@@ -24,6 +27,21 @@ import { useLanguage } from '../contexts/LanguageContext';
 
 type AttendanceStatus = 'P' | 'A' | 'E' | 'L' | null;
 
+const KHMER_MONTHS = [
+  { value: '01', name: 'មករា (ខែ ១)' },
+  { value: '02', name: 'កុម្ភៈ (ខែ ២)' },
+  { value: '03', name: 'មីនា (ខែ ៣)' },
+  { value: '04', name: 'មេសា (ខែ ៤)' },
+  { value: '05', name: 'ឧសភា (ខែ ៥)' },
+  { value: '06', name: 'មិថុនា (ខែ ៦)' },
+  { value: '07', name: 'កក្កដា (ខែ ៧)' },
+  { value: '08', name: 'សីហា (ខែ ៨)' },
+  { value: '09', name: 'កញ្ញា (ខែ ៩)' },
+  { value: '10', name: 'តុលា (ខែ ១០)' },
+  { value: '11', name: 'វិច្ឆិកា (ខែ ១១)' },
+  { value: '12', name: 'ធ្នូ (ខែ ១២)' },
+];
+
 const getLocalDate = (dateObj: Date = new Date()) => {
   const year = dateObj.getFullYear();
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -37,6 +55,7 @@ const Attendance = () => {
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedClass, setSelectedClass] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<string>(getLocalDate());
+  const dateInputRef = useRef<HTMLInputElement>(null);
   
   const [attendanceData, setAttendanceData] = useState<Record<string, AttendanceStatus>>({});
   const [initialAttendanceData, setInitialAttendanceData] = useState<Record<string, AttendanceStatus>>({});
@@ -203,6 +222,36 @@ const Attendance = () => {
     setSelectedClass(newClass);
   };
 
+  const openDatePicker = () => {
+    try {
+      dateInputRef.current?.showPicker?.();
+    } catch {
+      dateInputRef.current?.focus();
+    }
+  };
+
+  const changeMonth = (months: number) => {
+    if (hasChanges) {
+      if (!window.confirm('អ្នកមានទិន្នន័យមិនទាន់រក្សាទុក។ តើអ្នកពិតជាចង់បោះបង់វាហើយប្តូរខែមែនទេ?')) return;
+    }
+    const [y, m, d] = selectedDate.split('-').map(Number);
+    const targetDate = new Date(y, m - 1 + months, 1);
+    const maxDays = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).getDate();
+    targetDate.setDate(Math.min(d, maxDays));
+    setSelectedDate(getLocalDate(targetDate));
+  };
+
+  const handleMonthChange = (newMonth: string) => {
+    if (hasChanges) {
+      if (!window.confirm('អ្នកមានទិន្នន័យមិនទាន់រក្សាទុក។ តើអ្នកពិតជាចង់បោះបង់វាហើយប្តូរខែមែនទេ?')) return;
+    }
+    const [year, , day] = selectedDate.split('-').map(Number);
+    const m = Number(newMonth);
+    const maxDays = new Date(year, m, 0).getDate();
+    const targetDate = new Date(year, m - 1, Math.min(day, maxDays));
+    setSelectedDate(getLocalDate(targetDate));
+  };
+
   const changeDate = (days: number) => {
     if (hasChanges) {
       if (!window.confirm('អ្នកមានទិន្នន័យមិនទាន់រក្សាទុក។ តើអ្នកពិតជាចង់បោះបង់វាហើយប្តូរថ្ងៃមែនទេ?')) return;
@@ -336,42 +385,93 @@ const Attendance = () => {
               </select>
             </div>
             
-            {/* Date Navigator */}
+            {/* Date & Month Navigator */}
             <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-bold text-secondary-text uppercase tracking-wider">កាលបរិច្ឆេទ</label>
-              <div className="flex items-center gap-1.5">
+              <label className="text-[11px] font-bold text-secondary-text uppercase tracking-wider">
+                កាលបរិច្ឆេទ & ខែ
+              </label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {/* Month Dropdown for direct 1-click jump to any month */}
+                <select 
+                  value={selectedDate.split('-')[1]}
+                  onChange={(e) => handleMonthChange(e.target.value)}
+                  className="bg-background border border-border text-main-text text-xs sm:text-sm font-semibold rounded-xl px-2.5 py-2.5 outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all cursor-pointer shadow-xs hover:border-primary/40"
+                  title="ជ្រើសរើសខែដោយផ្ទាល់ (Jump to any month)"
+                >
+                  {KHMER_MONTHS.map(m => (
+                    <option key={m.value} value={m.value}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Step Month Back (<<) */}
+                <button 
+                  type="button"
+                  onClick={() => changeMonth(-1)}
+                  className="p-2.5 border border-border bg-background rounded-xl hover:bg-surface-hover hover:border-primary/40 text-secondary-text hover:text-main-text transition-all shadow-xs cursor-pointer active:scale-95 shrink-0"
+                  title="ថយ 1 ខែ (-1 ខែ)"
+                >
+                  <ChevronsLeft size={16} />
+                </button>
+
+                {/* Step Day Back (<) */}
                 <button 
                   type="button"
                   onClick={() => changeDate(-1)}
-                  className="p-2.5 border border-border bg-background rounded-xl hover:bg-surface-hover text-secondary-text transition-colors shadow-xs"
-                  title="ថ្ងៃមុន"
+                  className="p-2.5 border border-border bg-background rounded-xl hover:bg-surface-hover hover:border-primary/40 text-secondary-text hover:text-main-text transition-all shadow-xs cursor-pointer active:scale-95 shrink-0"
+                  title="ថយ 1 ថ្ងៃ (-1 ថ្ងៃ)"
                 >
                   <ChevronLeft size={16} />
                 </button>
-                <div className="relative group cursor-pointer">
-                  <div className="flex items-center gap-2 px-3.5 py-2 border border-border bg-background rounded-xl group-hover:border-primary transition-colors shadow-xs">
-                    <Calendar size={15} className="text-primary" />
-                    <span className="font-semibold text-main-text text-sm">{formatDateDisplay(selectedDate)}</span>
-                  </div>
+
+                {/* Date Display & Direct Calendar Picker Trigger */}
+                <div 
+                  onClick={openDatePicker}
+                  className="relative flex items-center gap-2 px-3.5 py-2.5 border border-border bg-background hover:bg-surface-hover hover:border-primary/50 rounded-xl transition-all shadow-xs cursor-pointer group shrink-0"
+                  title="ចុចដើម្បីបើកប្រតិទិនរើសថ្ងៃ ខែ ឆ្នាំ (Calendar Picker)"
+                >
+                  <Calendar size={15} className="text-primary group-hover:scale-110 transition-transform shrink-0" />
+                  <span className="font-semibold text-main-text text-xs sm:text-sm select-none">
+                    {formatDateDisplay(selectedDate)}
+                  </span>
+                  <ChevronDown size={14} className="text-secondary-text group-hover:text-main-text transition-colors shrink-0" />
                   <input 
+                    ref={dateInputRef}
                     type="date" 
                     value={selectedDate}
                     onChange={(e) => handleDateChange(e.target.value)}
-                    className="absolute inset-0 opacity-0 cursor-pointer w-full"
+                    className="absolute inset-0 opacity-0 pointer-events-none w-full h-full"
+                    tabIndex={-1}
                   />
                 </div>
+
+                {/* Step Day Forward (>) */}
                 <button 
                   type="button"
                   onClick={() => changeDate(1)}
-                  className="p-2.5 border border-border bg-background rounded-xl hover:bg-surface-hover text-secondary-text transition-colors shadow-xs"
-                  title="ថ្ងៃបន្ទាប់"
+                  className="p-2.5 border border-border bg-background rounded-xl hover:bg-surface-hover hover:border-primary/40 text-secondary-text hover:text-main-text transition-all shadow-xs cursor-pointer active:scale-95 shrink-0"
+                  title="ទៅមុខ 1 ថ្ងៃ (+1 ថ្ងៃ)"
                 >
                   <ChevronRight size={16} />
                 </button>
+
+                {/* Step Month Forward (>>) */}
+                <button 
+                  type="button"
+                  onClick={() => changeMonth(1)}
+                  className="p-2.5 border border-border bg-background rounded-xl hover:bg-surface-hover hover:border-primary/40 text-secondary-text hover:text-main-text transition-all shadow-xs cursor-pointer active:scale-95 shrink-0"
+                  title="ទៅមុខ 1 ខែ (+1 ខែ)"
+                >
+                  <ChevronsRight size={16} />
+                </button>
+
+                {/* Today */}
                 <button 
                   type="button"
                   onClick={setToday}
-                  className="px-3 py-2 bg-surface-hover text-main-text border border-border font-medium rounded-xl hover:bg-border transition-colors text-xs shadow-xs"
+                  className="px-3.5 py-2.5 bg-surface-hover hover:bg-border text-main-text border border-border font-medium rounded-xl transition-all text-xs shadow-xs cursor-pointer active:scale-95 shrink-0"
+                  title="ត្រឡប់មកថ្ងៃនេះ"
                 >
                   ថ្ងៃនេះ
                 </button>
