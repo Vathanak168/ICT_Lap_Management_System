@@ -459,7 +459,7 @@ const PCIssues = () => {
 
       {/* Main Table Card */}
       <div className="bg-surface rounded-2xl border border-border/80 shadow-xs overflow-hidden">
-        {isLoading && !isSaving ? (
+        {isLoading && issues.length === 0 && !isSaving ? (
           <div className="flex items-center justify-center p-16 text-secondary-text gap-3">
             <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             <span className="text-sm font-medium">កំពុងទាញយកទិន្នន័យបញ្ហាកុំព្យូទ័រ...</span>

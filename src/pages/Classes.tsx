@@ -498,7 +498,7 @@ const Classes = () => {
         </div>
 
         {/* Classes Table */}
-        {isLoading && !isSaving ? (
+        {isLoading && classes.length === 0 && !isSaving ? (
           <div className="flex items-center justify-center p-16 text-secondary-text gap-3">
             <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             <span className="text-sm font-medium">កំពុងទាញយកទិន្នន័យថ្នាក់...</span>
