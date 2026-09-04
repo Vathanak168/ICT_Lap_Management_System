@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { BookOpen, CheckCircle2, Sparkles, Edit, Trash2, Star, Target, Check } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { BookOpen, CheckCircle2, Edit, Trash2, Star, Target, Check, Link, ExternalLink, X } from 'lucide-react';
 import { initDB } from '../store/db';
 import type { ClassRecord, LessonPlanTrack } from '../store/db';
 import { Button } from '../components/ui/Button';
@@ -13,12 +13,6 @@ const LessonPlanPage = () => {
   
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  
-  const [uploadError, setUploadError] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const loadRequestRef = useRef(0);
   
   const { language } = useLanguage();
@@ -105,97 +99,7 @@ const LessonPlanPage = () => {
     }
   };
 
-  const generateDeterministicId = (plan: any, classId: string, year: string) => {
-    const rawString = `${year}_${classId}_${plan.month}_${plan.week}_${plan.lessonTitle}`;
-    let hash = 0;
-    for (let i = 0; i < rawString.length; i++) {
-      const char = rawString.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return `plan_${Math.abs(hash)}_${Date.now().toString().slice(-4)}`;
-  };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedClass || !activeYear) return;
-
-    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
-    if (!allowedTypes.has(file.type)) {
-      setUploadError(language === 'KH' ? 'អនុញ្ញាតតែឯកសាររូបភាព (JPEG, PNG, WEBP) ប៉ុណ្ណោះ។' : 'Only image files (JPEG, PNG, WEBP) are allowed.');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setUploadError(language === 'KH' ? 'ទំហំរូបភាពត្រូវតូចជាង ៥ មេហ្គាបៃ (5MB)។' : 'Image size must be less than 5 MB.');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    const uploadClassId = selectedClass;
-    const uploadAcademicYear = activeYear;
-
-    setIsUploading(true);
-    setUploadError('');
-    setSuccessMessage('');
-
-    try {
-      const readAsDataURL = (file: File): Promise<string> =>
-        new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            if (typeof reader.result !== 'string') reject(new Error('Invalid file result.'));
-            else resolve(reader.result);
-          };
-          reader.onerror = () => reject(reader.error ?? new Error('Failed to read file.'));
-          reader.readAsDataURL(file);
-        });
-
-      const dataUrl = await readAsDataURL(file);
-      const base64String = dataUrl.split(',')[1];
-      
-      const { extractLessonPlanFromImage } = await import('../lib/ai/core');
-      const extractedPlans = await extractLessonPlanFromImage(base64String, file.type);
-      
-      if (!Array.isArray(extractedPlans) || extractedPlans.length === 0) {
-        throw new Error('No lesson plans found in the image.');
-      }
-
-      const db = await initDB();
-      const newPlans: LessonPlanTrack[] = extractedPlans.map(plan => {
-        const safeMonth = String(plan.month || 'Unknown').trim();
-        const safeWeek = String(plan.week || 'Unknown').trim();
-        const safeTitle = String(plan.lessonTitle || 'Untitled').trim();
-        const deterministicId = generateDeterministicId({ month: safeMonth, week: safeWeek, lessonTitle: safeTitle }, uploadClassId, uploadAcademicYear);
-
-        return {
-          id: deterministicId,
-          classId: uploadClassId,
-          month: safeMonth,
-          week: safeWeek,
-          lessonTitle: safeTitle,
-          topics: String(plan.topics || '').trim(),
-          exercises: String(plan.exercises || '').trim(),
-          status: 'Planned',
-          academicYear: uploadAcademicYear,
-          completedDate: null
-        };
-      });
-
-      await db.putMany('lessonPlans', newPlans);
-      setSuccessMessage(language === 'KH' ? `បានរក្សាទុកមេរៀនចំនួន ${newPlans.length} ដោយជោគជ័យ!` : `Saved ${newPlans.length} lessons!`);
-      
-      if (selectedClass === uploadClassId && activeYear === uploadAcademicYear) {
-        await fetchPlans(uploadClassId, uploadAcademicYear);
-      }
-    } catch (error: any) {
-      setUploadError(error.message);
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
 
   const toggleStatus = async (plan: LessonPlanTrack) => {
     if (!selectedClass || !activeYear) return;
@@ -210,6 +114,38 @@ const LessonPlanPage = () => {
       await fetchPlans(selectedClass, activeYear as string);
     } catch (error) {
       console.error('Failed to toggle status:', error);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+
+  const handleAddManual = async () => {
+    if (!selectedClass || !activeYear) return;
+    setIsUpdating(true);
+    try {
+      const db = await initDB();
+      const newPlan: LessonPlanTrack = {
+        id: 'plan_manual_' + Date.now(),
+        classId: selectedClass,
+        month: language === 'KH' ? 'ខែថ្មី' : 'New Month',
+        week: language === 'KH' ? 'សប្តាហ៍ថ្មី' : 'New Week',
+        lessonTitle: language === 'KH' ? 'មេរៀនថ្មី (ឧទាហរណ៍ Word)' : 'New Lesson (e.g. Word)',
+        topics: '-',
+        exercises: '-',
+        status: 'Planned',
+        academicYear: activeYear,
+        completedDate: null,
+        links: []
+      };
+      await db.add('lessonPlans', newPlan);
+      await fetchPlans(selectedClass, activeYear);
+      
+      setEditingPlanId(newPlan.id);
+      setEditFormData(newPlan);
+      setSelectedMonth(newPlan.month);
+    } catch (error) {
+      console.error('Failed to add manual lesson:', error);
     } finally {
       setIsUpdating(false);
     }
@@ -263,6 +199,38 @@ const LessonPlanPage = () => {
     }
   };
 
+
+  const handleAddLink = async (plan: LessonPlanTrack) => {
+    const url = window.prompt(language === 'KH' ? 'សូមបញ្ចូលតំណភ្ជាប់' : 'Please enter a URL');
+    if (!url) return;
+    setIsUpdating(true);
+    try {
+      const db = await initDB();
+      const newLinks = [...(plan.links || []), url];
+      await db.update('lessonPlans', plan.id, { links: newLinks });
+      await fetchPlans(selectedClass, activeYear as string);
+    } catch (error) {
+      console.error('Failed to add link:', error);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleRemoveLink = async (plan: LessonPlanTrack, urlToRemove: string) => {
+    if (!window.confirm(language === 'KH' ? 'តើអ្នកពិតជាចង់លុបតំណភ្ជាប់នេះមែនទេ?' : 'Remove this link?')) return;
+    setIsUpdating(true);
+    try {
+      const db = await initDB();
+      const newLinks = (plan.links || []).filter(url => url !== urlToRemove);
+      await db.update('lessonPlans', plan.id, { links: newLinks });
+      await fetchPlans(selectedClass, activeYear as string);
+    } catch (error) {
+      console.error('Failed to remove link:', error);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   // UI Derived State
   const availableMonths = useMemo(() => {
     const months = new Set<string>();
@@ -288,72 +256,19 @@ const LessonPlanPage = () => {
   const plannedCount = monthPlans.length - completedCount;
   const progressPercent = monthPlans.length > 0 ? Math.round((completedCount / monthPlans.length) * 100) : 0;
 
-  // Placeholder weeks generation logic
-  const standardWeeks = language === 'KH' 
-    ? ['សប្តាហ៍ទី១', 'សប្តាហ៍ទី២', 'សប្តាហ៍ទី៣', 'សប្តាហ៍ទី៤'] 
-    : ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-
-  const renderedWeeks = useMemo(() => {
-    if (monthPlans.length === 0) return [];
-    
-    // We try to match existing plans to standard weeks or just show them in order.
-    // To properly show "Missing Weeks", we need to figure out which weeks are present.
-    // For simplicity in Phase 1, we map standard weeks. If a standard week isn't found, we return a placeholder.
-    // We also include any non-standard weeks that exist.
-    
-    const rendered: (LessonPlanTrack | { isMissing: true, week: string })[] = [];
-    
-    standardWeeks.forEach(stdWeek => {
-      const normalizedStd = stdWeek.toLowerCase().replace(/\s/g, '');
-      const matchedPlans = monthPlans.filter(p => p.week.toLowerCase().replace(/\s/g, '').includes(normalizedStd) || normalizedStd.includes(p.week.toLowerCase().replace(/\s/g, '')));
-      
-      if (matchedPlans.length > 0) {
-        matchedPlans.forEach(mp => {
-          if (!rendered.some(r => 'id' in r && r.id === mp.id)) {
-            rendered.push(mp);
-          }
-        });
-      } else {
-        rendered.push({ isMissing: true, week: stdWeek });
-      }
-    });
-
-    // Add any remaining plans that didn't match standard week names
-    monthPlans.forEach(mp => {
-      if (!rendered.some(r => 'id' in r && r.id === mp.id)) {
-        rendered.push(mp);
-      }
-    });
-
-    return rendered;
-  }, [monthPlans, standardWeeks]);
+  const plannedPlans = monthPlans.filter(p => p.status === 'Planned');
+  const completedPlans = monthPlans.filter(p => p.status === 'Completed');
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-2">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2 text-[#2a5298]">
-            <BookOpen className="text-[#2a5298]" size={28} />
-            {language === 'KH' ? 'កន្លែងធ្វើការបង្រៀនប្រចាំសប្តាហ៍' : 'Weekly Teaching Workspace'}
-          </h1>
-          <p className="text-gray-500 mt-1">
-            {language === 'KH' ? 'រៀបចំផែនការ និងតាមដានដំណើរការបង្រៀន' : 'Plan and track your teaching progress'}
-          </p>
-        </div>
-        <div className="flex gap-3">
-             <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={(e) => void handleFileUpload(e)} />
-             <Button variant="primary" onClick={() => fileInputRef.current?.click()} disabled={isUploading || isUpdating || isLoading || !selectedClass || !activeYear} icon={Sparkles}>
-                {isUploading ? (language === 'KH' ? 'កំពុងអានរូបភាព...' : 'Parsing Image...') : (language === 'KH' ? 'ទាញពីកាលវិភាគរូបថត' : 'Extract from Image')}
-             </Button>
-        </div>
-      </div>
+             
 
       {/* Top Bar: Class Selector */}
-      <div className={`bg-white px-6 py-4 rounded-xl border border-gray-200 shadow-sm flex items-center gap-6 ${isLoading || isUpdating ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div className={`bg-surface px-5 py-4 rounded-2xl border border-border/80 shadow-xs flex items-center justify-between gap-6 ${isLoading || isUpdating ? 'opacity-50 pointer-events-none' : ''}`}>
         <div className="w-full max-w-xs">
-          <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{language === 'KH' ? 'ថ្នាក់រៀន' : 'Class'}</label>
+          <label className="block text-[11px] font-bold text-secondary-text uppercase tracking-wider mb-1.5">{language === 'KH' ? 'ថ្នាក់រៀន' : 'Class'}</label>
           <select 
-            className="w-full bg-slate-50 border border-gray-200 text-gray-800 text-sm font-semibold rounded-lg px-3 py-2 outline-none focus:border-[#2a5298]"
+            className="w-full bg-background border border-border text-main-text text-sm font-medium rounded-xl px-3.5 py-2 outline-hidden focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all cursor-pointer shadow-2xs"
             value={selectedClass}
             onChange={(e) => setSelectedClass(e.target.value)}
           >
@@ -363,230 +278,220 @@ const LessonPlanPage = () => {
             {classes.length === 0 && <option value="">{language === 'KH' ? 'មិនមានថ្នាក់' : 'No Classes'}</option>}
           </select>
         </div>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => void handleAddManual()} disabled={isUpdating || isLoading || !selectedClass || !activeYear} icon={BookOpen}>
+            {language === 'KH' ? 'បន្ថែមមេរៀន' : 'Add Lesson'}
+          </Button>
+        </div>
       </div>
 
-      {uploadError && <div className="bg-red-50 text-red-600 p-4 rounded-lg border border-red-200">{uploadError}</div>}
-      {successMessage && <div className="bg-green-50 text-green-600 p-4 rounded-lg border border-green-200 flex justify-between items-center"><span>{successMessage}</span><button onClick={() => setSuccessMessage('')}>&times;</button></div>}
-
       {isLoading && !isUpdating ? (
-        <div className="bg-white p-12 text-center rounded-xl border border-gray-200 shadow-sm">
-           <div className="animate-spin h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-           <p className="text-gray-500">{language === 'KH' ? 'កំពុងទាញយក...' : 'Loading...'}</p>
+        <div className="bg-surface p-12 text-center rounded-2xl border border-border/80 shadow-xs">
+           <div className="animate-spin h-7 w-7 border-b-2 border-primary mx-auto mb-3"></div>
+           <p className="text-xs text-secondary-text">{language === 'KH' ? 'កំពុងទាញយក...' : 'Loading...'}</p>
         </div>
-      ) : lessonPlans.length === 0 && !isUploading ? (
-        <div className="bg-white p-12 text-center rounded-xl border border-gray-200 shadow-sm flex flex-col items-center">
-          <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mb-4">
-            <BookOpen size={40} className="text-[#2a5298]" />
+      ) : lessonPlans.length === 0 ? (
+        <div className="bg-surface p-12 text-center rounded-2xl border border-border/80 shadow-xs flex flex-col items-center">
+          <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mb-3 shadow-2xs">
+            <BookOpen size={28} className="text-primary" />
           </div>
-          <h3 className="text-xl font-bold text-gray-800 mb-2">
+          <h3 className="text-base font-bold text-main-text mb-1">
             {language === 'KH' ? `មិនទាន់មានផែនការបង្រៀនសម្រាប់ថ្នាក់នេះទេ` : 'No Lesson Plans Yet'}
           </h3>
-          <p className="text-gray-500 max-w-md mx-auto mb-6 text-sm">
-            {language === 'KH' 
-              ? 'លោកគ្រូអាចទាញយកទិន្នន័យពីកាលវិភាគរូបថត ឬប្រាប់ AI Assistant ឲ្យបង្កើតមេរៀនដោយស្វ័យប្រវត្តិ។' 
-              : 'Extract from a syllabus photo, or ask the AI Assistant to generate a lesson plan.'}
-          </p>
-          <div className="flex gap-4">
-             <Button variant="primary" onClick={() => fileInputRef.current?.click()} icon={Sparkles}>
-                {language === 'KH' ? 'ទាញពីកាលវិភាគរូបថត (Image)' : 'Import from Image'}
-             </Button>
-          </div>
         </div>
       ) : (
-        <div className={`space-y-6 ${isUpdating ? 'opacity-50 pointer-events-none' : ''}`}>
+        <div className={`space-y-5 ${isUpdating ? 'opacity-50 pointer-events-none' : ''}`}>
           
           {/* Phase 1: Next Lesson Card */}
           {nextLesson && (
-            <div className="bg-gradient-to-r from-[#2a5298] to-[#1e3c72] rounded-xl p-6 text-white shadow-lg relative overflow-hidden">
-               <div className="absolute top-0 right-0 p-4 opacity-10">
+            <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 rounded-2xl p-5 text-white shadow-xs relative overflow-hidden">
+               <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
                  <Star size={100} />
                </div>
                <div className="relative z-10">
-                 <div className="flex items-center gap-2 text-blue-200 font-bold text-sm tracking-wider uppercase mb-3">
-                   <Target size={16} /> {language === 'KH' ? 'មេរៀនបន្ទាប់ (Next Lesson)' : 'Next Lesson'}
+                 <div className="flex items-center gap-2 text-blue-200 font-bold text-[11px] tracking-wider uppercase mb-2">
+                   <Target size={15} /> {language === 'KH' ? 'មេរៀនបន្ទាប់' : 'Next Lesson'}
                  </div>
-                 <h2 className="text-2xl md:text-3xl font-bold mb-2">{nextLesson.lessonTitle}</h2>
-                 <div className="flex items-center gap-3 text-blue-100 mb-4 text-sm">
-                   <span className="bg-white/20 px-2 py-1 rounded">{nextLesson.month}</span>
-                   <span className="bg-white/20 px-2 py-1 rounded">{nextLesson.week}</span>
+                 <h2 className="text-lg sm:text-xl font-bold tracking-tight mb-1.5">{nextLesson.lessonTitle}</h2>
+                 <div className="flex items-center gap-2 text-blue-100 mb-3 text-xs">
+                   <span className="bg-white/15 px-2.5 py-0.5 rounded-md font-semibold">{nextLesson.month}</span>
+                   <span className="bg-white/15 px-2.5 py-0.5 rounded-md font-semibold">{nextLesson.week}</span>
                  </div>
-                 <p className="text-blue-50 mb-6 max-w-2xl"><strong className="text-white">Topics:</strong> {nextLesson.topics}</p>
-                 <div className="flex gap-3">
+                 <p className="text-blue-100/90 mb-4 max-w-2xl text-xs sm:text-sm"><strong className="text-white font-semibold">Topics:</strong> {nextLesson.topics}</p>
+                 <div className="flex gap-2.5">
                     <button 
                       onClick={() => void toggleStatus(nextLesson)}
-                      className="bg-white text-[#2a5298] hover:bg-blue-50 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors shadow-sm"
+                      className="bg-white text-blue-800 hover:bg-blue-50 px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs active:scale-95 cursor-pointer"
                     >
-                      <Check size={18} /> {language === 'KH' ? 'សម្គាល់ថាបានបង្រៀន' : 'Mark Completed'}
+                      <Check size={15} /> {language === 'KH' ? 'សម្គាល់ថាបានបង្រៀន' : 'Mark Completed'}
                     </button>
                     <button 
                       onClick={() => {
                         setSelectedMonth(nextLesson.month);
                         setEditingPlanId(nextLesson.id);
                         setEditFormData(nextLesson);
-                        // scroll to it if needed
                       }}
-                      className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors border border-white/30"
+                      className="bg-white/15 hover:bg-white/25 text-white px-3.5 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all border border-white/20 active:scale-95 cursor-pointer"
                     >
-                      <Edit size={16} /> {language === 'KH' ? 'កែប្រែ' : 'Edit'}
+                      <Edit size={14} /> {language === 'KH' ? 'កែប្រែ' : 'Edit'}
                     </button>
                  </div>
                </div>
             </div>
           )}
 
-          {/* Phase 1: Month Selector & Progress */}
-          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-             <div className="flex flex-wrap gap-2 mb-6">
-                {availableMonths.map(month => (
-                  <button 
-                    key={month}
-                    onClick={() => setSelectedMonth(month)}
-                    className={`px-4 py-2 rounded-full font-bold text-sm transition-colors border
-                      ${selectedMonth === month 
-                        ? 'bg-[#2a5298] text-white border-[#2a5298] shadow-sm' 
-                        : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
-                  >
-                    {month}
-                  </button>
-                ))}
+          {/* Progress Analytics */}
+          <div className="bg-surface border border-border/80 rounded-2xl p-5 shadow-xs">
+             <div className="flex justify-between items-end mb-3">
+                <div>
+                  <h3 className="font-bold text-main-text text-sm sm:text-base">{language === 'KH' ? `ខែ៖ ${selectedMonth}` : `${selectedMonth} Progress`}</h3>
+                  <p className="text-xs text-secondary-text mt-1">
+                    <span className="font-semibold text-main-text">{monthPlans.length}</span> {language === 'KH' ? 'មេរៀនសរុប' : 'Total Lessons'} &bull; <span className="font-semibold text-emerald-600">{completedCount}</span> {language === 'KH' ? 'បញ្ចប់' : 'Completed'} &bull; <span className="font-semibold text-primary">{plannedCount}</span> {language === 'KH' ? 'នៅសល់' : 'Remaining'}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold text-primary">{progressPercent}%</div>
+                </div>
              </div>
-
-             <div className="bg-slate-50 border border-slate-200 rounded-lg p-5">
-                <div className="flex justify-between items-end mb-3">
-                   <div>
-                     <h3 className="font-bold text-gray-800 text-lg">{language === 'KH' ? `ខែ៖ ${selectedMonth}` : `${selectedMonth} Progress`}</h3>
-                     <p className="text-sm text-gray-500 mt-1">
-                       <span className="font-semibold text-gray-700">{monthPlans.length}</span> Lessons &bull; <span className="font-semibold text-green-600">{completedCount}</span> Completed &bull; <span className="font-semibold text-blue-600">{plannedCount}</span> Planned
-                     </p>
-                   </div>
-                   <div className="text-2xl font-black text-[#2a5298]">{progressPercent}%</div>
-                </div>
-                <div className="h-3 w-full bg-gray-200 rounded-full overflow-hidden">
-                   <div className="h-full bg-green-500 transition-all duration-500" style={{ width: `${progressPercent}%` }}></div>
-                </div>
+             <div className="w-full bg-background rounded-full h-2.5 border border-border/60 overflow-hidden">
+                <div className="bg-gradient-to-r from-blue-600 to-indigo-600 h-2.5 rounded-full transition-all duration-500" style={{ width: `${progressPercent}%` }}></div>
              </div>
           </div>
 
-          {/* Lesson List */}
-          <div className="space-y-4">
-             {renderedWeeks.map((item, idx) => {
-               // 1. Missing Week Placeholder
-               if ('isMissing' in item) {
-                 return (
-                   <div key={`missing-${idx}`} className="bg-white border border-dashed border-gray-300 rounded-xl p-5 flex items-center justify-between opacity-70 hover:opacity-100 transition-opacity">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 font-bold text-sm">
-                           {item.week.slice(-1) || '?'}
-                        </div>
-                        <div>
-                          <div className="font-bold text-gray-700">{item.week}</div>
-                          <div className="text-sm text-gray-500">{language === 'KH' ? 'មិនទាន់មានមេរៀន' : 'No lesson planned'}</div>
-                        </div>
-                      </div>
-                      <Button variant="secondary" className="text-sm" icon={Sparkles} onClick={() => alert(language === 'KH' ? 'សូមប្រាប់ AI Assistant ដើម្បីបង្កើតមេរៀននេះ!' : 'Ask the AI Assistant to generate this week!')}>
-                        {language === 'KH' ? 'បង្កើត (AI)' : 'Generate AI'}
-                      </Button>
-                   </div>
-                 );
-               }
+          {/* Kanban Board */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+             
+             {/* Planned Column */}
+             <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100">
+                <h3 className="font-bold text-blue-800 mb-4 pb-2 border-b border-blue-200 flex items-center gap-2">
+                   <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                   {language === 'KH' ? 'គ្រោងបង្រៀន' : 'Planned'}
+                   <span className="bg-blue-200 text-blue-800 text-xs py-0.5 px-2 rounded-full ml-auto">{plannedPlans.length}</span>
+                </h3>
+                
+                <div className="space-y-4">
+                   {plannedPlans.length === 0 && (
+                     <div className="text-center p-8 text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg">
+                       {language === 'KH' ? 'គ្មានមេរៀនទេ' : 'No planned lessons'}
+                     </div>
+                   )}
+                   {plannedPlans.map(plan => renderLessonCard(plan))}
+                </div>
+             </div>
 
-               const plan = item as LessonPlanTrack;
-               const isEditing = editingPlanId === plan.id;
+             {/* Completed Column */}
+             <div className="bg-green-50/50 p-4 rounded-xl border border-green-100">
+                <h3 className="font-bold text-green-800 mb-4 pb-2 border-b border-green-200 flex items-center gap-2">
+                   <CheckCircle2 size={16} className="text-green-600" />
+                   {language === 'KH' ? 'បង្រៀនរួច' : 'Completed'}
+                   <span className="bg-green-200 text-green-800 text-xs py-0.5 px-2 rounded-full ml-auto">{completedPlans.length}</span>
+                </h3>
+                
+                <div className="space-y-4">
+                   {completedPlans.length === 0 && (
+                     <div className="text-center p-8 text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg">
+                       {language === 'KH' ? 'មិនទាន់មានមេរៀនបញ្ចាប់' : 'No completed lessons yet'}
+                     </div>
+                   )}
+                   {completedPlans.map(plan => renderLessonCard(plan))}
+                </div>
+             </div>
 
-               // 2. Inline Edit Mode
-               if (isEditing) {
-                 return (
-                   <div key={plan.id} className="bg-blue-50 border border-blue-200 rounded-xl p-6 shadow-md">
-                      <div className="flex justify-between items-center mb-4">
-                        <div className="font-bold text-blue-800 flex items-center gap-2"><Edit size={18}/> {language === 'KH' ? 'កែប្រែមេរៀន' : 'Edit Lesson'}</div>
-                        <div className="flex gap-2">
-                           <input type="text" className="w-20 px-2 py-1 rounded border border-gray-300 text-sm" value={editFormData.month || ''} onChange={e => setEditFormData({...editFormData, month: e.target.value})} placeholder="Month" />
-                           <input type="text" className="w-24 px-2 py-1 rounded border border-gray-300 text-sm" value={editFormData.week || ''} onChange={e => setEditFormData({...editFormData, week: e.target.value})} placeholder="Week" />
-                        </div>
-                      </div>
-                      <div className="space-y-3">
-                         <div>
-                           <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'ចំណងជើងមេរៀន' : 'Lesson Title'}</label>
-                           <input type="text" className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1" value={editFormData.lessonTitle || ''} onChange={e => setEditFormData({...editFormData, lessonTitle: e.target.value})} />
-                         </div>
-                         <div>
-                           <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'ចំណុចសំខាន់ៗ' : 'Topics'}</label>
-                           <textarea className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1" rows={2} value={editFormData.topics || ''} onChange={e => setEditFormData({...editFormData, topics: e.target.value})} />
-                         </div>
-                         <div>
-                           <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'លំហាត់' : 'Exercises'}</label>
-                           <input type="text" className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1" value={editFormData.exercises || ''} onChange={e => setEditFormData({...editFormData, exercises: e.target.value})} />
-                         </div>
-                      </div>
-                      <div className="flex justify-end gap-3 mt-5">
-                         <button onClick={() => setEditingPlanId(null)} className="px-4 py-2 text-gray-600 font-bold hover:bg-gray-100 rounded-lg transition-colors">{language === 'KH' ? 'បោះបង់' : 'Cancel'}</button>
-                         <button onClick={() => void saveInlineEdit(plan.id)} className="px-6 py-2 bg-[#2a5298] text-white font-bold rounded-lg hover:bg-blue-800 transition-colors shadow-sm">{language === 'KH' ? 'រក្សាទុក' : 'Save'}</button>
-                      </div>
-                   </div>
-                 );
-               }
-
-               // 3. Normal View Mode
-               return (
-                 <div key={plan.id} className="bg-white border border-gray-200 rounded-xl p-5 flex flex-col md:flex-row gap-5 hover:border-blue-300 transition-colors shadow-sm group">
-                    <div className="md:w-32 flex-shrink-0 border-b md:border-b-0 md:border-r border-gray-100 pb-3 md:pb-0 md:pr-4 flex flex-row md:flex-col items-center md:items-start justify-between md:justify-start gap-2">
-                       <div>
-                         <div className="font-black text-gray-800 text-lg">{plan.week}</div>
-                         <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">{plan.month}</div>
-                       </div>
-                       <div className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 mt-0 md:mt-2
-                         ${plan.status === 'Completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                         {plan.status === 'Completed' ? <CheckCircle2 size={12}/> : <div className="w-2 h-2 rounded-full bg-amber-500" />}
-                         {plan.status === 'Completed' ? (language === 'KH' ? 'បានបង្រៀន' : 'Completed') : (language === 'KH' ? 'គ្រោងទុក' : 'Planned')}
-                       </div>
-                    </div>
-                    
-                    <div className="flex-1 space-y-2">
-                       <h4 className="font-bold text-gray-900 text-xl">{plan.lessonTitle}</h4>
-                       <p className="text-gray-600 text-sm leading-relaxed"><strong className="text-gray-800">{language === 'KH' ? 'ចំណុចសំខាន់ៗ៖' : 'Topics:'}</strong> {plan.topics}</p>
-                       {plan.exercises && <p className="text-gray-600 text-sm leading-relaxed"><strong className="text-gray-800">{language === 'KH' ? 'លំហាត់៖' : 'Exercises:'}</strong> {plan.exercises}</p>}
-                       {plan.status === 'Completed' && plan.completedDate && (
-                         <p className="text-xs text-green-600 font-medium mt-2">
-                           {language === 'KH' ? 'បានបង្រៀននៅ៖ ' : 'Completed on: '} {new Date(plan.completedDate).toLocaleDateString()}
-                         </p>
-                       )}
-                    </div>
-                    
-                    <div className="flex flex-row md:flex-col gap-2 justify-start md:justify-start pt-2 md:pt-0">
-                       <button 
-                         onClick={() => void toggleStatus(plan)}
-                         className={`p-2 rounded-lg transition-colors flex items-center justify-center
-                           ${plan.status === 'Completed' ? 'text-green-600 bg-green-50 hover:bg-green-100' : 'text-blue-600 bg-blue-50 hover:bg-blue-100'}`}
-                         title={plan.status === 'Completed' ? 'Mark Planned' : 'Mark Completed'}
-                       >
-                         <CheckCircle2 size={20} />
-                       </button>
-                       <button 
-                         onClick={() => {
-                           setEditingPlanId(plan.id);
-                           setEditFormData(plan);
-                         }}
-                         className="p-2 rounded-lg text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors flex items-center justify-center opacity-100 md:opacity-0 group-hover:opacity-100"
-                         title="Edit"
-                       >
-                         <Edit size={20} />
-                       </button>
-                       <button 
-                         onClick={() => void handleDelete(plan.id)}
-                         className="p-2 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors flex items-center justify-center opacity-100 md:opacity-0 group-hover:opacity-100"
-                         title="Delete"
-                       >
-                         <Trash2 size={20} />
-                       </button>
-                    </div>
-                 </div>
-               );
-             })}
           </div>
         </div>
       )}
     </div>
   );
+
+  function renderLessonCard(plan: LessonPlanTrack) {
+    const isEditing = editingPlanId === plan.id;
+    if (isEditing) {
+      return (
+        <div key={plan.id} className="bg-white border-2 border-[#2a5298] rounded-xl p-4 shadow-md">
+           <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'ចំណងជើងមេរៀន' : 'Lesson Title'}</label>
+                <input type="text" className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1" value={editFormData.lessonTitle || ''} onChange={e => setEditFormData({...editFormData, lessonTitle: e.target.value})} />
+              </div>
+              <div className="flex gap-2">
+                 <div className="flex-1">
+                   <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'ខែ' : 'Month'}</label>
+                   <input type="text" className="w-full px-3 py-2 rounded border border-gray-300 mt-1 text-sm" value={editFormData.month || ''} onChange={e => setEditFormData({...editFormData, month: e.target.value})} />
+                 </div>
+                 <div className="flex-1">
+                   <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'សប្តាហ៍' : 'Week'}</label>
+                   <input type="text" className="w-full px-3 py-2 rounded border border-gray-300 mt-1 text-sm" value={editFormData.week || ''} onChange={e => setEditFormData({...editFormData, week: e.target.value})} />
+                 </div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'ប្រធានបទ' : 'Topics'}</label>
+                <textarea className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1 text-sm" rows={2} value={editFormData.topics || ''} onChange={e => setEditFormData({...editFormData, topics: e.target.value})} />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase">{language === 'KH' ? 'លំហាត់' : 'Exercises'}</label>
+                <input type="text" className="w-full px-3 py-2 rounded-lg border border-gray-300 mt-1 text-sm" value={editFormData.exercises || ''} onChange={e => setEditFormData({...editFormData, exercises: e.target.value})} />
+              </div>
+           </div>
+           <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setEditingPlanId(null)} className="px-3 py-1.5 text-gray-600 text-sm font-bold hover:bg-gray-100 rounded-lg">{language === 'KH' ? 'បោះបង់' : 'Cancel'}</button>
+              <button onClick={() => void saveInlineEdit(plan.id)} className="px-4 py-1.5 bg-[#2a5298] text-white text-sm font-bold rounded-lg hover:bg-blue-800 shadow-sm">{language === 'KH' ? 'រក្សាទុក' : 'Save'}</button>
+           </div>
+        </div>
+      );
+    }
+
+    return (
+      <div key={plan.id} className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow group relative overflow-hidden">
+         {plan.status === 'Completed' && <div className="absolute top-0 left-0 w-1 h-full bg-green-500"></div>}
+         {plan.status === 'Planned' && <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>}
+         
+         <div className="pl-3">
+            <div className="flex justify-between items-start mb-2">
+               <div>
+                  <div className="text-xs font-bold text-gray-500 uppercase bg-gray-100 inline-block px-2 py-0.5 rounded mb-1">{plan.week}</div>
+                  <h4 className="font-bold text-gray-900 text-lg leading-tight">{plan.lessonTitle}</h4>
+               </div>
+               <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button onClick={() => { setEditingPlanId(plan.id); setEditFormData(plan); }} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="Edit">
+                     <Edit size={14} />
+                  </button>
+                  <button onClick={() => void handleDelete(plan.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete">
+                     <Trash2 size={14} />
+                  </button>
+               </div>
+            </div>
+
+            <p className="text-gray-600 text-sm leading-relaxed mb-3 line-clamp-3">{plan.topics}</p>
+            
+            {plan.links && plan.links.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {plan.links.map((url, i) => (
+                  <div key={i} className="flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs border border-blue-100 group/link">
+                    <ExternalLink size={12} />
+                    <a href={url} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[120px]" title={url}>Link {i + 1}</a>
+                    <button onClick={() => void handleRemoveLink(plan, url)} className="ml-1 text-blue-400 hover:text-red-500 opacity-0 group-hover/link:opacity-100"><X size={12}/></button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-between items-center border-t border-gray-100 pt-3 mt-1">
+               <button onClick={() => void handleAddLink(plan)} className="text-xs font-medium text-gray-500 hover:text-blue-600 flex items-center gap-1">
+                 <Link size={14} /> {language === 'KH' ? 'ភ្ជាប់ឯកសារ' : 'Add Link'}
+               </button>
+
+               <button 
+                 onClick={() => void toggleStatus(plan)}
+                 className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors
+                   ${plan.status === 'Completed' ? 'bg-green-50 text-green-700 hover:bg-green-100' : 'bg-[#2a5298] text-white hover:bg-blue-800'}`}
+               >
+                 {plan.status === 'Completed' ? <><Trash2 size={14} className="hidden" /> ប្តូរទៅគ្រោង</> : <><Check size={14} /> បញ្ចប់</>}
+               </button>
+            </div>
+         </div>
+      </div>
+    );
+  }
 };
 
 export default LessonPlanPage;

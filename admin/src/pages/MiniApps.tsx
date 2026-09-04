@@ -23,6 +23,7 @@ const MiniApps = () => {
 
   useEffect(() => {
     fetchApps();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBranch]);
 
   const fetchApps = async () => {

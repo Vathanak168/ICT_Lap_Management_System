@@ -50,11 +50,21 @@ export const AcademicYearProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
 
       const storedYear = localStorage.getItem('active_academic_year');
-      
-      const selectedYear = 
-        years.find(item => item.year === storedYear)?.year ??
-        years.find(item => item.is_active)?.year ??
-        years[0].year;
+      const activeYearItem = years.find(item => item.is_active);
+      const storedYearItem = years.find(item => item.year === storedYear);
+      const explicitSessionSwitch = sessionStorage.getItem('user_switched_academic_year') === 'true';
+
+      // Prioritize active academic year on load so users are never stranded on obsolete years with no data
+      let selectedYear: string;
+      if (explicitSessionSwitch && storedYearItem) {
+        selectedYear = storedYearItem.year;
+      } else if (activeYearItem) {
+        selectedYear = activeYearItem.year;
+      } else if (storedYearItem) {
+        selectedYear = storedYearItem.year;
+      } else {
+        selectedYear = years[0].year;
+      }
 
       setActiveYear(selectedYear);
       localStorage.setItem('active_academic_year', selectedYear);
@@ -85,6 +95,7 @@ export const AcademicYearProvider: React.FC<{ children: React.ReactNode }> = ({ 
         return;
       }
     }
+    sessionStorage.setItem('user_switched_academic_year', 'true');
     setActiveYear(year);
     localStorage.setItem('active_academic_year', year);
   }, [academicYears]);
@@ -129,6 +140,13 @@ export const AcademicYearProvider: React.FC<{ children: React.ReactNode }> = ({ 
         'seatingPlans',
         'lessonLogs',
         'lessonPlans',
+        'teachingSchedules',
+        'teachingLogs',
+        'classCurriculums',
+        'curriculumLessons',
+        'subjects',
+        'pcIssues',
+        'pcSyncTasks',
         'classes' // Delete classes last
       ] as const;
 

@@ -1,5 +1,19 @@
-import { useState, useEffect, useRef } from 'react';
-import { Plus, Search, Edit2, Trash2, Users, BookOpen } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Plus, 
+  Search, 
+  Edit2, 
+  Trash2, 
+  Users, 
+  BookOpen, 
+  GraduationCap, 
+  Sun, 
+  Sunset, 
+  Moon, 
+  Link2,
+  CheckCircle2,
+  AlertTriangle
+} from 'lucide-react';
 import { initDB } from '../store/db';
 import type { ClassRecord } from '../store/db';
 import { Button } from '../components/ui/Button';
@@ -11,9 +25,11 @@ const Classes = () => {
   const [classes, setClasses] = useState<ClassRecord[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [shiftFilter, setShiftFilter] = useState<'ALL' | 'Morning' | 'Afternoon' | 'Evening'>('ALL');
   const { activeYear } = useAcademicYear();
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   
   const [currentClass, setCurrentClass] = useState<Partial<ClassRecord>>({
     name: '', shift: 'Morning', academicYear: activeYear || '', notes: '', linkedClassIds: []
@@ -22,6 +38,13 @@ const Classes = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   
   const loadRequestRef = useRef(0);
+
+  const showToast = (type: 'success' | 'error', text: string) => {
+    setToastMessage({ type, text });
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+  };
 
   const loadClasses = async (targetYear: string) => {
     if (!targetYear) return;
@@ -57,12 +80,12 @@ const Classes = () => {
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
-    if (!currentClass.name) {
+    if (!currentClass.name?.trim()) {
       newErrors.name = 'សូមបញ្ចូលឈ្មោះថ្នាក់';
     } else {
       const duplicate = classes.find(c => 
         c.id !== currentClass.id && 
-        c.name === currentClass.name && 
+        c.name.trim().toLowerCase() === currentClass.name?.trim().toLowerCase() && 
         c.shift === currentClass.shift
       );
       if (duplicate) {
@@ -76,7 +99,7 @@ const Classes = () => {
   const handleSave = async () => {
     if (!validateForm()) return;
     if (!activeYear) {
-      alert('សូមជ្រើសរើសឆ្នាំសិក្សាជាមុនសិន');
+      showToast('error', 'សូមជ្រើសរើសឆ្នាំសិក្សាជាមុនសិន');
       return;
     }
     
@@ -90,10 +113,10 @@ const Classes = () => {
       const id = currentClass.id || crypto.randomUUID();
       const newClass: ClassRecord = {
         id,
-        name: currentClass.name!,
+        name: currentClass.name!.trim(),
         shift: currentClass.shift as 'Morning' | 'Afternoon' | 'Evening',
         academicYear: targetYear, 
-        notes: currentClass.notes || '',
+        notes: currentClass.notes?.trim() || '',
         linkedClassIds: currentClass.linkedClassIds || []
       };
 
@@ -168,20 +191,21 @@ const Classes = () => {
       await Promise.all(updatePromises);
 
       setShowModal(false);
+      showToast('success', currentClass.id ? 'កែប្រែព័ត៌មានថ្នាក់ជោគជ័យ!' : 'បង្កើតថ្នាក់ថ្មីជោគជ័យ!');
       await loadClasses(targetYear);
     } catch (error) {
       console.error(error);
-      alert('មានបញ្ហាក្នុងការរក្សាទុកថ្នាក់');
+      showToast('error', 'មានបញ្ហាក្នុងការរក្សាទុកថ្នាក់');
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleDelete = async (classId: string) => {
+  const handleDelete = async (classId: string, className: string) => {
     if (!activeYear) return;
     const targetYear = activeYear;
 
-    if (window.confirm('តើអ្នកពិតជាចង់លុបថ្នាក់នេះមែនទេ? សិស្ស និងទិន្នន័យពាក់ព័ន្ធទាំងអស់ (វត្តមាន ពិន្ទុ កាលវិភាគ...) នឹងត្រូវលុបចោលទាំងស្រុងដោយមិនអាចទាញមកវិញបានទេ!')) {
+    if (window.confirm(`តើអ្នកពិតជាចង់លុបថ្នាក់ "${className}" មែនទេ? \n\nសិស្ស និងទិន្នន័យពាក់ព័ន្ធទាំងអស់ (វត្តមាន, ពិន្ទុ, ប្លង់តុ, កាលវិភាគ...) នឹងត្រូវលុបចោលទាំងស្រុងដោយមិនអាចទាញមកវិញបានទេ!`)) {
       setIsSaving(true);
       try {
         const db = await initDB();
@@ -194,6 +218,7 @@ const Classes = () => {
           allSeating,
           allLessonLogs,
           allLessonPlans,
+          allTeachingSchedules,
           allClasses
         ] = await Promise.all([
           db.getAll('students', targetYear),
@@ -202,6 +227,11 @@ const Classes = () => {
           db.getAll('seatingPlans', targetYear),
           db.getAll('lessonLogs', targetYear),
           db.getAll('lessonPlans', targetYear),
+          // Keep class deletion working before the optional schedule migration is installed.
+          db.getAll('teachingSchedules', targetYear).catch(error => {
+            console.warn('Teaching schedules are not available for cleanup:', error);
+            return [];
+          }),
           db.getAll('classes', targetYear)
         ]);
         
@@ -214,6 +244,7 @@ const Classes = () => {
         // Note: lessonLog uses classId or class depending on the data structure, check both
         const logIds = allLessonLogs.filter(l => l.classId === classId || l.class === classId).map(l => l.id);
         const planIds = allLessonPlans.filter(p => p.classId === classId).map(p => p.id);
+        const scheduleIds = allTeachingSchedules.filter(item => item.classId === classId).map(item => item.id);
         
         // Prepare promises for bulk deletion
         const deletePromises: Promise<void>[] = [];
@@ -224,6 +255,7 @@ const Classes = () => {
         if (seatingIds.length > 0) deletePromises.push(db.deleteMany('seatingPlans', seatingIds));
         if (logIds.length > 0) deletePromises.push(db.deleteMany('lessonLogs', logIds));
         if (planIds.length > 0) deletePromises.push(db.deleteMany('lessonPlans', planIds));
+        if (scheduleIds.length > 0) deletePromises.push(db.deleteMany('teachingSchedules', scheduleIds));
         
         // Clean up linkedClassIds in other classes that reference this deleted class
         allClasses.forEach(c => {
@@ -239,10 +271,11 @@ const Classes = () => {
         // Execute all deletes concurrently
         await Promise.all(deletePromises);
         
+        showToast('success', `បានលុបថ្នាក់ "${className}" និងទិន្នន័យពាក់ព័ន្ធជោគជ័យ!`);
         await loadClasses(targetYear);
       } catch (error) {
         console.error(error);
-        alert('បរាជ័យក្នុងការលុបថ្នាក់');
+        showToast('error', 'បរាជ័យក្នុងការលុបថ្នាក់');
       } finally {
         setIsSaving(false);
       }
@@ -270,127 +303,340 @@ const Classes = () => {
     }
   };
 
-  const filteredClasses = classes.filter(c => {
-    const matchSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchSearch;
-  });
+  // Shift counts
+  const morningCount = useMemo(() => classes.filter(c => c.shift === 'Morning').length, [classes]);
+  const afternoonCount = useMemo(() => classes.filter(c => c.shift === 'Afternoon').length, [classes]);
+  const eveningCount = useMemo(() => classes.filter(c => c.shift === 'Evening').length, [classes]);
+
+  // Filtered classes
+  const filteredClasses = useMemo(() => {
+    return classes.filter(c => {
+      // Shift filter
+      if (shiftFilter !== 'ALL' && c.shift !== shiftFilter) return false;
+      
+      // Search filter
+      if (searchTerm.trim()) {
+        const query = searchTerm.toLowerCase();
+        const matchesName = c.name.toLowerCase().includes(query);
+        const matchesNotes = (c.notes || '').toLowerCase().includes(query);
+        if (!matchesName && !matchesNotes) return false;
+      }
+
+      return true;
+    });
+  }, [classes, shiftFilter, searchTerm]);
 
   return (
-    <div className="flex flex-col w-full pb-10">
-      
-      {/* Top Panel: Filters & Actions */}
-      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
-          <span>កំណត់លក្ខខណ្ឌ (Filter Classes)</span>
+    <div className="flex flex-col w-full pb-16 space-y-6">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div 
+          className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-xl shadow-lg flex items-center gap-3 text-sm font-medium transition-all animate-in fade-in slide-in-from-top-3 ${
+            toastMessage.type === 'success' 
+              ? 'bg-emerald-600 text-white' 
+              : 'bg-rose-600 text-white'
+          }`}
+        >
+          {toastMessage.type === 'success' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+          <span>{toastMessage.text}</span>
         </div>
-        <div className="p-4 flex flex-col sm:flex-row gap-4 justify-between items-end">
-          <div className="flex flex-wrap items-center gap-6">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ស្វែងរក (Search)</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Search size={16} className="text-gray-400" />
-                </div>
-                <input 
-                  type="text"
-                  placeholder="ស្វែងរកឈ្មោះថ្នាក់..."
-                  className="w-full min-w-[250px] bg-white border border-gray-300 text-gray-800 text-sm rounded-sm pl-9 pr-3 py-2 outline-none focus:border-[#48b5c9] focus:ring-1 focus:ring-[#48b5c9] transition-all"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-            
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ឆ្នាំសិក្សា (Academic Year)</label>
-              <div className="w-full min-w-[200px] bg-gray-100 border border-gray-300 text-gray-600 font-medium text-sm rounded-sm px-3 py-2">
-                {activeYear || 'គ្មានឆ្នាំសិក្សា'}
-              </div>
-            </div>
+      )}
+
+      {/* Hero Header Ribbon */}
+      <section className="rounded-2xl bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 p-4 sm:p-5 text-white shadow-xs transition-all flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-white/10 backdrop-blur-xs rounded-xl shadow-2xs">
+            <GraduationCap size={22} className="text-white" />
           </div>
-          
-          <div className="flex items-center gap-3 mt-4 sm:mt-0">
-            <button 
-              className="bg-[#48b5c9] hover:bg-[#3aa3b7] hover:shadow-md text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-all border border-transparent disabled:opacity-50" 
-              onClick={openAddModal}
-              disabled={isLoading || isSaving || !activeYear}
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-base sm:text-lg font-bold tracking-tight">
+                គ្រប់គ្រងថ្នាក់រៀន
+              </h1>
+              {activeYear && (
+                <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-white/15 text-blue-100 shadow-2xs">
+                  ឆ្នាំសិក្សា {activeYear}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-blue-100/80 mt-0.5">
+              បញ្ជីថ្នាក់រៀនសរុប ({classes.length} ថ្នាក់) វេនព្រឹក {morningCount} និងវេនរសៀល {afternoonCount}
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <button 
+            type="button"
+            onClick={openAddModal}
+            disabled={isLoading || isSaving || !activeYear}
+            className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-xs font-bold text-blue-900 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            <Plus size={16} className="text-primary" />
+            <span>បង្កើតថ្នាក់ថ្មី</span>
+          </button>
+        </div>
+      </section>
+
+      {/* Metrics Summary Strip */}
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+        {/* Total Classes */}
+        <div className="bg-surface rounded-2xl border border-border/80 p-4 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-secondary-text uppercase tracking-wider">ថ្នាក់សរុប</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <strong className="text-2xl font-bold text-main-text">{classes.length}</strong>
+            <span className="text-xs font-medium text-secondary-text bg-background px-2 py-0.5 rounded-md border border-border/60">ថ្នាក់</span>
+          </div>
+        </div>
+
+        {/* Morning Classes */}
+        <div className="bg-amber-50/70 rounded-2xl border border-amber-200/70 p-4 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+            <Sun size={14} className="text-amber-600" /> វេនព្រឹក
+          </span>
+          <div className="flex items-baseline justify-between mt-2">
+            <strong className="text-2xl font-bold text-amber-700">{morningCount}</strong>
+            <span className="text-xs font-semibold text-amber-700/80 bg-amber-100/60 px-2 py-0.5 rounded-md">ថ្នាក់</span>
+          </div>
+        </div>
+
+        {/* Afternoon Classes */}
+        <div className="bg-sky-50/70 rounded-2xl border border-sky-200/70 p-4 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-sky-800 uppercase tracking-wider flex items-center gap-1.5">
+            <Sunset size={14} className="text-sky-600" /> វេនរសៀល
+          </span>
+          <div className="flex items-baseline justify-between mt-2">
+            <strong className="text-2xl font-bold text-sky-700">{afternoonCount}</strong>
+            <span className="text-xs font-semibold text-sky-700/80 bg-sky-100/60 px-2 py-0.5 rounded-md">ថ្នាក់</span>
+          </div>
+        </div>
+
+        {/* Evening Classes */}
+        <div className="bg-slate-50/80 rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+            <Moon size={14} className="text-slate-500" /> វេនយប់
+          </span>
+          <div className="flex items-baseline justify-between mt-2">
+            <strong className="text-2xl font-bold text-slate-700">{eveningCount}</strong>
+            <span className="text-xs font-semibold text-slate-600 bg-slate-200/60 px-2 py-0.5 rounded-md">ថ្នាក់</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Main Table Card */}
+      <div className="bg-surface rounded-2xl border border-border/80 shadow-xs overflow-hidden">
+        {/* Filter & Search Bar */}
+        <div className="p-4 sm:p-5 border-b border-border/80 flex flex-col md:flex-row gap-4 justify-between items-stretch md:items-center bg-surface">
+          {/* Shift Filter Tabs */}
+          <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => setShiftFilter('ALL')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                shiftFilter === 'ALL'
+                  ? 'bg-blue-600 text-white shadow-2xs'
+                  : 'bg-background hover:bg-surface-hover text-secondary-text'
+              }`}
             >
-              <Plus size={16} /> បង្កើតថ្នាក់ថ្មី
+              ទាំងអស់ ({classes.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setShiftFilter('Morning')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                shiftFilter === 'Morning'
+                  ? 'bg-amber-600 text-white shadow-2xs'
+                  : 'bg-background hover:bg-surface-hover text-amber-700'
+              }`}
+            >
+              វេនព្រឹក ({morningCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setShiftFilter('Afternoon')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                shiftFilter === 'Afternoon'
+                  ? 'bg-sky-600 text-white shadow-2xs'
+                  : 'bg-background hover:bg-surface-hover text-sky-700'
+              }`}
+            >
+              វេនរសៀល ({afternoonCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setShiftFilter('Evening')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                shiftFilter === 'Evening'
+                  ? 'bg-slate-700 text-white shadow-2xs'
+                  : 'bg-background hover:bg-surface-hover text-secondary-text'
+              }`}
+            >
+              វេនយប់ ({eveningCount})
             </button>
           </div>
-        </div>
-      </div>
 
-      {/* Bottom Panel: Table */}
-      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
-          <span>បញ្ជីថ្នាក់រៀន (List of Classes)</span>
-          <span className="text-xs font-medium bg-white/20 px-2 py-0.5 rounded">សរុប {filteredClasses.length} ថ្នាក់</span>
+          {/* Search Box */}
+          <div className="relative min-w-[260px]">
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-secondary-text" />
+            <input 
+              type="text"
+              placeholder="ស្វែងរក..."
+              className="w-full pl-9.5 pr-8 py-2.5 text-xs bg-background border border-border rounded-xl font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            {searchTerm && (
+              <button 
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-secondary-text hover:text-main-text cursor-pointer"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
-        
+
+        {/* Classes Table */}
         {isLoading && !isSaving ? (
-          <div className="flex items-center justify-center p-12 text-secondary-text">
-            កំពុងទាញយកទិន្នន័យ...
+          <div className="flex items-center justify-center p-16 text-secondary-text gap-3">
+            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm font-medium">កំពុងទាញយកទិន្នន័យថ្នាក់...</span>
           </div>
         ) : (
-          <div className="overflow-x-auto p-0">
-            <table className="w-full text-left border-collapse min-w-[600px]">
-              <thead className="bg-[#f8f9fa] text-gray-800 sticky top-0 z-10 border-b border-gray-300">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[700px]">
+              <thead className="bg-background/80 text-secondary-text sticky top-0 z-10 border-b border-border">
                 <tr>
-                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ឈ្មោះថ្នាក់</th>
-                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">វេនសិក្សា</th>
-                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ឆ្នាំសិក្សា</th>
-                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ចំណាំ</th>
-                  <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider text-right">សកម្មភាព</th>
+                  <th className="px-6 py-4 font-bold text-xs uppercase tracking-wider">ឈ្មោះថ្នាក់</th>
+                  <th className="px-6 py-4 font-bold text-xs uppercase tracking-wider text-center">វេនសិក្សា</th>
+                  <th className="px-6 py-4 font-bold text-xs uppercase tracking-wider text-center">ឆ្នាំសិក្សា</th>
+                  <th className="px-6 py-4 font-bold text-xs uppercase tracking-wider">ថ្នាក់ភ្ជាប់រួម (Rank Link)</th>
+                  <th className="px-6 py-4 font-bold text-xs uppercase tracking-wider">ចំណាំ</th>
+                  <th className="px-6 py-4 font-bold text-xs uppercase tracking-wider text-right">សកម្មភាព</th>
                 </tr>
               </thead>
-              <tbody>
-                {filteredClasses.map(c => (
-                  <tr key={c.id} className="hover:bg-gray-50/50 transition-colors">
-                    <td className="border-b border-gray-100 px-5 py-4 font-bold text-gray-800 flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-[#2a5298]">
-                        <Users size={16} />
-                      </div>
-                      {c.name}
-                    </td>
-                    <td className="border-b border-gray-100 px-5 py-4">
-                      {c.shift === 'Morning' && <span className="bg-orange-100 text-orange-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនព្រឹក</span>}
-                      {c.shift === 'Afternoon' && <span className="bg-blue-100 text-blue-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនរសៀល</span>}
-                      {c.shift === 'Evening' && <span className="bg-gray-100 text-gray-800 text-xs px-2.5 py-1 rounded-sm font-medium">វេនយប់</span>}
-                    </td>
-                    <td className="border-b border-gray-100 px-5 py-4 text-sm font-medium text-gray-700">{c.academicYear}</td>
-                    <td className="border-b border-gray-100 px-5 py-4 text-sm text-gray-500">{c.notes || '---'}</td>
-                    <td className="border-b border-gray-100 px-5 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button 
-                          onClick={() => openEditModal(c)}
-                          className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-sm transition-colors disabled:opacity-50"
-                          title="កែប្រែ"
-                          disabled={isSaving}
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                        <button 
-                          onClick={() => handleDelete(c.id)}
-                          className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-sm transition-colors disabled:opacity-50"
-                          title="លុបថ្នាក់"
-                          disabled={isSaving}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+              <tbody className="divide-y divide-border/60">
+                {filteredClasses.map(c => {
+                  const linkedNames = (c.linkedClassIds || [])
+                    .map(lid => classes.find(item => item.id === lid)?.name)
+                    .filter(Boolean);
+
+                  return (
+                    <tr key={c.id} className="hover:bg-surface-hover/50 transition-colors group">
+                      {/* Class Name */}
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-primary shadow-2xs">
+                            <Users size={18} />
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-sm font-extrabold text-main-text group-hover:text-primary transition-colors">
+                              {c.name}
+                            </span>
+                            <span className="text-[11px] text-secondary-text">
+                              ថ្នាក់ទី {c.name}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Shift */}
+                      <td className="px-6 py-4 text-center">
+                        {c.shift === 'Morning' && (
+                          <span className="inline-flex items-center gap-1.5 bg-amber-50 border border-amber-200/70 text-amber-700 text-xs px-3 py-1 rounded-full font-semibold shadow-2xs">
+                            <Sun size={12} className="text-amber-500" />
+                            <span>វេនព្រឹក</span>
+                          </span>
+                        )}
+                        {c.shift === 'Afternoon' && (
+                          <span className="inline-flex items-center gap-1.5 bg-sky-50 border border-sky-200/70 text-sky-700 text-xs px-3 py-1 rounded-full font-semibold shadow-2xs">
+                            <Sunset size={12} className="text-sky-500" />
+                            <span>វេនរសៀល</span>
+                          </span>
+                        )}
+                        {c.shift === 'Evening' && (
+                          <span className="inline-flex items-center gap-1.5 bg-slate-100 border border-slate-200 text-slate-700 text-xs px-3 py-1 rounded-full font-semibold shadow-2xs">
+                            <Moon size={12} className="text-slate-500" />
+                            <span>វេនយប់</span>
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Academic Year */}
+                      <td className="px-6 py-4 text-center">
+                        <span className="font-mono text-xs font-semibold text-secondary-text bg-background px-2.5 py-1 rounded-lg border border-border/60">
+                          {c.academicYear}
+                        </span>
+                      </td>
+
+                      {/* Linked Classes */}
+                      <td className="px-6 py-4">
+                        {linkedNames.length > 0 ? (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {linkedNames.map(name => (
+                              <span key={name} className="inline-flex items-center gap-1 bg-indigo-50 border border-indigo-200/60 text-indigo-700 text-[11px] px-2.5 py-0.5 rounded-md font-semibold">
+                                <Link2 size={11} />
+                                <span>{name}</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-secondary-text/60 italic">មិនបានភ្ជាប់</span>
+                        )}
+                      </td>
+
+                      {/* Notes */}
+                      <td className="px-6 py-4 text-xs text-secondary-text max-w-[200px] truncate">
+                        {c.notes || '—'}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button 
+                            type="button"
+                            onClick={() => openEditModal(c)}
+                            className="p-2 text-secondary-text hover:text-primary hover:bg-blue-50 rounded-xl transition-all shadow-2xs border border-transparent hover:border-blue-100 active:scale-95 cursor-pointer disabled:opacity-50"
+                            title="កែប្រែថ្នាក់"
+                            disabled={isSaving}
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => void handleDelete(c.id, c.name)}
+                            className="p-2 text-secondary-text hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all shadow-2xs border border-transparent hover:border-rose-100 active:scale-95 cursor-pointer disabled:opacity-50"
+                            title="លុបថ្នាក់"
+                            disabled={isSaving}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
                 {filteredClasses.length === 0 && (
                   <tr>
-                    <td colSpan={5}>
-                      <div className="flex flex-col items-center justify-center p-12 text-secondary-text">
-                        <div className="w-12 h-12 bg-background-selected rounded-full flex items-center justify-center mb-4">
-                          <BookOpen size={24} className="text-secondary-text" />
+                    <td colSpan={6}>
+                      <div className="flex flex-col items-center justify-center p-14 text-secondary-text text-center">
+                        <div className="w-14 h-14 bg-background rounded-2xl flex items-center justify-center mb-3 shadow-2xs border border-border">
+                          <BookOpen size={24} className="text-secondary-text opacity-60" />
                         </div>
-                        <p className="text-base font-medium">មិនមានទិន្នន័យថ្នាក់ទេ</p>
-                        <p className="text-sm mt-1">សូមបង្កើតថ្នាក់ថ្មី ដើម្បីចាប់ផ្តើម។</p>
+                        <p className="text-xs text-secondary-text font-medium">
+                          {searchTerm ? 'រកមិនឃើញថ្នាក់រៀនទេ' : 'មិនទាន់មានទិន្នន័យថ្នាក់រៀនទេ'}
+                        </p>
+                        {searchTerm && (
+                          <button 
+                            type="button"
+                            onClick={() => setSearchTerm('')}
+                            className="mt-3 text-xs text-primary underline font-medium cursor-pointer"
+                          >
+                            សម្អាតពាក្យស្វែងរក
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -401,92 +647,144 @@ const Classes = () => {
         )}
       </div>
 
+      {/* Add / Edit Modal */}
       <Modal 
         isOpen={showModal} 
         onClose={() => setShowModal(false)}
-        title={currentClass.id ? 'កែប្រែថ្នាក់រៀន' : 'បង្កើតថ្នាក់ថ្មី'}
+        title={currentClass.id ? 'កែប្រែព័ត៌មានថ្នាក់រៀន' : 'បង្កើតថ្នាក់រៀនថ្មី'}
       >
-        <div className="space-y-4">
+        <div className="space-y-4 pt-2">
+          {/* Class Name Input */}
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">ឈ្មោះថ្នាក់ (ឧ. 6A) *</label>
+            <label className="block text-xs font-bold text-secondary-text uppercase tracking-wider mb-1.5">
+              ឈ្មោះថ្នាក់ (ឧ. 6A, 10A1) *
+            </label>
             <Input 
-              value={currentClass.name} 
+              value={currentClass.name || ''} 
               onChange={(e) => setCurrentClass({...currentClass, name: e.target.value})}
               error={!!errors.name}
               disabled={isSaving}
+              placeholder="បញ្ចូលឈ្មោះថ្នាក់..."
+              className="rounded-xl"
             />
-            {errors.name && <p className="text-danger text-xs mt-1">{errors.name}</p>}
+            {errors.name && <p className="text-rose-600 text-xs mt-1 font-medium">{errors.name}</p>}
           </div>
           
+          {/* Shift Select */}
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">វេនសិក្សា *</label>
+            <label className="block text-xs font-bold text-secondary-text uppercase tracking-wider mb-1.5">
+              វេនសិក្សា *
+            </label>
             <select 
-              className="block w-full rounded-lg border-border focus:border-primary focus:ring-primary sm:text-sm py-2 px-3 border bg-white disabled:opacity-50"
+              className="block w-full rounded-xl border border-border bg-background focus:border-primary focus:ring-2 focus:ring-primary/20 text-sm py-2.5 px-3 font-medium transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
               value={currentClass.shift}
               onChange={(e) => setCurrentClass({...currentClass, shift: e.target.value as any})}
               disabled={isSaving}
             >
-              <option value="Morning">ព្រឹក</option>
-              <option value="Afternoon">រសៀល</option>
-              <option value="Evening">យប់</option>
+              <option value="Morning">វេនព្រឹក</option>
+              <option value="Afternoon">វេនរសៀល</option>
+              <option value="Evening">វេនយប់</option>
             </select>
           </div>
           
+          {/* Academic Year (Read-only) */}
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">ឆ្នាំសិក្សា *</label>
+            <label className="block text-xs font-bold text-secondary-text uppercase tracking-wider mb-1.5">
+              ឆ្នាំសិក្សា
+            </label>
             <Input 
               value={activeYear || ''} 
               disabled={true}
-              className="bg-gray-100 cursor-not-allowed"
+              className="bg-background/80 cursor-not-allowed font-mono text-xs rounded-xl"
             />
           </div>
           
+          {/* Notes */}
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">ចំណាំ (ស្រេចចិត្ត)</label>
+            <label className="block text-xs font-bold text-secondary-text uppercase tracking-wider mb-1.5">
+              ចំណាំ (ស្រេចចិត្ត)
+            </label>
             <Input 
-              value={currentClass.notes} 
+              value={currentClass.notes || ''} 
               onChange={(e) => setCurrentClass({...currentClass, notes: e.target.value})}
               placeholder="ព័ត៌មានបន្ថែម..."
               disabled={isSaving}
+              className="rounded-xl"
             />
           </div>
 
+          {/* Linked Classes Picker */}
           <div>
-            <label className="block text-sm font-medium text-primary mb-2">ភ្ជាប់ថ្នាក់សម្រាប់គិតចំណាត់ថ្នាក់រួម</label>
-            <div className="bg-background-selected p-3 rounded-lg max-h-[150px] overflow-y-auto border border-border">
+            <label className="block text-xs font-bold text-secondary-text uppercase tracking-wider mb-2 flex items-center justify-between">
+              <span>ភ្ជាប់ថ្នាក់សម្រាប់គិតចំណាត់ថ្នាក់រួម</span>
+              <span className="text-[10px] text-primary font-normal lowercase">(optional)</span>
+            </label>
+            <div className="bg-background p-3 rounded-xl max-h-[160px] overflow-y-auto border border-border">
               {(() => {
                 const getGrade = (name?: string) => name ? (name.match(/^(\d+)/)?.[1] || '') : '';
                 const currentGrade = getGrade(currentClass.name);
                 const eligibleClasses = classes.filter(c => c.id !== currentClass.id && (!currentGrade || getGrade(c.name) === currentGrade));
                 
                 if (eligibleClasses.length === 0) {
-                  return <div className="text-sm text-secondary-text text-center py-2">{currentGrade ? 'មិនមានថ្នាក់កម្រិតនេះផ្សេងទៀតទេ' : 'សូមបញ្ចូលឈ្មោះថ្នាក់សិន'}</div>;
+                  return (
+                    <div className="text-xs text-secondary-text text-center py-3">
+                      {currentGrade ? 'មិនមានថ្នាក់កម្រិតនេះផ្សេងទៀតទេ' : 'សូមបញ្ចូលឈ្មោះថ្នាក់សិន ដើម្បីបង្ហាញថ្នាក់កម្រិតដូចគ្នា'}
+                    </div>
+                  );
                 }
                 
                 return (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {eligibleClasses.map(c => (
-                      <label key={c.id} className="flex items-center gap-2 p-2 hover:bg-white rounded border border-transparent hover:border-border cursor-pointer transition-colors">
-                      <input 
-                        type="checkbox" 
-                        className="rounded border-border text-primary focus:ring-primary h-4 w-4"
-                        checked={(currentClass.linkedClassIds || []).includes(c.id)}
-                        onChange={() => toggleLinkedClass(c.id)}
-                        disabled={isSaving}
-                      />
-                      <span className="text-sm">{c.name} ({c.shift === 'Morning' ? 'ព្រឹក' : c.shift === 'Afternoon' ? 'រសៀល' : 'យប់'})</span>
-                      </label>
-                    ))}
+                    {eligibleClasses.map(c => {
+                      const isChecked = (currentClass.linkedClassIds || []).includes(c.id);
+                      return (
+                        <label 
+                          key={c.id} 
+                          className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition-all cursor-pointer ${
+                            isChecked 
+                              ? 'bg-blue-50/80 border-blue-300 text-blue-900 shadow-2xs' 
+                              : 'bg-surface hover:bg-surface-hover border-border/70 text-secondary-text'
+                          }`}
+                        >
+                          <input 
+                            type="checkbox" 
+                            className="rounded-md border-border text-primary focus:ring-primary h-4 w-4 cursor-pointer"
+                            checked={isChecked}
+                            onChange={() => toggleLinkedClass(c.id)}
+                            disabled={isSaving}
+                          />
+                          <span className="text-xs font-bold">{c.name}</span>
+                          <span className="text-[10px] text-secondary-text">
+                            ({c.shift === 'Morning' ? 'ព្រឹក' : c.shift === 'Afternoon' ? 'រសៀល' : 'យប់'})
+                          </span>
+                        </label>
+                      );
+                    })}
                   </div>
                 );
               })()}
             </div>
-            <p className="text-xs text-secondary-text mt-1.5">ថ្នាក់ដែលបានភ្ជាប់គ្នានឹងត្រូវបានទាញយកសិស្សមកគិតចំណាត់ថ្នាក់ប្រកួតគ្នានៅក្នុងសៀវភៅពិន្ទុ (Gradebook)។</p>
+            <p className="text-[11px] text-secondary-text mt-1.5">
+              ថ្នាក់ដែលបានភ្ជាប់គ្នានឹងត្រូវបានទាញយកសិស្សមកគិតចំណាត់ថ្នាក់ប្រកួតគ្នានៅក្នុងសៀវភៅពិន្ទុ។
+            </p>
           </div>
 
+          {/* Modal Action Buttons */}
           <div className="pt-4 flex justify-end gap-3 border-t border-border mt-6">
-            <Button variant="secondary" onClick={() => setShowModal(false)} disabled={isSaving}>បោះបង់</Button>
-            <Button variant="primary" onClick={handleSave} disabled={isSaving}>
+            <Button 
+              variant="secondary" 
+              onClick={() => setShowModal(false)} 
+              disabled={isSaving}
+              className="rounded-xl"
+            >
+              បោះបង់
+            </Button>
+            <Button 
+              variant="primary" 
+              onClick={handleSave} 
+              disabled={isSaving}
+              className="rounded-xl bg-primary text-white font-bold"
+            >
               {isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក'}
             </Button>
           </div>

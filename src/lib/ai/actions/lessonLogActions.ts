@@ -5,14 +5,14 @@ export const handleLessonLogAction = async (action: string, data: any, activeYea
   
   if (action === 'ADD_LESSON_LOG') {
     if (!data.classId || !data.date || !data.topic) {
-      throw new Error('ទិន្នន័យមិនពេញលេញ (Missing classId, date, or topic)');
+      throw new Error('ទិន្នន័យមិនពេញលេញ');
     }
     
     const classes = await db.getAll('classes', activeYear);
     const cls = classes.find(c => c.id === data.classId);
     
     if (!cls) {
-      throw new Error('រកមិនឃើញថ្នាក់នេះទេ (Class not found)');
+      throw new Error('រកមិនឃើញថ្នាក់នេះទេ');
     }
     
     const newRecord = {

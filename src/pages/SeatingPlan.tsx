@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Monitor, User, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle, Grid, RotateCw } from 'lucide-react';
+import { Monitor, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle, Grid, RotateCw } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { Student, ClassRecord, PCIssue, SeatingPlan as SeatingPlanType } from '../store/db';
+import type { Student, ClassRecord, PCIssue, PcSyncTask, SeatingPlan as SeatingPlanType } from '../store/db';
 
 type ExtendedSeatingPlan = SeatingPlanType & { deskRotations?: Record<string, number> };
 import { supabase } from '../lib/supabase';
@@ -12,6 +12,7 @@ import { Input } from '../components/ui/Input';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { useAuth } from '../contexts/AuthContext';
+import { findSeatConflict } from '../utils/studentPlacement';
 
 interface Desk {
   id: string;
@@ -20,33 +21,33 @@ interface Desk {
   status: 'Good' | 'Issue';
 }
 
-const addPcSyncTask = async (
+const queuePcSyncTask = async (
   db: any,
+  student: Student,
   pcNumber: string,
-  studentId: string,
-  studentName: string,
-  action: 'ADD' | 'REMOVE' | 'UPDATE_PASSWORD',
+  action: PcSyncTask['action'],
+  academicYear: string,
   password?: string | null,
-  academicYear?: string
 ) => {
-  const newTask = {
+  const task: PcSyncTask = {
     id: crypto.randomUUID(),
     pcNumber,
-    studentId,
-    studentName,
+    studentId: student.studentId,
+    studentName: student.name,
     action,
     password: password || null,
     status: 'PENDING',
     createdAt: new Date().toISOString(),
-    branch: '', // Auto-injected by db.ts
-    academicYear: academicYear || '2026-2027'
+    academicYear,
   };
   try {
-    await db.put('pcSyncTasks', newTask);
+    await db.put('pcSyncTasks', task);
   } catch (error) {
-    console.error('Failed to create PC Sync Task. Did you run the SQL migration?', error);
+    console.warn('Failed to queue PC Sync task:', error);
   }
 };
+
+
 
 const SeatingPlan = () => {
   const [selectedClass, setSelectedClass] = useState('');
@@ -64,6 +65,26 @@ const SeatingPlan = () => {
 
   // For Drag and Drop
   const [draggedDeskId, setDraggedDeskId] = useState<string | null>(null);
+  const [dragOverPc, setDragOverPc] = useState<string | null>(null);
+  const [draggedStudentData, setDraggedStudentData] = useState<{
+    studentId: string;
+    studentName: string;
+    sourcePc?: string;
+  } | null>(null);
+  const [feedbackMessage, setFeedbackMessage] = useState<{
+    text: string;
+    type: 'success' | 'info' | 'error';
+  } | null>(null);
+  const [isDragOverUnassign, setIsDragOverUnassign] = useState(false);
+
+  // Auto dismiss feedback banner after 4.5 seconds
+  useEffect(() => {
+    if (!feedbackMessage) return;
+    const timer = setTimeout(() => {
+      setFeedbackMessage(null);
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [feedbackMessage]);
 
   // For Issue Reporting
   const [issueDescription, setIssueDescription] = useState('');
@@ -312,45 +333,6 @@ const SeatingPlan = () => {
     setCurrentLayout({ ...currentLayout, gridLayout: newGrid });
   };
 
-  const handleDragStartLayout = (e: React.DragEvent, cell: string | null) => {
-    if (!isEditMode || !cell) {
-      e.preventDefault();
-      return;
-    }
-    e.dataTransfer.setData('text/plain', cell);
-    setDraggedDeskId(cell);
-  };
-
-  const handleDropLayout = (e: React.DragEvent, targetR: number, targetC: number) => {
-    e.preventDefault();
-    if (!isEditMode || !currentLayout) return;
-    
-    const draggedCell = e.dataTransfer.getData('text/plain');
-    if (!draggedCell) return;
-    
-    const newGrid = currentLayout.gridLayout.map(row => [...row]);
-    
-    // Find where it came from
-    let sourceR = -1;
-    let sourceC = -1;
-    for (let r = 0; r < newGrid.length; r++) {
-      for (let c = 0; c < newGrid[r].length; c++) {
-        if (newGrid[r][c] === draggedCell) {
-          sourceR = r;
-          sourceC = c;
-        }
-      }
-    }
-    
-    if (sourceR !== -1 && sourceC !== -1) {
-      // Swap with target
-      const targetCell = newGrid[targetR][targetC];
-      newGrid[sourceR][sourceC] = targetCell;
-      newGrid[targetR][targetC] = draggedCell;
-      setCurrentLayout({ ...currentLayout, gridLayout: newGrid });
-    }
-    setDraggedDeskId(null);
-  };
 
   const handleSaveLayout = async () => {
     if (saveInProgressRef.current) return;
@@ -471,82 +453,337 @@ const SeatingPlan = () => {
       e.preventDefault();
       return;
     }
-    setDraggedDeskId(desk.id);
-    e.dataTransfer.setData('text/plain', desk.id);
+    const student = getStudentForDesk(desk.studentIds[0]);
+    if (!student) {
+      e.preventDefault();
+      return;
+    }
+
+    const payload = {
+      type: 'desk-student',
+      studentId: student.id,
+      studentName: student.name,
+      sourcePc: desk.pcNumber
+    };
+
+    setDraggedDeskId(desk.pcNumber);
+    setDraggedStudentData(payload);
+
+    e.dataTransfer.setData('text/plain', JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'move';
-  };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault(); // necessary to allow dropping
-    e.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleDrop = async (e: React.DragEvent, targetDesk: Desk) => {
-    e.preventDefault();
-    if (targetDesk.pcNumber === 'Teacher PC') return; // Cannot drop on teacher PC
-    if (targetDesk.status === 'Issue') return; // Cannot drop on broken PC
-    if (targetDesk.studentIds.length > 1) return; // Cannot drop on conflicting desk
-    
-    const sourceDeskId = e.dataTransfer.getData('text/plain');
-    if (sourceDeskId === targetDesk.id) return;
-    
-    const sourceDesk = desks.find(d => d.id === sourceDeskId);
-    if (!sourceDesk || sourceDesk.studentIds.length !== 1) return;
-
-    const sourceStudentId = sourceDesk.studentIds[0];
-    const targetStudentId = targetDesk.studentIds.length === 1 ? targetDesk.studentIds[0] : null;
-    
-    if (!activeYear || !selectedClass) return;
-    const currentYear = activeYear;
-    const currentClass = selectedClass;
-
-    setIsSaving(true);
+    // Custom drag image showing student name only (PC name does not move)
     try {
-      const db = await initDB();
-      const studentsToUpdate = [];
-      
-      const sourceStudent = await db.get('students', sourceStudentId);
-      if (sourceStudent) {
-        // Swap: Remove from old PC, add to new PC
-        if (sourceStudent.pcNumber) await addPcSyncTask(db, sourceStudent.pcNumber, sourceStudent.studentId, sourceStudent.name, 'REMOVE', null, currentYear);
-        await addPcSyncTask(db, targetDesk.pcNumber, sourceStudent.studentId, sourceStudent.name, 'ADD', sourceStudent.password, currentYear);
-        studentsToUpdate.push({ ...sourceStudent, pcNumber: targetDesk.pcNumber });
-      }
-
-      if (targetStudentId) {
-        const targetStudent = await db.get('students', targetStudentId);
-        if (targetStudent) {
-          // Swap: Remove from old PC, add to new PC
-          if (targetStudent.pcNumber) await addPcSyncTask(db, targetStudent.pcNumber, targetStudent.studentId, targetStudent.name, 'REMOVE', null, currentYear);
-          await addPcSyncTask(db, sourceDesk.pcNumber, targetStudent.studentId, targetStudent.name, 'ADD', targetStudent.password, currentYear);
-          studentsToUpdate.push({ ...targetStudent, pcNumber: sourceDesk.pcNumber });
+      const ghost = document.createElement('div');
+      ghost.style.position = 'fixed';
+      ghost.style.top = '-9999px';
+      ghost.style.left = '-9999px';
+      ghost.style.padding = '6px 14px';
+      ghost.style.background = '#2563eb';
+      ghost.style.color = '#ffffff';
+      ghost.style.borderRadius = '20px';
+      ghost.style.fontWeight = 'bold';
+      ghost.style.fontSize = '12px';
+      ghost.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+      ghost.style.zIndex = '99999';
+      ghost.style.pointerEvents = 'none';
+      ghost.innerText = `👤 ${student.name} (ផ្លាស់ប្តូរតុ)`;
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 20, 20);
+      setTimeout(() => {
+        if (document.body.contains(ghost)) {
+          document.body.removeChild(ghost);
         }
-      }
+      }, 100);
+    } catch (err) {}
+  };
 
-      await db.putMany('students', studentsToUpdate);
-      setDraggedDeskId(null);
-      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
-      await loadData(currentYear, currentClass, shift, true);
-    } catch (error) {
-      console.error(error);
-      alert('មានបញ្ហាក្នុងការផ្លាស់ប្តូរកន្លែងអង្គុយសិស្ស។');
-    } finally {
-      setIsSaving(false);
+  const handleDragStartUnassigned = (e: React.DragEvent, student: Student) => {
+    const payload = {
+      type: 'unassigned-student',
+      studentId: student.id,
+      studentName: student.name
+    };
+
+    setDraggedDeskId('unassigned');
+    setDraggedStudentData(payload);
+
+    e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'move';
+
+    try {
+      const ghost = document.createElement('div');
+      ghost.style.position = 'fixed';
+      ghost.style.top = '-9999px';
+      ghost.style.left = '-9999px';
+      ghost.style.padding = '6px 14px';
+      ghost.style.background = '#059669';
+      ghost.style.color = '#ffffff';
+      ghost.style.borderRadius = '20px';
+      ghost.style.fontWeight = 'bold';
+      ghost.style.fontSize = '12px';
+      ghost.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+      ghost.style.zIndex = '99999';
+      ghost.style.pointerEvents = 'none';
+      ghost.innerText = `👤 ${student.name} (ដាក់លើតុ)`;
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 20, 20);
+      setTimeout(() => {
+        if (document.body.contains(ghost)) {
+          document.body.removeChild(ghost);
+        }
+      }, 100);
+    } catch (err) {}
+  };
+
+  const handleDragOver = (e: React.DragEvent, targetPc: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverPc !== targetPc) {
+      setDragOverPc(targetPc);
+    }
+  };
+
+  const handleDragLeave = (_e: React.DragEvent, targetPc: string) => {
+    if (dragOverPc === targetPc) {
+      setDragOverPc(null);
     }
   };
 
   const handleDragEnd = () => {
     setDraggedDeskId(null);
+    setDragOverPc(null);
+    setDraggedStudentData(null);
+    setIsDragOverUnassign(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetDesk: Desk) => {
+    e.preventDefault();
+    setDragOverPc(null);
+    setIsDragOverUnassign(false);
+
+    if (targetDesk.pcNumber === 'Teacher PC') {
+      alert('មិនអាចដាក់សិស្សលើតុគ្រូបានទេ!');
+      setDraggedDeskId(null);
+      setDraggedStudentData(null);
+      return;
+    }
+    if (targetDesk.status === 'Issue') {
+      alert('មិនអាចដាក់សិស្សលើកុំព្យូទ័រខូចបានទេ!');
+      setDraggedDeskId(null);
+      setDraggedStudentData(null);
+      return;
+    }
+    if (targetDesk.studentIds.length > 1) {
+      alert('តុនេះមានបញ្ហាជាន់គ្នា សូមដកសិស្សចេញជាមុនសិន!');
+      setDraggedDeskId(null);
+      setDraggedStudentData(null);
+      return;
+    }
+
+    const rawData = e.dataTransfer.getData('text/plain');
+    if (!rawData) {
+      setDraggedDeskId(null);
+      setDraggedStudentData(null);
+      return;
+    }
+
+    let payload: { type?: string; studentId?: string; studentName?: string; sourcePc?: string } = {};
+    try {
+      payload = JSON.parse(rawData);
+    } catch {
+      payload = { sourcePc: rawData };
+    }
+
+    // Dropped on the exact same desk
+    if (payload.sourcePc === targetDesk.pcNumber) {
+      setDraggedDeskId(null);
+      setDraggedStudentData(null);
+      return;
+    }
+
+    if (!activeYear || !selectedClass) return;
+    const currentYear = activeYear;
+    const currentClass = selectedClass;
+
+    const sourceStudentId = payload.studentId || (payload.sourcePc ? desks.find(d => d.pcNumber === payload.sourcePc)?.studentIds[0] : null);
+    if (!sourceStudentId) {
+      setDraggedDeskId(null);
+      setDraggedStudentData(null);
+      return;
+    }
+
+    const targetStudentId = targetDesk.studentIds.length === 1 ? targetDesk.studentIds[0] : null;
+    const sourceStudent = students.find(s => s.id === sourceStudentId);
+    if (!sourceStudent) {
+      setDraggedDeskId(null);
+      setDraggedStudentData(null);
+      return;
+    }
+
+    const sourcePc = payload.sourcePc || sourceStudent.pcNumber;
+
+    // 1. INSTANT OPTIMISTIC UI UPDATE (0ms visual delay)
+    setStudents(prev => prev.map(s => {
+      if (s.id === sourceStudentId) {
+        return { ...s, pcNumber: targetDesk.pcNumber };
+      }
+      if (targetStudentId && s.id === targetStudentId) {
+        return { ...s, pcNumber: sourcePc || undefined };
+      }
+      return s;
+    }));
+
+    setDesks(prev => prev.map(d => {
+      if (d.pcNumber === targetDesk.pcNumber) {
+        return { ...d, studentIds: [sourceStudentId] };
+      }
+      if (sourcePc && d.pcNumber === sourcePc) {
+        return { ...d, studentIds: targetStudentId ? [targetStudentId] : [] };
+      }
+      return d;
+    }));
+
+    // Reset drag UI state immediately
+    setDraggedDeskId(null);
+    setDraggedStudentData(null);
+    setDragOverPc(null);
+    setIsDragOverUnassign(false);
+
+    // Instant user feedback
+    if (sourcePc && targetStudentId) {
+      const targetStudent = students.find(s => s.id === targetStudentId);
+      setFeedbackMessage({
+        type: 'success',
+        text: `បានប្តូរកន្លែងអង្គុយរវាង ${sourceStudent.name} (${targetDesk.pcNumber}) និង ${targetStudent?.name || ''} (${sourcePc}) ដោយជោគជ័យ!`
+      });
+    } else if (sourcePc) {
+      setFeedbackMessage({
+        type: 'success',
+        text: `បានផ្លាស់ប្តូរ ${sourceStudent.name} ទៅតុ ${targetDesk.pcNumber} ដោយជោគជ័យ!`
+      });
+    } else {
+      setFeedbackMessage({
+        type: 'success',
+        text: `បានដាក់សិស្ស ${sourceStudent.name} ឲ្យអង្គុយតុ ${targetDesk.pcNumber} ដោយជោគជ័យ!`
+      });
+    }
+
+    // 2. BACKGROUND PERSISTENCE (Runs asynchronously without blocking UI)
+    (async () => {
+      try {
+        const db = await initDB();
+        const studentsToUpdate: Student[] = [];
+        const syncPromises: Promise<any>[] = [];
+
+        if (sourcePc) {
+          syncPromises.push(queuePcSyncTask(db, sourceStudent, sourcePc, 'REMOVE', currentYear));
+          syncPromises.push(queuePcSyncTask(db, sourceStudent, targetDesk.pcNumber, 'ADD', currentYear));
+          studentsToUpdate.push({ ...sourceStudent, pcNumber: targetDesk.pcNumber });
+
+          if (targetStudentId) {
+            const targetStudent = students.find(s => s.id === targetStudentId);
+            if (targetStudent) {
+              syncPromises.push(queuePcSyncTask(db, targetStudent, targetDesk.pcNumber, 'REMOVE', currentYear));
+              syncPromises.push(queuePcSyncTask(db, targetStudent, sourcePc, 'ADD', currentYear));
+              studentsToUpdate.push({ ...targetStudent, pcNumber: sourcePc });
+            }
+          }
+        } else {
+          let pwd = sourceStudent.password;
+          if (!pwd || !/^\d{3}$/.test(pwd)) {
+            const existingPasswords = await fetchExistingPasswords(currentClass, currentYear);
+            pwd = generateUniquePassword(existingPasswords);
+          }
+
+          syncPromises.push(queuePcSyncTask(db, sourceStudent, targetDesk.pcNumber, 'ADD', currentYear, pwd));
+          studentsToUpdate.push({ ...sourceStudent, pcNumber: targetDesk.pcNumber, password: pwd });
+
+          if (targetStudentId) {
+            const targetStudent = students.find(s => s.id === targetStudentId);
+            if (targetStudent) {
+              syncPromises.push(queuePcSyncTask(db, targetStudent, targetDesk.pcNumber, 'REMOVE', currentYear));
+              studentsToUpdate.push({ ...targetStudent, pcNumber: undefined });
+            }
+          }
+        }
+
+        await Promise.all([
+          db.putMany('students', studentsToUpdate),
+          ...syncPromises
+        ]);
+      } catch (error) {
+        console.error('Failed to persist drag drop changes:', error);
+        const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+        await loadData(currentYear, currentClass, shift, true);
+      }
+    })();
+  };
+
+  const handleDropToUnassign = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOverUnassign(false);
+    setDragOverPc(null);
+
+    const rawData = e.dataTransfer.getData('text/plain');
+    if (!rawData) return;
+
+    let payload: { studentId?: string; sourcePc?: string } = {};
+    try {
+      payload = JSON.parse(rawData);
+    } catch {
+      payload = { sourcePc: rawData };
+    }
+
+    const studentId = payload.studentId || (payload.sourcePc ? desks.find(d => d.pcNumber === payload.sourcePc)?.studentIds[0] : null);
+    if (!studentId || !activeYear || !selectedClass) return;
+
+    const student = students.find(s => s.id === studentId);
+    if (!student || !student.pcNumber) return;
+
+    const sourcePc = student.pcNumber;
+
+    // 1. INSTANT OPTIMISTIC UPDATE
+    setStudents(prev => prev.map(s => s.id === studentId ? { ...s, pcNumber: undefined, password: undefined } : s));
+    setDesks(prev => prev.map(d => d.pcNumber === sourcePc ? { ...d, studentIds: [] } : d));
+    setFeedbackMessage({
+      type: 'info',
+      text: `បានដកសិស្ស ${student.name} ចេញពីតុ ${sourcePc} រួចរាល់!`
+    });
+
+    setDraggedDeskId(null);
+    setDraggedStudentData(null);
+    setDragOverPc(null);
+    setIsDragOverUnassign(false);
+
+    // 2. BACKGROUND PERSISTENCE
+    (async () => {
+      try {
+        const db = await initDB();
+        await Promise.all([
+          queuePcSyncTask(db, student, sourcePc, 'REMOVE', activeYear),
+          db.update('students', student.id, { pcNumber: null, password: null })
+        ]);
+      } catch (err: any) {
+        console.error('Failed to unassign student:', err);
+        const shift = classes.find(c => c.id === selectedClass)?.shift || 'Morning';
+        await loadData(activeYear, selectedClass, shift, true);
+      }
+    })();
   };
 
   // -------------------------------------------------------------
   // Password & Assignment Logic
   // -------------------------------------------------------------
   const generateUniquePassword = (existingPasswords: Set<string>): string => {
-    if (existingPasswords.size >= 900) throw new Error('No unique 3-digit passwords remain.');
     let newPassword = '';
+    let attempts = 0;
     do {
-      newPassword = Math.floor(100 + Math.random() * 900).toString();
+      const randomValue = crypto.getRandomValues(new Uint32Array(1))[0];
+      // 3 digits: 100 to 999
+      newPassword = String(100 + (randomValue % 900));
+      attempts++;
+      if (attempts > 2000) break;
     } while (existingPasswords.has(newPassword));
     return newPassword;
   };
@@ -604,10 +841,11 @@ const SeatingPlan = () => {
       const db = await initDB();
       // Partial update to avoid overwriting concurrent changes
       await db.update('students', studentId, { password: newPassword });
+      setStudents(prev => prev.map(s => s.id === studentId ? { ...s, password: newPassword } : s));
       
       const student = getStudentForDesk(studentId);
       if (student && student.pcNumber) {
-        await addPcSyncTask(db, student.pcNumber, student.studentId, student.name, 'UPDATE_PASSWORD', newPassword, currentYear);
+        await queuePcSyncTask(db, student, student.pcNumber, 'UPDATE_PASSWORD', currentYear, newPassword);
       }
       
       const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
@@ -615,6 +853,36 @@ const SeatingPlan = () => {
     } catch (error) {
       console.error(error);
       alert('បរាជ័យក្នុងការបង្កើត Password');
+    }
+  };
+
+  const handleManualSetPassword = async (studentId: string, currentPassword?: string) => {
+    if (!activeYear || !selectedClass) return;
+    const input = window.prompt('សូមបញ្ចូល Password ថ្មី (៣ ខ្ទង់គត់ ឧ. 123):', currentPassword || '');
+    if (input === null) return;
+    const cleanPwd = input.trim();
+    if (!/^\d{3}$/.test(cleanPwd)) {
+      alert('Password ត្រូវតែជាលេខ ៣ ខ្ទង់គត់ (ឧ. 123 ឬ 888)!');
+      return;
+    }
+    const currentYear = activeYear;
+    const currentClass = selectedClass;
+    try {
+      setIsSaving(true);
+      const db = await initDB();
+      await db.update('students', studentId, { password: cleanPwd });
+      setStudents(prev => prev.map(s => s.id === studentId ? { ...s, password: cleanPwd } : s));
+      const student = getStudentForDesk(studentId);
+      if (student && student.pcNumber) {
+        await queuePcSyncTask(db, student, student.pcNumber, 'UPDATE_PASSWORD', currentYear, cleanPwd);
+      }
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
+    } catch (error: any) {
+      console.error(error);
+      alert('មានបញ្ហាក្នុងការកំណត់ Password: ' + error.message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -635,17 +903,16 @@ const SeatingPlan = () => {
       for (let i = 0; i < students.length; i++) {
         const newPassword = generateUniquePassword(usedPasswords);
         usedPasswords.add(newPassword);
-        // We still fetch latest to be absolutely safe, but bulk update is hard if we do that 40 times.
-        // It's acceptable to do a full put if it's a bulk operation, or just update the objects.
         const updatedStudent = { ...students[i], password: newPassword };
         studentsToUpdate.push(updatedStudent);
         
         if (students[i].pcNumber) {
-           await addPcSyncTask(db, students[i].pcNumber!, students[i].studentId, students[i].name, 'UPDATE_PASSWORD', newPassword, currentYear);
+          await queuePcSyncTask(db, students[i], students[i].pcNumber!, 'UPDATE_PASSWORD', currentYear, newPassword);
         }
       }
       
       await db.putMany('students', studentsToUpdate);
+      setStudents(studentsToUpdate);
       alert('បង្កើត Password រួមបានជោគជ័យ!');
       const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
       await loadData(currentYear, currentClass, shift, true);
@@ -669,8 +936,24 @@ const SeatingPlan = () => {
     try {
       const db = await initDB();
       const student = getStudentForDesk(studentId);
+      const latestClassStudents = await db.getAllFromIndex('students', 'class', currentClass, currentYear);
+      const conflict = findSeatConflict(
+        latestClassStudents,
+        currentClass,
+        selectedDesk.pcNumber,
+        studentId,
+      );
+      if (conflict) {
+        alert(`មិនអាចកំណត់តុ ${selectedDesk.pcNumber} បានទេ ព្រោះ ${conflict.name} អង្គុយរួចហើយ។ ប្លង់នឹង Refresh ឥឡូវនេះ។`);
+        const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+        await loadData(currentYear, currentClass, shift, true);
+        return;
+      }
       if (student) {
-        await addPcSyncTask(db, selectedDesk.pcNumber, student.studentId, student.name, 'ADD', student.password, currentYear);
+        if (student.pcNumber && student.pcNumber !== selectedDesk.pcNumber) {
+          await queuePcSyncTask(db, student, student.pcNumber, 'REMOVE', currentYear);
+        }
+        await queuePcSyncTask(db, student, selectedDesk.pcNumber, 'ADD', currentYear);
       }
       await db.update('students', studentId, { pcNumber: selectedDesk.pcNumber });
       
@@ -679,6 +962,62 @@ const SeatingPlan = () => {
     } catch (error) {
       console.error(error);
       alert('បរាជ័យក្នុងការចាត់តាំងតុ');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleMoveStudentToDesk = async (studentId: string, fromPc: string, toPc: string) => {
+    if (!activeYear || !selectedClass || !fromPc || !toPc || fromPc === toPc) return;
+    const currentYear = activeYear;
+    const currentClass = selectedClass;
+
+    const targetDesk = desks.find(d => d.pcNumber === toPc);
+    if (!targetDesk) return;
+
+    const sourceStudent = students.find(s => s.id === studentId);
+    if (!sourceStudent) return;
+
+    // Check if target desk has an occupant
+    const targetStudentId = targetDesk.studentIds.length > 0 ? targetDesk.studentIds[0] : null;
+    const targetStudent = targetStudentId ? students.find(s => s.id === targetStudentId) : null;
+
+    setIsSaving(true);
+    try {
+      const db = await initDB();
+      const studentsToUpdate: Student[] = [];
+
+      // 1. Move source student to toPc
+      await queuePcSyncTask(db, sourceStudent, fromPc, 'REMOVE', currentYear);
+      await queuePcSyncTask(db, sourceStudent, toPc, 'ADD', currentYear);
+      studentsToUpdate.push({ ...sourceStudent, pcNumber: toPc });
+
+      // 2. If target had a student, move them to fromPc (swap)
+      if (targetStudent) {
+        await queuePcSyncTask(db, targetStudent, toPc, 'REMOVE', currentYear);
+        await queuePcSyncTask(db, targetStudent, fromPc, 'ADD', currentYear);
+        studentsToUpdate.push({ ...targetStudent, pcNumber: fromPc });
+      }
+
+      await db.putMany('students', studentsToUpdate);
+      setStudents(prev => prev.map(s => {
+        const found = studentsToUpdate.find(u => u.id === s.id);
+        return found ? found : s;
+      }));
+
+      setSelectedDesk(null);
+
+      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+      await loadData(currentYear, currentClass, shift, true);
+
+      if (targetStudent) {
+        alert(`បានប្តូរកន្លែងអង្គុយរវាង ${sourceStudent.name} (${toPc}) និង ${targetStudent.name} (${fromPc}) ដោយជោគជ័យ!`);
+      } else {
+        alert(`បានផ្លាស់ប្តូរសិស្ស ${sourceStudent.name} ទៅកាន់តុ ${toPc} ដោយជោគជ័យ!`);
+      }
+    } catch (error: any) {
+      console.error(error);
+      alert('មានបញ្ហាក្នុងការផ្លាស់ប្តូរតុ៖ ' + (error.message || error));
     } finally {
       setIsSaving(false);
     }
@@ -695,7 +1034,7 @@ const SeatingPlan = () => {
       // Partial update to safely clear pcNumber and password
       const student = getStudentForDesk(studentId);
       if (student && student.pcNumber) {
-        await addPcSyncTask(db, student.pcNumber, student.studentId, student.name, 'REMOVE', null, currentYear);
+        await queuePcSyncTask(db, student, student.pcNumber, 'REMOVE', currentYear);
       }
       // Partial update to safely clear pcNumber and password
       await db.update('students', studentId, { pcNumber: null, password: null });
@@ -726,7 +1065,7 @@ const SeatingPlan = () => {
       for (let i = 0; i < students.length; i++) {
         if (students[i].pcNumber || students[i].password) {
           if (students[i].pcNumber) {
-             await addPcSyncTask(db, students[i].pcNumber!, students[i].studentId, students[i].name, 'REMOVE', null, currentYear);
+            await queuePcSyncTask(db, students[i], students[i].pcNumber!, 'REMOVE', currentYear);
           }
           const updatedStudent = { ...students[i], pcNumber: null, password: null };
           studentsToUpdate.push(updatedStudent);
@@ -778,6 +1117,7 @@ const SeatingPlan = () => {
         if (i < availableDesks.length) {
           const student = { ...unassignedStudents[i], pcNumber: availableDesks[i].pcNumber };
           studentsToUpdate.push(student);
+          await queuePcSyncTask(db, student, availableDesks[i].pcNumber, 'ADD', currentYear);
           assignedCount++;
         }
       }
@@ -880,92 +1220,123 @@ const SeatingPlan = () => {
     const isConflict = desk.studentIds.length > 1;
     const student = desk.studentIds.length === 1 ? getStudentForDesk(desk.studentIds[0]) : null;
 
-    let borderClass = 'border-border';
-    let bgClass = 'bg-white hover:bg-background-selected';
-    let iconColor = 'text-blue-500';
+    let borderClass = 'border-border/80';
+    let bgClass = 'bg-surface hover:bg-surface-hover/60';
+    let iconColor = 'text-primary';
 
     if (isTeacher) {
-      borderClass = 'border-green-300';
-      bgClass = 'bg-green-50 hover:bg-green-100';
-      iconColor = 'text-green-600';
+      borderClass = 'border-emerald-300';
+      bgClass = 'bg-emerald-50/70 hover:bg-emerald-100/70';
+      iconColor = 'text-emerald-600';
     } else if (desk.status === 'Issue') {
-      borderClass = 'border-red-300';
-      bgClass = 'bg-red-50 hover:bg-red-100';
-      iconColor = 'text-danger';
+      borderClass = 'border-rose-300';
+      bgClass = 'bg-rose-50/80 hover:bg-rose-100/80';
+      iconColor = 'text-rose-600';
     } else if (isConflict) {
-      borderClass = 'border-orange-400 border-[3px]';
-      bgClass = 'bg-orange-50 hover:bg-orange-100';
-      iconColor = 'text-orange-500';
+      borderClass = 'border-amber-400 ring-2 ring-amber-400/60';
+      bgClass = 'bg-amber-50/80 hover:bg-amber-100/80';
+      iconColor = 'text-amber-600';
     } else if (student) {
-      borderClass = 'border-blue-200';
-      bgClass = 'bg-blue-50 hover:bg-blue-100';
+      borderClass = 'border-blue-200/90';
+      bgClass = 'bg-blue-50/40 hover:bg-blue-50/80';
     }
     
-    const isDragging = draggedDeskId === desk.id;
+    const isDragging = draggedDeskId === desk.pcNumber;
+    const isDropTarget = dragOverPc === desk.pcNumber && !isTeacher && desk.status !== 'Issue' && isEditMode;
     const rotation = currentLayout?.deskRotations?.[desk.pcNumber] || 0;
 
     return (
       <div 
         key={desk.id} 
-        draggable={!isTeacher && desk.status !== 'Issue' && !isConflict && !!student && !isEditMode}
-        onDragStart={(e) => handleDragStart(e, desk)}
-        onDragOver={handleDragOver}
-        onDrop={(e) => handleDrop(e, desk)}
+        draggable={isEditMode && !isTeacher && desk.status !== 'Issue' && !isConflict && !!student}
+        onDragStart={(e) => isEditMode && handleDragStart(e, desk)}
+        onDragOver={(e) => isEditMode && handleDragOver(e, desk.pcNumber)}
+        onDragLeave={(e) => isEditMode && handleDragLeave(e, desk.pcNumber)}
+        onDrop={(e) => isEditMode && handleDrop(e, desk)}
         onDragEnd={handleDragEnd}
-        className={`flex flex-col border rounded-xl overflow-hidden cursor-pointer transition-all duration-200 shadow-sm hover:shadow-md relative
+        className={`flex flex-col h-full min-h-[126px] border rounded-xl overflow-hidden cursor-pointer transition-all duration-200 shadow-sm hover:shadow-md relative
           ${borderClass} ${bgClass} 
-          ${isDragging ? 'opacity-50 scale-95 border-dashed border-2' : ''}
+          ${isDragging ? 'opacity-40 scale-95 border-dashed border-2 border-blue-400' : ''}
+          ${isDropTarget ? 'ring-4 ring-blue-500 ring-offset-2 border-blue-500 bg-blue-50/90 scale-[1.03] shadow-lg z-10' : ''}
           ${!isTeacher && desk.status !== 'Issue' && !isEditMode ? 'active:scale-95' : ''}
+          ${isEditMode && !!student ? 'cursor-grab active:cursor-grabbing hover:border-blue-400 hover:shadow-md' : ''}
         `}
         onClick={() => !isEditMode && handleDeskClick(desk)}
       >
+        {/* Drop target overlay */}
+        {isDropTarget && (
+          <div className="absolute inset-0 bg-blue-600/10 border-2 border-dashed border-blue-600 rounded-xl flex flex-col items-center justify-center p-2 z-20 backdrop-blur-[1px] animate-pulse pointer-events-none">
+            <div className="bg-blue-600 text-white px-2.5 py-1 rounded-full shadow-md text-[11px] font-bold flex items-center gap-1">
+              {desk.studentIds.length === 0 ? (
+                <span>📥 ដាក់លើតុ {desk.pcNumber}</span>
+              ) : (
+                <span>🔄 ប្តូរកន្លែងជាមួយ {student?.name || desk.pcNumber}</span>
+              )}
+            </div>
+          </div>
+        )}
+
         {isEditMode && (
           <button 
             className="absolute top-1 right-1 p-1 bg-white border border-gray-200 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 shadow-sm transition-colors z-10"
             onClick={(e) => handleRotateDesk(e, desk.pcNumber)}
-            title="បង្វិលតុ (Rotate)"
+            title="បង្វិលតុ"
           >
             <RotateCw size={14} />
           </button>
         )}
-        <div className={`px-3 py-2 print:py-1 flex items-center justify-between border-b ${borderClass} bg-white/50`}>
-          <div className="flex items-center gap-2 pointer-events-none">
-            <Monitor size={14} className={`${iconColor} transition-transform duration-300`} style={{ transform: `rotate(${rotation}deg)` }} />
-            <span className={`text-xs print:text-[10px] font-semibold ${isTeacher ? 'text-green-700' : 'text-secondary-text'}`}>
+        <div className={`px-2.5 py-1.5 print:py-1 flex items-center justify-between border-b ${borderClass} bg-surface/70`}>
+          <div className="flex items-center gap-1.5 pointer-events-none">
+            <Monitor size={13} className={`${iconColor} transition-transform duration-300`} style={{ transform: `rotate(${rotation}deg)` }} />
+            <span className={`text-[11px] print:text-[10px] font-bold ${isTeacher ? 'text-emerald-800' : 'text-main-text'}`}>
               {desk.pcNumber}
             </span>
           </div>
           {!isTeacher && desk.status === 'Issue' && (
-            <span className="w-2 h-2 rounded-full bg-danger animate-pulse"></span>
+            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
           )}
           {!isTeacher && isConflict && (
-            <AlertCircle size={14} className="text-orange-500 animate-pulse" />
+            <AlertCircle size={13} className="text-amber-500 animate-pulse" />
           )}
         </div>
-        <div className="p-3 print:p-2 flex-1 flex flex-col justify-center min-h-[80px] print:min-h-[60px] pointer-events-none">
+        <div className="px-2 py-2 print:p-1 flex-1 flex flex-col min-h-[90px] print:min-h-[60px] pointer-events-none justify-between overflow-visible">
           {isTeacher ? (
-            <div className="text-center font-bold text-green-700">តុគ្រូ (Teacher)</div>
+            <div className="text-center font-bold text-emerald-800 h-full flex items-center justify-center">តុគ្រូ</div>
           ) : isConflict ? (
-            <div className="flex flex-col items-center justify-center text-orange-600">
-              <AlertTriangle size={20} className="mb-1" />
+            <div className="flex flex-col items-center justify-center text-amber-700 h-full">
+              <AlertTriangle size={18} className="mb-1 text-amber-600" />
               <span className="text-xs font-bold uppercase tracking-wider text-center leading-tight">ជាន់គ្នា<br/>{desk.studentIds.length} នាក់</span>
             </div>
           ) : student ? (
-            <div className="flex flex-col gap-1.5">
-              <div className="font-semibold text-sm print:text-xs line-clamp-2 text-primary leading-tight text-center transition-all duration-300">
-                {language === 'KH' ? student.name : (student.englishName || student.name)}
-              </div>
-              {showPasswords && student.password && (
-                <div className="flex items-center justify-center gap-1 px-2 py-1 print:py-0.5 bg-white/80 rounded-md text-xs print:text-[10px] font-mono font-medium text-primary border border-border/50 mx-auto">
-                  <Key size={12} className="text-secondary-text" /> 
-                  {student.password}
+            (() => {
+              const displayName = language === 'KH' ? student.name : (student.englishName || student.name);
+              const nameLen = (displayName || '').length;
+              const fontStyleClass = nameLen > 20 
+                ? 'text-[11px] leading-[1.7]' 
+                : nameLen > 14 
+                  ? 'text-xs leading-[1.75]' 
+                  : 'text-[13px] leading-[1.75]';
+
+              return (
+                <div className="flex flex-col h-full justify-between gap-1 overflow-visible">
+                  <div className="flex-1 flex flex-col justify-center py-1 overflow-visible">
+                    <div className={`font-bold text-primary text-center transition-all duration-200 break-words overflow-visible ${fontStyleClass}`}>
+                      {displayName}
+                    </div>
+                  </div>
+                  {showPasswords && student.password && (
+                    <div className="mt-auto flex items-center justify-center gap-1 px-2 py-0.5 print:py-0.5 bg-surface rounded-md text-[11px] print:text-[10px] font-mono font-bold text-primary border border-border/70 mx-auto min-w-[55px] shadow-2xs">
+                      <Key size={11} className="text-secondary-text shrink-0" />
+                      <span>{student.password}</span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()
           ) : (
-            <div className="flex flex-col items-center justify-center text-secondary-text/50">
-              <Keyboard size={20} className="mb-1" />
-              <span className="text-xs font-medium uppercase tracking-wider">ទំនេរ</span>
+            <div className="flex flex-col items-center justify-center text-secondary-text/50 h-full">
+              <Keyboard size={18} className="mb-0.5 opacity-60" />
+              <span className="text-[11px] font-bold uppercase tracking-wider text-secondary-text/60">ទំនេរ</span>
             </div>
           )}
         </div>
@@ -975,119 +1346,225 @@ const SeatingPlan = () => {
 
   const activeStudentCount = desks.filter(d => d.pcNumber !== 'Teacher PC' && d.studentIds.length > 0).length;
   const emptyDeskCount = desks.filter(d => d.pcNumber !== 'Teacher PC' && d.studentIds.length === 0).length;
+  const issueDeskCount = desks.filter(d => d.pcNumber !== 'Teacher PC' && d.status === 'Issue').length;
+  const conflictDeskCount = desks.filter(d => d.studentIds.length > 1).length;
 
   return (
-    <div className="flex flex-col w-full pb-10 print:pb-0">
+    <div className="flex flex-col w-full pb-16 print:pb-0 space-y-5">
       
-      {/* Top Panel: Filters & Actions */}
-      <div className="bg-white border border-gray-300 mb-6 print:hidden">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
-          <span>កំណត់លក្ខខណ្ឌ និងសកម្មភាព (Filters & Actions)</span>
+      {/* Header Banner - Clean & Modern Ribbon */}
+      <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 rounded-2xl p-4 sm:p-5 text-white shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 print:hidden">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-white/10 backdrop-blur-xs rounded-xl shadow-2xs">
+            <Grid size={22} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-base sm:text-lg font-bold tracking-tight">ប្លង់តុសិក្សា</h1>
+            <p className="text-xs text-blue-100/80">
+              {(() => {
+                const selectedClassObj = classes.find(c => c.id === selectedClass);
+                return selectedClassObj 
+                  ? `ថ្នាក់៖ ${selectedClassObj.name} (${selectedClassObj.shift === 'Morning' ? 'វេនព្រឹក' : selectedClassObj.shift === 'Afternoon' ? 'វេនរសៀល' : 'វេនយប់'})` 
+                  : 'រៀបចំ និងតាមដានកន្លែងអង្គុយសិស្ស';
+              })()}
+            </p>
+          </div>
         </div>
-        <div className="p-4 flex flex-col xl:flex-row gap-4 justify-between items-end">
-          <div className="flex flex-wrap items-center gap-6">
-            <div className="flex flex-col gap-1.5 min-w-[250px]">
-              <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ជ្រើសរើសថ្នាក់ (Class)</label>
+
+        <div className="flex items-center gap-2.5 self-end sm:self-center">
+          {activeYear && (
+            <span className="text-xs font-semibold px-3 py-1 rounded-full bg-white/15 text-white shadow-2xs">
+              ឆ្នាំសិក្សា {activeYear}
+            </span>
+          )}
+          <button 
+            type="button"
+            onClick={handlePrint}
+            disabled={isLoading || !selectedClass}
+            className="inline-flex items-center gap-1.5 bg-white hover:bg-blue-50 text-blue-800 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer"
+          >
+            <Printer size={15} />
+            <span>បោះពុម្ព</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Metrics Summary Strip */}
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 print:hidden">
+        {/* Active Students on Desks */}
+        <div className="bg-surface rounded-2xl border border-border/80 p-4 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-secondary-text uppercase tracking-wider">សិស្សមានកន្លែងអង្គុយ</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <strong className="text-2xl font-bold text-main-text">{activeStudentCount}</strong>
+            <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/60">នាក់</span>
+          </div>
+        </div>
+
+        {/* Empty Desks */}
+        <div className="bg-indigo-50/70 rounded-2xl border border-indigo-200/70 p-4 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-indigo-800 uppercase tracking-wider">តុទំនេរ</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <strong className="text-2xl font-bold text-indigo-700">{emptyDeskCount}</strong>
+            <span className="text-xs font-semibold text-indigo-700/80 bg-indigo-100/60 px-2 py-0.5 rounded-md">តុ</span>
+          </div>
+        </div>
+
+        {/* Issue Desks or Conflicts */}
+        <div className="bg-rose-50/70 rounded-2xl border border-rose-200/70 p-4 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-rose-800 uppercase tracking-wider flex items-center gap-1">
+            <AlertTriangle size={13} className="text-rose-600" />
+            <span>{conflictDeskCount > 0 ? 'ជាន់កន្លែងគ្នា' : 'កុំព្យូទ័រមានបញ្ហា'}</span>
+          </span>
+          <div className="flex items-baseline justify-between mt-2">
+            <strong className="text-2xl font-bold text-rose-700">
+              {conflictDeskCount > 0 ? conflictDeskCount : issueDeskCount}
+            </strong>
+            <span className="text-xs font-semibold text-rose-700/80 bg-rose-100/60 px-2 py-0.5 rounded-md">
+              {conflictDeskCount > 0 ? 'តុ' : 'គ្រឿង'}
+            </span>
+          </div>
+        </div>
+
+        {/* Total Students in Class */}
+        <div className="bg-sky-50/70 rounded-2xl border border-sky-200/70 p-4 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-sky-800 uppercase tracking-wider">សិស្សសរុបក្នុងថ្នាក់</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <strong className="text-2xl font-bold text-sky-700">{students.length}</strong>
+            <span className="text-xs font-semibold text-sky-700/80 bg-sky-100/60 px-2 py-0.5 rounded-md">នាក់</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Control & Action Bar */}
+      <div className="bg-surface rounded-2xl border border-border/80 p-4 sm:p-5 shadow-xs print:hidden">
+        <div className="flex flex-col xl:flex-row gap-4 justify-between items-stretch xl:items-center">
+          {/* Class Select & Password Toggle */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-[220px]">
+              <label className="text-[11px] font-bold text-secondary-text uppercase tracking-wider block mb-1.5">
+                ថ្នាក់រៀន
+              </label>
               <select 
-                className="w-full bg-white border border-gray-300 text-gray-800 text-sm rounded-sm px-3 py-2 outline-none focus:border-[#2a5298] transition-colors"
+                className="w-full bg-background border border-border text-main-text text-sm rounded-xl px-3.5 py-2 font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all cursor-pointer shadow-2xs disabled:opacity-50"
                 value={selectedClass}
                 onChange={(e) => setSelectedClass(e.target.value)}
+                disabled={isSaving || isLoading}
               >
                 {classes.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} ({c.shift === 'Morning' ? 'ព្រឹក' : c.shift === 'Afternoon' ? 'រសៀល' : 'យប់'})</option>
+                  <option key={c.id} value={c.id}>
+                    ថ្នាក់ {c.name} ({c.shift === 'Morning' ? 'វេនព្រឹក' : c.shift === 'Afternoon' ? 'វេនរសៀល' : 'វេនយប់'})
+                  </option>
                 ))}
                 {classes.length === 0 && <option value="">មិនមានថ្នាក់</option>}
               </select>
             </div>
-            
-            <button 
-              className="mt-5 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-3 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors"
-              onClick={() => setShowPasswords(!showPasswords)}
-            >
-              {showPasswords ? <EyeOff size={16} /> : <Eye size={16} />} បង្ហាញ Password
-            </button>
+
+            <div className="self-end">
+              <button 
+                type="button"
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold rounded-xl border transition-all shadow-2xs active:scale-95 cursor-pointer ${
+                  showPasswords 
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600' 
+                    : 'bg-background hover:bg-surface-hover text-secondary-text border-border'
+                }`}
+                onClick={() => setShowPasswords(!showPasswords)}
+              >
+                {showPasswords ? <EyeOff size={15} /> : <Eye size={15} />}
+                <span>Password</span>
+              </button>
+            </div>
           </div>
-          
-          <div className="flex flex-wrap items-center gap-3 mt-4 xl:mt-0">
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2 self-end xl:self-center">
             {!isEditMode ? (
               <>
                 <button 
-                  className="bg-[#48b5c9] hover:bg-[#3aa3b7] text-white px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  type="button"
                   onClick={handleAutoAssign}
                   disabled={isSaving || isLoading || !selectedClass}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  <Zap size={16} /> រៀបចំកន្លែងស្វ័យប្រវត្តិ
+                  <Zap size={15} />
+                  <span>រៀបចំស្វ័យប្រវត្តិ</span>
                 </button>
+
                 <button 
-                  className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  type="button"
                   onClick={generatePasswordsForClass}
                   disabled={isSaving || isLoading || !selectedClass}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-background hover:bg-surface-hover text-secondary-text hover:text-main-text border border-border px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  <RefreshCw size={16} /> បង្កើត Password រួម
+                  <RefreshCw size={15} />
+                  <span>Password រួម</span>
                 </button>
+
                 <button 
-                  className="bg-white border border-red-200 text-red-600 hover:bg-red-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  type="button"
                   onClick={handleClearAllAssignments}
                   disabled={isSaving || isLoading || !selectedClass}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  <Trash2 size={16} /> លុបទិន្នន័យតុ
+                  <Trash2 size={15} />
+                  <span>លុបទិន្នន័យតុ</span>
                 </button>
+
                 <button 
-                  className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  type="button"
                   onClick={() => setIsEditMode(true)}
                   disabled={isSaving || isLoading || !selectedClass}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-primary hover:bg-primary/90 text-white px-4 py-2.5 text-xs font-bold transition-all shadow-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  <Grid size={16} /> រៀបចំប្លង់ថ្នាក់
-                </button>
-                <button 
-                  className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent disabled:opacity-50"
-                  onClick={handlePrint}
-                  disabled={isLoading || !selectedClass}
-                >
-                  <Printer size={16} /> បោះពុម្ពប្លង់តុ
+                  <Grid size={15} />
+                  <span>កែប្លង់បន្ទប់</span>
                 </button>
               </>
             ) : (
               <>
-                <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded border border-blue-200 mr-4">
-                  <span className="text-sm font-medium text-blue-800">បន្ថែមជួរដេក៖</span>
+                <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-xl text-xs font-bold text-blue-900">
+                  <span>ជួរដេក៖</span>
                   <input 
                     type="number" 
-                    className="w-16 px-2 py-1 border border-gray-300 rounded text-sm outline-none text-center"
+                    className="w-14 px-2 py-1 bg-white border border-blue-200 rounded-lg text-xs font-bold text-center outline-hidden"
                     value={builderRows}
                     min={1} max={20}
                     onChange={(e) => handleUpdateGridSize(parseInt(e.target.value) || 1, builderCols)}
                   />
-                  <span className="text-sm font-medium text-blue-800 ml-2">ជួរឈរ៖</span>
+                  <span className="ml-1">ជួរឈរ៖</span>
                   <input 
                     type="number" 
-                    className="w-16 px-2 py-1 border border-gray-300 rounded text-sm outline-none text-center"
+                    className="w-14 px-2 py-1 bg-white border border-blue-200 rounded-lg text-xs font-bold text-center outline-hidden"
                     value={builderCols}
                     min={1} max={20}
                     onChange={(e) => handleUpdateGridSize(builderRows, parseInt(e.target.value) || 1)}
                   />
                 </div>
+
                 <button 
-                  className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+                  type="button"
                   onClick={() => {
                     setIsEditMode(false);
                     if (!activeYear) return;
                     const shift = classes.find(c => c.id === selectedClass)?.shift || 'Morning';
-                    loadData(activeYear, selectedClass, shift, true); // reload to cancel changes
+                    loadData(activeYear, selectedClass, shift, true);
                   }}
                   disabled={isSaving}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-background hover:bg-surface-hover text-secondary-text border border-border px-3.5 py-2 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   បោះបង់
                 </button>
+
                 <button 
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+                  type="button"
                   onClick={() => {
                     setIsEditMode(false);
                     handleSaveLayout();
                   }}
                   disabled={isSaving}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
-                  <CheckCircle2 size={16} /> រក្សាទុកប្លង់ថ្មី
+                  <CheckCircle2 size={15} />
+                  <span>រក្សាទុកប្លង់ថ្មី</span>
                 </button>
               </>
             )}
@@ -1095,45 +1572,91 @@ const SeatingPlan = () => {
         </div>
       </div>
 
-      {/* Bottom Panel: Lab Layout */}
-      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6 print:border-none print:mb-0">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center print:hidden">
-          <span>ប្លង់កុំព្យូទ័រ (Seating Plan)</span>
+      {/* Feedback banner for drag & drop or actions */}
+      {feedbackMessage && (
+        <div className={`px-4 py-3 rounded-2xl border text-xs font-bold flex items-center justify-between shadow-2xs animate-in fade-in slide-in-from-top-2 print:hidden ${
+          feedbackMessage.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-900' :
+          feedbackMessage.type === 'error' ? 'bg-rose-50 border-rose-200 text-rose-900' :
+          'bg-blue-50 border-blue-200 text-blue-900'
+        }`}>
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 size={16} className={feedbackMessage.type === 'error' ? 'text-rose-600' : 'text-emerald-600'} />
+            <span>{feedbackMessage.text}</span>
+          </div>
+          <button 
+            type="button"
+            onClick={() => setFeedbackMessage(null)}
+            className="text-secondary-text hover:text-main-text text-xs px-2 py-0.5 rounded-lg cursor-pointer"
+          >
+            ✕
+          </button>
         </div>
-        
+      )}
+
+      {/* Unassigned Students Section */}
+      {unassignedStudentsList.length > 0 && (
+        <div className="bg-amber-50/30 border border-amber-200/80 rounded-2xl p-4 sm:p-5 shadow-xs print:hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+              <h3 className="text-xs font-bold text-main-text uppercase tracking-wider">
+                សិស្សមិនទាន់មានតុ ({unassignedStudentsList.length} នាក់)
+              </h3>
+            </div>
+            {isEditMode && draggedStudentData && draggedStudentData.sourcePc && (
+              <div 
+                onDragOver={(e) => { e.preventDefault(); setIsDragOverUnassign(true); }}
+                onDragLeave={() => setIsDragOverUnassign(false)}
+                onDrop={handleDropToUnassign}
+                className={`px-3 py-1.5 rounded-xl border-2 border-dashed transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer ${
+                  isDragOverUnassign ? 'border-rose-500 bg-rose-100 text-rose-700 scale-105' : 'border-rose-300 bg-rose-50 text-rose-600'
+                }`}
+              >
+                <Trash2 size={14} /> <span>ទម្លាក់ទីនេះដើម្បីដកសិស្សចេញពីតុ</span>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto p-1">
+            {unassignedStudentsList.map(s => (
+              <div 
+                key={s.id}
+                draggable={isEditMode}
+                onDragStart={(e) => isEditMode && handleDragStartUnassigned(e, s)}
+                onDragEnd={handleDragEnd}
+                className={`bg-surface hover:bg-blue-50 border border-border hover:border-blue-300 text-main-text px-3 py-1.5 rounded-xl shadow-2xs flex items-center gap-2 text-xs font-medium transition-all select-none ${
+                  isEditMode ? 'cursor-grab active:cursor-grabbing hover:scale-102' : 'cursor-default'
+                }`}
+              >
+                <div className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-bold">
+                  {s.name.charAt(0)}
+                </div>
+                <span className="font-bold text-xs">{s.name}</span>
+                <span className="text-[10px] text-secondary-text font-mono">({s.studentId})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Blueprint Grid Card */}
+      <div className="bg-surface rounded-2xl border border-border/80 shadow-xs mb-6 print:border-none print:shadow-none print:bg-transparent overflow-hidden">
         {isLoading && !isSaving ? (
-           <div className="flex items-center justify-center p-12 text-secondary-text">
-             កំពុងទាញយកទិន្នន័យ...
-           </div>
+          <div className="flex items-center justify-center p-16 text-secondary-text gap-3">
+            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm font-medium">កំពុងទាញយកទិន្នន័យប្លង់តុ...</span>
+          </div>
         ) : (
           <div className="p-4 sm:p-6 print:p-0">
-            <div className="flex flex-wrap items-center justify-between mb-8 pb-4 border-b border-gray-200 gap-4 print:hidden">
-              <div className="flex flex-wrap items-center gap-6 text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full bg-blue-100 border border-blue-200"></div>
-                  <span className="text-gray-600">មានសិស្សអង្គុយ ({activeStudentCount})</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full bg-white border border-gray-300"></div>
-                  <span className="text-gray-600">ទំនេរ ({emptyDeskCount})</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full bg-red-100 border border-red-300"></div>
-                  <span className="text-gray-600">កុំព្យូទ័រមានបញ្ហា</span>
-                </div>
-                {desks.some(d => d.studentIds.length > 1) && (
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded-full bg-orange-100 border-2 border-orange-400"></div>
-                    <span className="text-orange-600 font-bold">ជាន់កន្លែងគ្នា</span>
-                  </div>
-                )}
-              </div>
-              <span className="bg-gray-100 text-gray-800 text-sm font-medium px-3 py-1 rounded-sm border border-gray-300">
-                សិស្សសរុប៖ {students.length} នាក់
-              </span>
-            </div>
 
-          {/* Print Header removed per user request */}          {currentLayout && (
+          {/* Edit Mode Notification */}
+          {isEditMode && (
+            <div className="mb-4 w-full bg-blue-50 border border-blue-200 text-blue-900 px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-2xs print:hidden">
+              <RefreshCw size={15} className="text-blue-600 animate-spin" />
+              <span>ទម្រង់កែប្លង់បន្ទប់ (អូសឈ្មោះសិស្សដើម្បីប្តូរកន្លែង)</span>
+            </div>
+          )}
+
+          {currentLayout && (
              <div className="flex flex-col items-center justify-center bg-background rounded-xl p-8 border border-border/50 print:bg-white print:border-none print:p-0 print:w-full w-full overflow-x-auto print:overflow-visible">
                <div 
                  className={`grid gap-3 sm:gap-4 print:gap-1 w-full max-w-7xl print:max-w-none ${isEditMode ? 'p-4 border-2 border-dashed border-blue-200 bg-blue-50/30 rounded-xl' : ''}`}
@@ -1174,22 +1697,17 @@ const SeatingPlan = () => {
                       return (
                         <div 
                           key={`cell-${rIdx}-${cIdx}`} 
-                          className={`flex justify-center w-full min-w-[80px] sm:min-w-[100px] print:min-w-0 ${shouldSpanTwo ? 'col-span-2' : ''}`}
-                          onDragOver={isEditMode ? (e) => e.preventDefault() : undefined}
-                          onDrop={isEditMode ? (e) => handleDropLayout(e, rIdx, cIdx) : undefined}
-                          onClick={isEditMode ? () => handleCellClickInEditMode(rIdx, cIdx) : undefined}
+                          className={`flex justify-center w-full min-w-[95px] sm:min-w-[110px] md:min-w-[120px] print:min-w-0 ${shouldSpanTwo ? 'col-span-2' : ''}`}
                         >
                            {cell ? (
-                             <div 
-                               className={`w-full ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:ring-2 ring-blue-400 rounded-xl transition-all' : ''}`}
-                               draggable={isEditMode}
-                               onDragStart={(e) => handleDragStartLayout(e, cell)}
-                               onClick={isEditMode ? (e) => { e.stopPropagation(); handleCellClickInEditMode(rIdx, cIdx); } : undefined}
-                             >
+                             <div className="w-full h-full">
                                {renderDesk(desks.find(d => d.pcNumber === cell) || { id: `temp-${cell}`, pcNumber: cell, studentIds: [], status: 'Good' })}
                              </div>
                            ) : (
-                             <div className={`w-full flex items-center justify-center h-[114px] print:h-[75px] ${isEditMode ? 'border-2 border-dashed border-blue-300 rounded-xl bg-blue-50/50 hover:bg-blue-100 cursor-pointer transition-colors text-blue-400 font-medium text-xs' : ''}`}>
+                             <div 
+                               className={`w-full flex items-center justify-center min-h-[120px] h-full print:h-[75px] ${isEditMode ? 'border-2 border-dashed border-blue-300 rounded-xl bg-blue-50/50 hover:bg-blue-100 cursor-pointer transition-colors text-blue-400 font-medium text-xs' : ''}`}
+                               onClick={isEditMode ? () => handleCellClickInEditMode(rIdx, cIdx) : undefined}
+                             >
                                {isEditMode ? '+ ដាក់តុទីនេះ' : ''}
                              </div>
                            )}
@@ -1212,22 +1730,22 @@ const SeatingPlan = () => {
       >
         {selectedDesk && (
           <div className="space-y-6">
-            <div className="flex items-center justify-between p-4 bg-background rounded-xl border border-border">
+            <div className="flex items-center justify-between p-4 bg-background rounded-2xl border border-border/80">
               <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${selectedDesk.status === 'Issue' ? 'bg-danger-light text-danger' : 'bg-success-light text-success'}`}>
-                  {selectedDesk.status === 'Issue' ? <MonitorPlay size={24} /> : <Monitor size={24} />}
+                <div className={`p-2.5 rounded-xl ${selectedDesk.status === 'Issue' ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                  {selectedDesk.status === 'Issue' ? <MonitorPlay size={22} /> : <Monitor size={22} />}
                 </div>
                 <div>
-                  <p className="text-sm text-secondary-text mb-0.5">ស្ថានភាពកុំព្យូទ័រ</p>
-                  <p className={`font-semibold ${selectedDesk.status === 'Issue' ? 'text-danger' : 'text-success'}`}>
-                    {selectedDesk.status === 'Issue' ? 'មានបញ្ហា (Needs Fix)' : 'ដំណើរការល្អ (Good)'}
+                  <p className="text-xs font-semibold text-secondary-text mb-0.5">ស្ថានភាពកុំព្យូទ័រ</p>
+                  <p className={`font-bold text-sm ${selectedDesk.status === 'Issue' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {selectedDesk.status === 'Issue' ? 'មានបញ្ហា' : 'ដំណើរការល្អ'}
                   </p>
                 </div>
               </div>
               {selectedDesk.pcNumber !== 'Teacher PC' && (
                 <div>
                   {selectedDesk.status === 'Issue' ? (
-                     <Button variant="primary" size="sm" onClick={handleMarkResolved} disabled={isSaving} className="bg-success hover:bg-green-600">
+                     <Button variant="primary" size="sm" onClick={handleMarkResolved} disabled={isSaving} className="bg-emerald-600 hover:bg-emerald-700">
                         <CheckCircle2 size={16} className="mr-1" /> ដោះស្រាយរួចរាល់
                      </Button>
                   ) : (
@@ -1240,13 +1758,13 @@ const SeatingPlan = () => {
             </div>
 
             {isReportingIssue && (
-              <div className="p-4 bg-danger-light border border-red-200 rounded-xl animate-in fade-in slide-in-from-top-4">
-                <h4 className="text-sm font-semibold text-danger mb-2">រាយការណ៍បញ្ហាកុំព្យូទ័រនេះ</h4>
+              <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl animate-in fade-in slide-in-from-top-4">
+                <h4 className="text-xs font-bold text-rose-700 mb-2">រាយការណ៍បញ្ហាកុំព្យូទ័រនេះ</h4>
                 <div className="flex gap-2">
                   <Input 
                     value={issueDescription}
                     onChange={(e) => setIssueDescription(e.target.value)}
-                    placeholder="សូមបញ្ចូលបញ្ហា (ឧ. ខូច Mouse, បើកមិនចេញ)..."
+                    placeholder="បញ្ចូលបញ្ហា (ឧ. ខូច Mouse, បើកមិនចេញ)..."
                     disabled={isSaving}
                   />
                   <Button variant="danger" disabled={isSaving} onClick={handleReportIssue}>រាយការណ៍</Button>
@@ -1254,15 +1772,15 @@ const SeatingPlan = () => {
               </div>
             )}
 
-            <div className="border-t border-border pt-6">
-              <h3 className="text-sm font-semibold text-primary uppercase tracking-wider mb-4">សិស្សអង្គុយតុនេះ</h3>
+            <div className="border-t border-border/80 pt-5">
+              <h3 className="text-xs font-bold text-secondary-text uppercase tracking-wider mb-3">សិស្សអង្គុយតុនេះ</h3>
               
               {selectedDesk.studentIds.length > 0 ? (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3">
                   {selectedDesk.studentIds.length > 1 && (
-                    <div className="bg-orange-100 border border-orange-300 text-orange-800 p-3 rounded-lg flex gap-2 items-start text-sm">
-                      <AlertTriangle size={18} className="shrink-0 mt-0.5" />
-                      <p><strong>បញ្ហាជាន់កន្លែងគ្នា៖</strong> មានសិស្សច្រើនជាងម្នាក់ត្រូវបានចាត់តាំងឲ្យអង្គុយតុនេះ (ប្រហែលមកពីការចុច Save ព្រមគ្នាពីកុំព្យូទ័រពីរផ្សេងគ្នា)។ សូមដកសិស្សចេញ ដើម្បីជួសជុលបញ្ហានេះ។</p>
+                    <div className="bg-amber-50 border border-amber-300 text-amber-900 p-3.5 rounded-2xl flex gap-2 items-start text-xs font-medium">
+                      <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600" />
+                      <p><strong>បញ្ហាជាន់កន្លែងគ្នា៖</strong> មានសិស្សច្រើនជាងម្នាក់ត្រូវបានចាត់តាំងឲ្យអង្គុយតុនេះ។</p>
                     </div>
                   )}
 
@@ -1270,34 +1788,70 @@ const SeatingPlan = () => {
                     const stu = getStudentForDesk(studentId);
                     if (!stu) return null;
                     return (
-                      <div key={studentId} className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between p-4 border border-blue-200 bg-blue-50 rounded-xl">
+                      <div key={studentId} className="flex flex-col gap-2.5">
+                        <div className="flex items-center justify-between p-4 border border-blue-200/80 bg-blue-50/50 rounded-2xl">
                           <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm text-blue-500">
-                              <User size={24} />
+                            <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center font-bold text-blue-700 text-sm shadow-2xs">
+                              {stu.name.charAt(0)}
                             </div>
                             <div>
-                              <h4 className="font-semibold text-primary text-base">{stu.name}</h4>
-                              <p className="text-sm text-secondary-text">អត្តលេខ៖ {stu.studentId}</p>
+                              <h4 className="font-bold text-main-text text-sm">{stu.name}</h4>
+                              <p className="text-xs text-secondary-text font-mono">អត្តលេខ៖ {stu.studentId}</p>
                             </div>
                           </div>
                           <Button variant="danger" size="sm" onClick={() => handleUnassignStudent(stu.id)} disabled={isSaving}>
                             ដកចេញ
                           </Button>
                         </div>
+
+                        {/* Move / Swap Student to another Desk */}
+                        <div className="bg-surface border border-border/80 p-3.5 rounded-2xl shadow-2xs">
+                          <div className="flex items-center justify-between gap-3">
+                            <label className="text-xs font-bold text-secondary-text whitespace-nowrap">
+                              ផ្លាស់ប្តូរទៅតុផ្សេង៖
+                            </label>
+                            <select
+                              className="text-xs border rounded-xl px-3 py-1.5 bg-background border-border focus:ring-primary focus:border-primary font-bold max-w-[200px]"
+                              value=""
+                              onChange={(e) => {
+                                const targetPc = e.target.value;
+                                if (targetPc) void handleMoveStudentToDesk(stu.id, selectedDesk.pcNumber, targetPc);
+                              }}
+                              disabled={isSaving}
+                            >
+                              <option value="" disabled>ជ្រើសរើសតុដើម្បីប្តូរ...</option>
+                              {desks
+                                .filter(d => d.pcNumber !== 'Teacher PC' && d.pcNumber !== selectedDesk.pcNumber && d.status !== 'Issue')
+                                .sort((a, b) => a.pcNumber.localeCompare(b.pcNumber, undefined, { numeric: true }))
+                                .map(d => {
+                                  const occupant = d.studentIds.length > 0 ? getStudentForDesk(d.studentIds[0]) : null;
+                                  return (
+                                    <option key={d.pcNumber} value={d.pcNumber}>
+                                      {d.pcNumber} {occupant ? `(ប្តូរជាមួយ: ${occupant.name})` : '(តុទំនេរ)'}
+                                    </option>
+                                  );
+                                })}
+                            </select>
+                          </div>
+                        </div>
                         
-                        <div className="bg-white border border-border p-4 rounded-xl shadow-sm mb-2">
-                          <label className="block text-sm font-medium text-secondary-text mb-3">លេខកូដសម្ងាត់ (Password)</label>
-                          <div className="flex items-center justify-between bg-background p-3 rounded-lg border border-border">
-                            <div className="flex items-center gap-3">
-                              <Key size={18} className="text-secondary-text" />
-                              <span className="font-mono text-lg font-semibold tracking-wider text-primary">
+                        <div className="bg-surface border border-border/80 p-4 rounded-2xl shadow-2xs">
+                          <label className="block text-xs font-bold text-secondary-text uppercase tracking-wider mb-2.5">លេខកូដសម្ងាត់</label>
+                          <div className="flex items-center justify-between bg-background p-3 rounded-xl border border-border">
+                            <div className="flex items-center gap-2.5">
+                              <Key size={16} className="text-secondary-text" />
+                              <span className="font-mono text-base font-bold tracking-wider text-primary">
                                 {stu.password || '---'}
                               </span>
                             </div>
-                            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => generatePasswordForStudent(stu.id)} disabled={isSaving}>
-                              បង្កើតថ្មី
-                            </Button>
+                            <div className="flex items-center gap-2">
+                              <Button variant="secondary" size="sm" icon={RefreshCw} onClick={() => generatePasswordForStudent(stu.id)} disabled={isSaving}>
+                                បង្កើតថ្មី
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => handleManualSetPassword(stu.id, stu.password)} disabled={isSaving}>
+                                កែប្រែ
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1306,13 +1860,12 @@ const SeatingPlan = () => {
                 </div>
               ) : (
                 <div className="flex flex-col gap-4">
-                  <div className="flex flex-col items-center justify-center p-8 bg-background border border-dashed border-border rounded-xl text-center">
-                    <UserMinus size={32} className="text-secondary-text mb-3" />
-                    <p className="text-secondary-text font-medium mb-1">មិនទាន់មានសិស្សអង្គុយ</p>
-                    <p className="text-sm text-secondary-text/70 mb-4">សូមជ្រើសរើសសិស្សដើម្បីចាត់តាំងឲ្យអង្គុយតុនេះ</p>
+                  <div className="flex flex-col items-center justify-center p-8 bg-background border border-dashed border-border/80 rounded-2xl text-center">
+                    <UserMinus size={32} className="text-secondary-text/60 mb-2.5" />
+                    <p className="text-xs font-bold text-secondary-text mb-3">មិនទាន់មានសិស្សអង្គុយទេ</p>
                     
                     <select 
-                      className="block w-full max-w-xs rounded-lg border-border focus:border-primary focus:ring-primary text-sm py-2 px-3 border bg-white shadow-sm disabled:opacity-50"
+                      className="block w-full max-w-xs rounded-xl border-border focus:border-primary focus:ring-primary text-xs font-bold py-2 px-3.5 border bg-surface shadow-2xs disabled:opacity-50"
                       value=""
                       onChange={(e) => handleAssignStudent(e.target.value)}
                       disabled={selectedDesk.status === 'Issue' || selectedDesk.pcNumber === 'Teacher PC' || isSaving}
@@ -1324,7 +1877,7 @@ const SeatingPlan = () => {
                       {unassignedStudentsList.length === 0 && <option value="" disabled>គ្មានសិស្សទំនេរទេ</option>}
                     </select>
                     {selectedDesk.status === 'Issue' && (
-                      <p className="text-xs text-danger mt-4">មិនអាចចាត់តាំងសិស្សឲ្យអង្គុយកុំព្យូទ័រខូចបានទេ</p>
+                      <p className="text-xs text-rose-600 font-medium mt-3">មិនអាចចាត់តាំងសិស្សឲ្យអង្គុយកុំព្យូទ័រខូចបានទេ</p>
                     )}
                   </div>
                 </div>

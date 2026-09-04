@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { Save, Download, Upload, Lock, Unlock, Edit, X, Globe, Languages } from 'lucide-react';
+import { Save, Download, Lock, Unlock, Edit, X, Globe, Languages, Settings, Award } from 'lucide-react';
 import { initDB } from '../store/db';
 import type { Student, ClassRecord, GradeRecord } from '../store/db';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
-import { Settings } from 'lucide-react';
 import './Gradebook.css';
 import { translateKhmerToEnglish } from '../utils/khmerTranslator';
 import { useAuth } from '../contexts/AuthContext';
@@ -29,6 +28,7 @@ const Gradebook = () => {
   const [isLocked, setIsLocked] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
   
   const { language, toggleLanguage } = useLanguage();
   const { activeYear } = useAcademicYear();
@@ -246,6 +246,7 @@ const Gradebook = () => {
           });
         
         setAllScopeStudents(calculateRanks(rows));
+        setHasChanges(false);
       } catch (error) {
         if (requestId === loadDataRequestRef.current) {
           console.error('Failed to load gradebook:', error);
@@ -292,6 +293,7 @@ const Gradebook = () => {
       // Calculate ranks dynamically on every stroke so UI is always updated
       return calculateRanks(newArray);
     });
+    setHasChanges(true);
   };
 
   const handleSave = async () => {
@@ -372,6 +374,7 @@ const Gradebook = () => {
         // Update original balance so we don't save twice if they click save again
         setAllScopeStudents(prev => prev.map(p => ({...p, originalPointsBalance: p.pointsBalance})));
       }
+      setHasChanges(false);
       
       alert(language === 'KH' ? 'រក្សាទុកជោគជ័យ!' : 'Saved successfully!');
     } catch (error) {
@@ -455,6 +458,10 @@ const Gradebook = () => {
   };
 
   const displayedStudents = allScopeStudents.filter(s => s.class === (selectedClass || classes[0]?.id));
+  const gradedStudentsCount = displayedStudents.filter(s => s.total > 0 || s.practice !== null || s.book !== null || s.exam !== null).length;
+  const averageScore = displayedStudents.length > 0 
+    ? (displayedStudents.reduce((acc, s) => acc + (s.total || 0), 0) / (displayedStudents.length || 1)).toFixed(1)
+    : '0';
 
   return (
     <>
@@ -466,33 +473,112 @@ const Gradebook = () => {
           }
         `}
       </style>
-      <div className="gradebook-container flex flex-col w-full pb-10 print:p-0 relative">
+      <div className="gradebook-container flex flex-col w-full pb-16 print:p-0 relative space-y-3.5">
         
-      <div className="bg-white border border-gray-300 mb-6 print:hidden relative z-10">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm">
-          កំណត់លក្ខខណ្ឌ
+      {/* Header Banner - Clean & Modern Ribbon */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 p-4 sm:p-5 rounded-2xl text-white shadow-xs print:hidden">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-white/10 backdrop-blur-xs rounded-xl shadow-2xs">
+            <Award size={22} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-base sm:text-lg font-bold tracking-tight">បញ្ជីស្រង់ពិន្ទុសិស្ស</h1>
+            <p className="text-xs text-blue-100/80 mt-0.5">
+              {(() => {
+                const curClass = classes.find(c => c.id === selectedClass);
+                return curClass ? `ថ្នាក់៖ ${curClass.name} (${curClass.shift === 'Morning' ? 'វេនព្រឹក' : curClass.shift === 'Afternoon' ? 'វេនរសៀល' : 'វេនយប់'}) · ខែ${currentMonth}` : `ខែ${currentMonth}`;
+              })()}
+            </p>
+          </div>
         </div>
-        <div className="p-4 flex flex-wrap items-end justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-6">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ថ្នាក់រៀន<span className="text-red-500 ml-0.5">*</span></label>
+
+        <div className="flex items-center gap-2.5 self-end sm:self-center">
+          {activeYear && (
+            <span className="text-xs font-semibold px-3 py-1 rounded-full bg-white/15 text-white shadow-2xs">
+              ឆ្នាំសិក្សា {activeYear}
+            </span>
+          )}
+          <button 
+            type="button"
+            onClick={() => window.print()}
+            disabled={isLoading || displayedStudents.length === 0}
+            className="inline-flex items-center gap-1.5 bg-white hover:bg-blue-50 text-blue-800 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer"
+          >
+            <Download size={15} />
+            <span>Export A4</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Metrics Summary Strip */}
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 print:hidden">
+        {/* Total Students */}
+        <div className="bg-surface rounded-xl border border-border/80 px-3.5 py-2.5 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-secondary-text uppercase tracking-wider">សិស្សសរុបក្នុងថ្នាក់</span>
+          <div className="flex items-baseline justify-between mt-1">
+            <strong className="text-2xl font-bold text-main-text">{displayedStudents.length}</strong>
+            <span className="text-xs font-semibold text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-200/60">នាក់</span>
+          </div>
+        </div>
+
+        {/* Graded Students */}
+        <div className="bg-amber-50/70 rounded-xl border border-amber-200/70 px-3.5 py-2.5 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">បានបញ្ចូលពិន្ទុ</span>
+          <div className="flex items-baseline justify-between mt-1">
+            <strong className="text-2xl font-bold text-amber-700">{gradedStudentsCount}</strong>
+            <span className="text-xs font-semibold text-amber-700/80 bg-amber-100/60 px-2 py-0.5 rounded-md">នាក់</span>
+          </div>
+        </div>
+
+        {/* Class Average Score */}
+        <div className="bg-indigo-50/70 rounded-xl border border-indigo-200/70 px-3.5 py-2.5 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-indigo-800 uppercase tracking-wider">ពិន្ទុមធ្យមភាគថ្នាក់</span>
+          <div className="flex items-baseline justify-between mt-1">
+            <strong className="text-2xl font-bold text-indigo-700">{averageScore}</strong>
+            <span className="text-xs font-semibold text-indigo-700/80 bg-indigo-100/60 px-2 py-0.5 rounded-md">/{totalMax}</span>
+          </div>
+        </div>
+
+        {/* Total Max Possible */}
+        <div className="bg-emerald-50/70 rounded-xl border border-emerald-200/70 px-3.5 py-2.5 shadow-xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">ពិន្ទុអតិបរមា</span>
+          <div className="flex items-baseline justify-between mt-1">
+            <strong className="text-2xl font-bold text-emerald-700">{totalMax}</strong>
+            <span className="text-xs font-semibold text-emerald-700/80 bg-emerald-100/60 px-2 py-0.5 rounded-md">ពិន្ទុ</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Control & Filter Bar */}
+      <div className="bg-surface rounded-2xl border border-border/80 px-4 py-3 shadow-xs print:hidden">
+        <div className="flex flex-col xl:flex-row gap-3 justify-between items-stretch xl:items-center">
+          {/* Class Select, Month Select */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="min-w-[190px]">
+              <label className="text-[11px] font-bold text-secondary-text uppercase tracking-wider block mb-1">
+                ថ្នាក់រៀន *
+              </label>
               <select 
-                className="w-full min-w-[200px] bg-white border border-gray-300 text-gray-800 text-sm rounded-sm px-3 py-2 outline-none focus:border-[#2a5298] transition-colors disabled:opacity-50"
+                className="w-full bg-background border border-border text-main-text text-sm rounded-xl px-3 py-2 font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all cursor-pointer shadow-2xs disabled:opacity-50"
                 value={selectedClass}
                 onChange={(e) => setSelectedClass(e.target.value)}
                 disabled={isLoading || isSaving}
               >
                 {classes.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} ({c.shift === 'Morning' ? 'ព្រឹក' : c.shift === 'Afternoon' ? 'រសៀល' : 'យប់'})</option>
+                  <option key={c.id} value={c.id}>
+                    ថ្នាក់ {c.name} ({c.shift === 'Morning' ? 'វេនព្រឹក' : c.shift === 'Afternoon' ? 'វេនរសៀល' : 'វេនយប់'})
+                  </option>
                 ))}
                 {classes.length === 0 && <option value="">មិនមានថ្នាក់</option>}
               </select>
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ខែ</label>
+            <div className="min-w-[120px]">
+              <label className="text-[11px] font-bold text-secondary-text uppercase tracking-wider block mb-1">
+                ខែសិក្សា
+              </label>
               <select 
-                className="w-full min-w-[150px] bg-white border border-gray-300 text-gray-800 text-sm rounded-sm px-3 py-2 outline-none focus:border-[#2a5298] transition-colors disabled:opacity-50"
+                className="w-full bg-background border border-border text-main-text text-sm rounded-xl px-3 py-2 font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all cursor-pointer shadow-2xs disabled:opacity-50"
                 value={currentMonth}
                 onChange={(e) => setCurrentMonth(e.target.value)}
                 disabled={isLoading || isSaving}
@@ -503,41 +589,41 @@ const Gradebook = () => {
               </select>
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ឆ្នាំសិក្សា</label>
-              <div className="w-full min-w-[200px] bg-gray-100 border border-gray-300 text-gray-600 font-medium text-sm rounded-sm px-3 py-2">
-                {activeYear || 'គ្មានឆ្នាំសិក្សា'}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 mt-4 md:mt-0">
-            <div className="flex items-center gap-4 mr-4 bg-gray-50 px-3 py-1.5 rounded border border-gray-200">
-              <span className="text-xs font-bold text-gray-600">បង្ហាញព័ត៌មាន៖</span>
+            {/* Column Toggles */}
+            <div className="self-end flex flex-wrap items-center gap-1 bg-background p-1 rounded-xl border border-border/80">
+              <span className="text-[10px] font-bold text-secondary-text px-1.5">បង្ហាញ៖</span>
               {gradeConfig.practice > 0 && (
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input type="checkbox" checked={showPractice} onChange={(e) => setShowPractice(e.target.checked)} className="cursor-pointer" /> លំហាត់
+                <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold cursor-pointer select-none hover:bg-surface transition-colors">
+                  <input type="checkbox" checked={showPractice} onChange={(e) => setShowPractice(e.target.checked)} className="rounded text-primary focus:ring-0 cursor-pointer" />
+                  <span>លំហាត់</span>
                 </label>
               )}
               {gradeConfig.book > 0 && (
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input type="checkbox" checked={showBook} onChange={(e) => setShowBook(e.target.checked)} className="cursor-pointer" /> សៀវភៅ
+                <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold cursor-pointer select-none hover:bg-surface transition-colors">
+                  <input type="checkbox" checked={showBook} onChange={(e) => setShowBook(e.target.checked)} className="rounded text-primary focus:ring-0 cursor-pointer" />
+                  <span>សៀវភៅ</span>
                 </label>
               )}
               {gradeConfig.exam > 0 && (
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input type="checkbox" checked={showExam} onChange={(e) => setShowExam(e.target.checked)} className="cursor-pointer" /> ប្រឡង
+                <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold cursor-pointer select-none hover:bg-surface transition-colors">
+                  <input type="checkbox" checked={showExam} onChange={(e) => setShowExam(e.target.checked)} className="rounded text-primary focus:ring-0 cursor-pointer" />
+                  <span>ប្រឡង</span>
                 </label>
               )}
-              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                <input type="checkbox" checked={showAdjustment} onChange={(e) => setShowAdjustment(e.target.checked)} className="cursor-pointer" /> ពិន្ទុបន្ថែម
+              <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold cursor-pointer select-none hover:bg-surface transition-colors">
+                <input type="checkbox" checked={showAdjustment} onChange={(e) => setShowAdjustment(e.target.checked)} className="rounded text-primary focus:ring-0 cursor-pointer" />
+                <span>ពិន្ទុបន្ថែម</span>
               </label>
             </div>
-            
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2 self-end xl:self-center">
             {/* Language / Translate Button */}
             {displayedStudents.some(s => !s.englishName) ? (
               <button 
-                className="bg-white border border-indigo-300 text-indigo-700 hover:bg-indigo-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
                 onClick={async () => {
                   if (!activeYear || !selectedClass) return;
                   setIsTranslating(true);
@@ -571,32 +657,37 @@ const Gradebook = () => {
                 }}
                 disabled={isTranslating || isLoading || displayedStudents.length === 0}
               >
-                <Globe size={16} />
+                <Globe size={14} />
                 <span>{isTranslating ? 'កំពុងបកប្រែ...' : 'Translate'}</span>
               </button>
             ) : (
               <button 
-                className="bg-white border border-green-300 text-green-700 hover:bg-green-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
                 onClick={toggleLanguage}
                 disabled={isLoading || displayedStudents.length === 0}
               >
-                <Languages size={16} />
+                <Languages size={14} />
                 <span>{language === 'KH' ? 'ប្តូរភាសា' : 'Language'}</span>
               </button>
             )}
+
             <button 
-              className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-background hover:bg-surface-hover text-secondary-text hover:text-main-text border border-border px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
               onClick={() => {
                 setTempConfig(gradeConfig);
                 setShowSettingsModal(true);
               }}
               disabled={isLoading || isSaving}
             >
-              <Settings size={16} />
+              <Settings size={14} />
               <span>កំណត់ពិន្ទុ</span>
             </button>
+
             <button 
-              className="bg-white border border-[#2a5298] text-[#2a5298] hover:bg-blue-50 px-4 py-2 rounded-sm text-sm font-bold flex items-center gap-2 transition-colors disabled:opacity-50" 
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-amber-50 hover:bg-amber-600 text-amber-800 hover:text-white border border-amber-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
               onClick={() => {
                 if (displayedStudents.length > 0) {
                   setBankStudentId(displayedStudents[0].id);
@@ -607,51 +698,42 @@ const Gradebook = () => {
               }}
               disabled={isLoading || isSaving || displayedStudents.length === 0}
             >
-              <Edit size={16} />
+              <Edit size={14} />
               <span>ពិន្ទុបន្ថែម</span>
             </button>
+
             <button
-              className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-background hover:bg-surface-hover text-secondary-text hover:text-main-text border border-border px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
               onClick={() => setIsLocked(!isLocked)}
               disabled={isLoading || isSaving || displayedStudents.length === 0}
             >
-              {isLocked ? <Lock size={16} /> : <Unlock size={16} />}
-              <span>{isLocked ? 'បើកកែពិន្ទុ' : 'បិទបញ្ជីពិន្ទុ'}</span>
+              {isLocked ? <Lock size={14} className="text-amber-600" /> : <Unlock size={14} />}
+              <span>{isLocked ? 'បើកកែពិន្ទុ' : 'បិទបញ្ជី'}</span>
             </button>
-            <button className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" disabled>
-              <Upload size={16} />
-              <span>Import</span>
-            </button>
+
             <button 
-              className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50" 
-              onClick={() => window.print()}
-              disabled={isLoading || displayedStudents.length === 0}
-            >
-              <Download size={16} />
-              <span>Export A4</span>
-            </button>
-            <button 
-              className="bg-[#48b5c9] hover:bg-[#3aa3b7] text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent disabled:opacity-50 disabled:cursor-not-allowed" 
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-primary hover:bg-primary/90 text-white px-5 py-2.5 text-xs font-bold transition-all shadow-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer" 
               disabled={isLocked || isSaving || isLoading || !selectedClass}
               onClick={() => void handleSave()}
             >
-              <Save size={16} /> {isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក'}
+              <Save size={15} />
+              <span>{isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក'}</span>
             </button>
           </div>
         </div>
       </div>
 
-      <div className={`bg-white border border-gray-200 shadow-sm rounded-sm print:border-none print:shadow-none print:bg-transparent print:overflow-visible print:h-auto print:block ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm print:hidden">
-          បញ្ជីពិន្ទុសិស្ស (List of Student Grades)
-        </div>
-        
+      {/* Spreadsheet Table Card */}
+      <div className={`bg-surface rounded-2xl border border-border/80 shadow-xs shrink-0 overflow-hidden print:border-none print:shadow-none print:bg-transparent print:overflow-visible print:h-auto print:block ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
         {isLoading && !isSaving ? (
-          <div className="flex items-center justify-center p-12 text-secondary-text print:hidden">
-            កំពុងទាញយកទិន្នន័យ...
+          <div className="flex items-center justify-center p-16 text-secondary-text gap-3 print:hidden">
+            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm font-medium">កំពុងទាញយកទិន្នន័យពិន្ទុ...</span>
           </div>
         ) : (
-          <div className="p-0 print:p-0 print:overflow-visible print:w-full">
+          <div className="p-0 overflow-x-auto print:p-0 print:overflow-visible print:w-full">
             <div className="hidden print:block w-full font-khmer mb-6 print:overflow-visible">
               <div className="flex justify-center mb-6">
                 <img src="/beltei-header.png" alt="BELTEI Header" className="w-full h-auto max-h-[120px] object-contain object-top" />
@@ -673,26 +755,26 @@ const Gradebook = () => {
             </div>
 
             <table className="w-full text-left border-collapse print:text-[15px] print:border-2 print:border-black border-t-0 table-fixed">
-                <thead className="bg-[#f8f9fa] print:bg-white text-gray-800 print:text-black">
+                <thead className="sticky top-0 bg-[#f8f9fa] print:bg-white text-gray-800 print:text-black z-10 shadow-2xs">
                 <tr>
-                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center w-[5%] text-xs print:text-[15px] uppercase tracking-wider">ល.រ</th>
-                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-4 py-3 print:py-2 font-semibold print:font-bold text-left w-[32%] print:w-[24%] text-xs print:text-[15px] uppercase tracking-wider">គោតនាម-នាមសិស្ស</th>
-                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center w-[5%] text-xs print:text-[15px] uppercase tracking-wider">ភេទ</th>
-                  <th colSpan={(showPractice && gradeConfig.practice > 0 ? 1 : 0) + (showBook && gradeConfig.book > 0 ? 1 : 0) + (showExam && gradeConfig.exam > 0 ? 1 : 0) + 2} className="border-b border-r border-border print:border-black px-2 py-3 print:py-2 font-semibold print:font-bold text-center text-xs print:text-[15px] uppercase tracking-wider">{currentMonth}</th>
+                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-2 font-semibold print:font-bold text-center w-[5%] text-xs print:text-[15px] uppercase tracking-wider bg-[#f8f9fa] print:bg-white">ល.រ</th>
+                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-3.5 py-2.5 print:py-2 font-semibold print:font-bold text-left w-[32%] print:w-[24%] text-xs print:text-[15px] uppercase tracking-wider bg-[#f8f9fa] print:bg-white">គោតនាម-នាមសិស្ស</th>
+                  <th rowSpan={2} className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-2 font-semibold print:font-bold text-center w-[5%] text-xs print:text-[15px] uppercase tracking-wider bg-[#f8f9fa] print:bg-white">ភេទ</th>
+                  <th colSpan={(showPractice && gradeConfig.practice > 0 ? 1 : 0) + (showBook && gradeConfig.book > 0 ? 1 : 0) + (showExam && gradeConfig.exam > 0 ? 1 : 0) + 2} className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-2 font-semibold print:font-bold text-center text-xs print:text-[15px] uppercase tracking-wider bg-[#f8f9fa] print:bg-white">{currentMonth}</th>
                 </tr>
                 <tr>
-                  {showPractice && gradeConfig.practice > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">លំហាត់({gradeConfig.practice})</th>}
-                  {showBook && gradeConfig.book > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">សៀវភៅ({gradeConfig.book})</th>}
-                  {showExam && gradeConfig.exam > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">ប្រឡង({gradeConfig.exam})</th>}
-                  <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">សរុប({totalMax})</th>
-                  <th className="border-b border-r border-border print:border-black px-2 py-2.5 print:py-1.5 font-semibold print:font-bold text-center w-[10%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">ចំណាត់ថ្នាក់</th>
+                  {showPractice && gradeConfig.practice > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">លំហាត់({gradeConfig.practice})</th>}
+                  {showBook && gradeConfig.book > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">សៀវភៅ({gradeConfig.book})</th>}
+                  {showExam && gradeConfig.exam > 0 && <th className="border-b border-r border-border print:border-black px-2 py-2 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">ប្រឡង({gradeConfig.exam})</th>}
+                  <th className="border-b border-r border-border print:border-black px-2 py-2 print:py-1.5 font-semibold print:font-bold text-center w-[12%] print:w-[14%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">សរុប({totalMax})</th>
+                  <th className="border-b border-r border-border print:border-black px-2 py-2 print:py-1.5 font-semibold print:font-bold text-center w-[10%] bg-yellow-50/50 print:bg-yellow-100/50 text-xs print:text-[15px]">ចំណាត់ថ្នាក់</th>
                 </tr>
               </thead>
               <tbody>
                 {displayedStudents.map((student, index) => (
                   <tr key={student.id} className="hover:bg-background-selected/50 transition-colors print:break-inside-avoid">
-                    <td className="border-b border-r border-border print:border-black px-2 py-2 print:py-1 text-center text-secondary-text print:text-black">{index + 1}</td>
-                    <td className="border-b border-r border-border print:border-black px-4 py-2 print:py-1 font-medium print:font-semibold">
+                    <td className="border-b border-r border-border print:border-black px-2 py-1.5 print:py-1 text-center text-secondary-text print:text-black text-xs print:text-base">{index + 1}</td>
+                    <td className="border-b border-r border-border print:border-black px-3.5 py-1.5 print:py-1 font-medium print:font-semibold min-w-[180px] leading-normal text-xs print:text-base">
                       {language === 'KH' ? student.name : (student.englishName || student.name)}
                       {showAdjustment && student.adjustment !== null && student.adjustment !== 0 && (
                         <span className="text-blue-500 font-bold ml-2 text-xs">
@@ -700,13 +782,13 @@ const Gradebook = () => {
                         </span>
                       )}
                     </td>
-                    <td className="border-b border-r border-border print:border-black px-2 py-2 print:py-1 text-center text-secondary-text print:text-black">
+                    <td className="border-b border-r border-border print:border-black px-2 py-1.5 print:py-1 text-center text-secondary-text print:text-black text-xs print:text-base">
                       {student.gender === 'F' ? 'ស' : 'ប'}
                     </td>
                     {showPractice && gradeConfig.practice > 0 && <td className="border-b border-r border-border print:border-black p-0 relative">
                       <input 
                         type="number" 
-                        className="w-full h-full min-h-[40px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-sm print:text-base print:font-medium" 
+                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold" 
                         value={student.practice ?? ''} 
                         onChange={(e) => handleGradeChange(student.id, 'practice', e.target.value)}
                         disabled={isLocked || isLoading}
@@ -716,7 +798,7 @@ const Gradebook = () => {
                     {showBook && gradeConfig.book > 0 && <td className="border-b border-r border-border print:border-black p-0 relative">
                       <input 
                         type="number" 
-                        className="w-full h-full min-h-[40px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-sm print:text-base print:font-medium" 
+                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold" 
                         value={student.book ?? ''} 
                         onChange={(e) => handleGradeChange(student.id, 'book', e.target.value)}
                         disabled={isLocked || isLoading}
@@ -726,15 +808,15 @@ const Gradebook = () => {
                     {showExam && gradeConfig.exam > 0 && <td className="border-b border-r border-border print:border-black p-0 relative">
                       <input 
                         type="number" 
-                        className="w-full h-full min-h-[40px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-sm print:text-base print:font-medium" 
+                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold" 
                         value={student.exam ?? ''} 
                         onChange={(e) => handleGradeChange(student.id, 'exam', e.target.value)}
                         disabled={isLocked || isLoading}
                         min="0" max={gradeConfig.exam}
                       />
                     </td>}
-                    <td className="border-b border-r border-border print:border-black px-2 py-2 text-center font-khmer print:py-1 font-medium print:text-base">{student.total}</td>
-                    <td className="border-b border-r border-border print:border-black px-2 py-2 text-center font-khmer font-bold text-primary print:text-black print:py-1 print:text-base">
+                    <td className="border-b border-r border-border print:border-black px-2 py-1.5 text-center font-khmer print:py-1 font-medium print:text-base text-xs sm:text-sm">{student.total}</td>
+                    <td className="border-b border-r border-border print:border-black px-2 py-1.5 text-center font-khmer font-bold text-primary print:text-black print:py-1 print:text-base text-xs sm:text-sm">
                       {student.total > 0 ? (
                         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/5 text-primary print:bg-transparent">
                           {student.rank}
@@ -755,43 +837,73 @@ const Gradebook = () => {
       </div>
       </div>
       
+      {/* Sticky Unsaved Changes Floating Bar */}
+      {hasChanges && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/95 backdrop-blur-md text-white px-6 py-3 rounded-2xl shadow-2xl border border-white/10 flex items-center gap-4 animate-in fade-in slide-in-from-bottom-5 z-50">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+            <span className="font-semibold text-xs tracking-wide">មានទិន្នន័យពិន្ទុមិនទាន់រក្សាទុក!</span>
+          </div>
+          <button 
+            type="button" 
+            onClick={() => void handleSave()} 
+            disabled={isSaving || isLocked} 
+            className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+          >
+            {isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុកឥឡូវនេះ'}
+          </button>
+        </div>
+      )}
+      
       {/* Points Bank Modal */}
       {showBankModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="flex justify-between items-center p-4 border-b border-gray-100 bg-gray-50/50">
-              <h3 className="text-xl font-bold text-gray-800 flex items-center gap-3 font-khmer">
-                <Edit size={18} className="text-[#2a5298]" /> គ្រប់គ្រងពិន្ទុបន្ថែម (Bonus Points)
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-surface rounded-2xl border border-border/80 shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="flex justify-between items-center px-6 py-4 border-b border-border/80 bg-background/50">
+              <h3 className="text-base font-bold text-main-text flex items-center gap-2.5 font-khmer">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
+                  <Edit size={16} />
+                </div>
+                <span>គ្រប់គ្រងពិន្ទុបន្ថែម</span>
               </h3>
-              <button onClick={() => setShowBankModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
-                <X size={20} />
+              <button 
+                onClick={() => setShowBankModal(false)} 
+                className="text-secondary-text hover:text-main-text hover:bg-surface-hover p-1.5 rounded-xl transition-all cursor-pointer"
+              >
+                <X size={18} />
               </button>
             </div>
             
             <div className="flex flex-col md:flex-row overflow-hidden flex-1">
               {/* Ledger List */}
-              <div className="flex-1 border-r border-gray-200 overflow-y-auto bg-gray-50/30 p-4">
-                <h3 className="font-bold text-sm text-gray-700 mb-3 border-b pb-2">បញ្ជីសិស្សមានពិន្ទុក្នុងស្តុក</h3>
-                <div className="bg-white border border-gray-200 rounded text-sm">
-                  <table className="w-full text-left border-collapse">
-                    <thead className="bg-gray-100">
+              <div className="flex-1 border-r border-border/80 overflow-y-auto bg-background/30 p-5">
+                <h3 className="font-bold text-xs text-secondary-text uppercase tracking-wider mb-3">បញ្ជីសិស្សមានពិន្ទុក្នុងស្តុក</h3>
+                <div className="bg-surface border border-border/80 rounded-xl overflow-hidden shadow-2xs">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-background text-secondary-text">
                       <tr>
-                        <th className="px-3 py-2 border-b text-gray-600 font-semibold w-1/2">ឈ្មោះសិស្ស</th>
-                        <th className="px-3 py-2 border-b text-center text-gray-600 font-semibold">ស្តុក</th>
-                        <th className="px-3 py-2 border-b text-gray-600 font-semibold">សម្គាល់</th>
+                        <th className="px-3.5 py-2.5 border-b border-border/80 font-bold w-1/2">ឈ្មោះសិស្ស</th>
+                        <th className="px-3.5 py-2.5 border-b border-border/80 text-center font-bold">ស្តុក</th>
+                        <th className="px-3.5 py-2.5 border-b border-border/80 font-bold">សម្គាល់</th>
                       </tr>
                     </thead>
                     <tbody>
                       {displayedStudents.filter(s => s.pointsBalance !== 0).map(s => (
-                        <tr key={s.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 border-b font-medium text-gray-800">{language === 'KH' ? s.name : (s.englishName || s.name)}</td>
-                          <td className="px-3 py-2 border-b text-center font-bold text-green-600">{s.pointsBalance > 0 ? `+${s.pointsBalance}` : s.pointsBalance}</td>
-                          <td className="px-3 py-2 border-b text-gray-500 text-xs">{s.pointsNote || ''}</td>
+                        <tr key={s.id} className="hover:bg-background-selected/40 transition-colors border-b border-border/50 last:border-b-0">
+                          <td className="px-3.5 py-2.5 font-semibold text-main-text">{language === 'KH' ? s.name : (s.englishName || s.name)}</td>
+                          <td className="px-3.5 py-2.5 text-center font-bold text-emerald-600">
+                            <span className="inline-block px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700">
+                              {s.pointsBalance > 0 ? `+${s.pointsBalance}` : s.pointsBalance}
+                            </span>
+                          </td>
+                          <td className="px-3.5 py-2.5 text-secondary-text text-[11px]">{s.pointsNote || ''}</td>
                         </tr>
                       ))}
                       {displayedStudents.filter(s => s.pointsBalance !== 0).length === 0 && (
                         <tr>
-                          <td colSpan={3} className="px-3 py-6 text-center text-gray-400 italic">មិនទាន់មានសិស្សមានស្តុកពិន្ទុទេ</td>
+                          <td colSpan={3} className="px-3.5 py-8 text-center text-secondary-text/70 italic text-xs">
+                            មិនទាន់មានសិស្សមានស្តុកពិន្ទុទេ
+                          </td>
                         </tr>
                       )}
                     </tbody>
@@ -800,12 +912,12 @@ const Gradebook = () => {
               </div>
 
               {/* Form Area */}
-              <div className="w-full md:w-[300px] p-4 flex flex-col gap-4 overflow-y-auto">
-                <h3 className="font-bold text-sm text-gray-700 mb-1 border-b pb-2">បន្ថែម ឬ ដកពិន្ទុ</h3>
+              <div className="w-full md:w-[320px] p-5 flex flex-col gap-4 overflow-y-auto bg-surface">
+                <h3 className="font-bold text-xs text-secondary-text uppercase tracking-wider mb-1">បន្ថែម ឬ ដកពិន្ទុ</h3>
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-gray-700">ឈ្មោះសិស្ស (Student Name)<span className="text-red-500">*</span></label>
+                  <label className="text-xs font-bold text-secondary-text">ឈ្មោះសិស្ស <span className="text-red-500">*</span></label>
                   <select 
-                    className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-blue-500 transition-colors"
+                    className="w-full bg-background border border-border rounded-xl px-3.5 py-2.5 text-xs text-main-text outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs font-semibold cursor-pointer"
                     value={bankStudentId}
                     onChange={(e) => setBankStudentId(e.target.value)}
                   >
@@ -818,21 +930,21 @@ const Gradebook = () => {
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-gray-700">ចំនួនពិន្ទុបូកថែមទៅក្នុងស្តុក <span className="text-red-500">*</span></label>
+                  <label className="text-xs font-bold text-secondary-text">ចំនួនពិន្ទុបូកថែមទៅក្នុងស្តុក <span className="text-red-500">*</span></label>
                   <input 
                     type="number" 
-                    className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-blue-500 transition-colors"
+                    className="w-full bg-background border border-border rounded-xl px-3.5 py-2.5 text-xs text-main-text outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs font-bold"
                     placeholder="ឧទាហរណ៍: 5 ឬ -2"
                     value={bankPoints}
                     onChange={(e) => setBankPoints(e.target.value)}
                   />
-                  <span className="text-[11px] text-gray-500 leading-tight mt-1">ពិន្ទុនេះនឹងរក្សាទុកក្នុងស្តុក រង់ចាំទាញយកមកបូកនៅពេលក្រោយ</span>
+                  <span className="text-[11px] text-secondary-text leading-tight mt-1">ពិន្ទុនេះនឹងរក្សាទុកក្នុងស្តុក រង់ចាំទាញយកមកបូកនៅពេលក្រោយ</span>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-bold text-gray-700">មូលហេតុ/សម្គាល់ (Note) <span className="text-red-500">*</span></label>
+                  <label className="text-xs font-bold text-secondary-text">មូលហេតុ/សម្គាល់ <span className="text-red-500">*</span></label>
                   <textarea 
-                    className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-blue-500 transition-colors min-h-[70px]"
+                    className="w-full bg-background border border-border rounded-xl px-3.5 py-2.5 text-xs text-main-text outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs resize-none min-h-[75px]"
                     placeholder="ឧទាហរណ៍: ឈ្នះការប្រកួត, សកម្មភាពល្អ..."
                     value={bankNote}
                     onChange={(e) => setBankNote(e.target.value)}
@@ -841,20 +953,22 @@ const Gradebook = () => {
               </div>
             </div>
             
-            <div className="p-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50 mt-auto">
+            <div className="px-6 py-4 border-t border-border/80 flex justify-end gap-2.5 bg-background/50 mt-auto">
               <button 
-                className="px-4 py-2 border border-gray-300 rounded text-gray-700 text-sm font-medium hover:bg-gray-100 transition-colors"
+                type="button"
+                className="px-4 py-2 rounded-xl border border-border text-secondary-text hover:text-main-text hover:bg-surface-hover text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                 onClick={() => setShowBankModal(false)}
                 disabled={isSaving}
               >
-                បោះបង់ (Cancel)
+                បោះបង់
               </button>
               <button 
-                className="px-4 py-2 bg-[#2a5298] text-white rounded text-sm font-bold hover:bg-blue-800 transition-colors disabled:opacity-50 flex items-center gap-2 shadow-sm"
+                type="button"
+                className="px-5 py-2 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
                 onClick={() => void handleSaveBank()}
                 disabled={!bankStudentId || !bankPoints || isSaving}
               >
-                {isSaving ? 'កំពុងរក្សាទុក...' : 'បញ្ជូលស្តុក (Save)'}
+                {isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក'}
               </button>
             </div>
           </div>
@@ -863,26 +977,33 @@ const Gradebook = () => {
 
       {/* Settings Modal */}
       {showSettingsModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-gray-100 bg-gray-50/50">
-              <h2 className="text-lg font-bold text-gray-800 font-khmer flex items-center gap-2">
-                <Settings size={18} className="text-[#2a5298]" /> ការកំណត់ពិន្ទុអតិបរមា
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-surface rounded-2xl border border-border/80 shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center px-6 py-4 border-b border-border/80 bg-background/50">
+              <h2 className="text-base font-bold text-main-text font-khmer flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                  <Settings size={16} />
+                </div>
+                <span>ការកំណត់ពិន្ទុអតិបរមា</span>
               </h2>
-              <button onClick={() => setShowSettingsModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
-                <X size={20} />
+              <button 
+                type="button"
+                onClick={() => setShowSettingsModal(false)} 
+                className="text-secondary-text hover:text-main-text hover:bg-surface-hover p-1.5 rounded-xl transition-all cursor-pointer"
+              >
+                <X size={18} />
               </button>
             </div>
             
-            <div className="p-5 flex flex-col gap-4 overflow-y-auto">
-              <div className="text-sm text-gray-600 mb-2 font-khmer">
-                កំណត់ពិន្ទុអតិបរមា (Max Score) សម្រាប់មុខវិជ្ជានីមួយៗ។ ប្រសិនបើដាក់ ០ ជួរឈរនោះនឹងត្រូវលាក់។
+            <div className="p-6 flex flex-col gap-4 overflow-y-auto">
+              <div className="text-xs text-secondary-text leading-relaxed font-khmer bg-background p-3 rounded-xl border border-border/60">
+                កំណត់ពិន្ទុអតិបរមា សម្រាប់មុខវិជ្ជានីមួយៗ។ ប្រសិនបើដាក់ ០ ជួរឈរនោះនឹងត្រូវលាក់។
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-bold text-gray-700">ពិន្ទុលំហាត់អតិបរមា (Max Practice Score)</label>
+                <label className="text-xs font-bold text-secondary-text">ពិន្ទុលំហាត់អតិបរមា</label>
                 <input 
                   type="number" 
-                  className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-blue-500 transition-colors"
+                  className="w-full bg-background border border-border rounded-xl px-3.5 py-2.5 text-xs text-main-text font-bold outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs"
                   value={tempConfig.practice}
                   onChange={(e) => setTempConfig(prev => ({...prev, practice: Number(e.target.value)}))}
                   min="0"
@@ -890,10 +1011,10 @@ const Gradebook = () => {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-bold text-gray-700">ពិន្ទុសៀវភៅអតិបរមា (Max Book Score)</label>
+                <label className="text-xs font-bold text-secondary-text">ពិន្ទុសៀវភៅអតិបរមា</label>
                 <input 
                   type="number" 
-                  className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-blue-500 transition-colors"
+                  className="w-full bg-background border border-border rounded-xl px-3.5 py-2.5 text-xs text-main-text font-bold outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs"
                   value={tempConfig.book}
                   onChange={(e) => setTempConfig(prev => ({...prev, book: Number(e.target.value)}))}
                   min="0"
@@ -901,34 +1022,40 @@ const Gradebook = () => {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-bold text-gray-700">ពិន្ទុប្រឡងអតិបរមា (Max Exam Score)</label>
+                <label className="text-xs font-bold text-secondary-text">ពិន្ទុប្រឡងអតិបរមា</label>
                 <input 
                   type="number" 
-                  className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm outline-none focus:border-blue-500 transition-colors"
+                  className="w-full bg-background border border-border rounded-xl px-3.5 py-2.5 text-xs text-main-text font-bold outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs"
                   value={tempConfig.exam}
                   onChange={(e) => setTempConfig(prev => ({...prev, exam: Number(e.target.value)}))}
                   min="0"
                 />
               </div>
 
-              <div className={`mt-2 p-3 border rounded text-center ${(tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0) !== 50 ? 'bg-red-50 border-red-200 text-red-700' : 'bg-blue-50 border-blue-100'}`}>
-                <span className={`text-sm font-bold ${(tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0) !== 50 ? 'text-red-700' : 'text-blue-800'}`}>
-                  ពិន្ទុសរុបអតិបរមា (Total Max): {(tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0)} 
+              <div className={`mt-2 p-3.5 border rounded-xl text-center transition-all ${
+                (tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0) !== 50 
+                  ? 'bg-red-500/10 border-red-500/30 text-red-600' 
+                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700'
+              }`}>
+                <span className="text-xs font-bold block">
+                  ពិន្ទុសរុបអតិបរមា: {(tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0)} 
                   {((tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0) !== 50) && ' (ត្រូវតែស្មើ ៥០ គត់)'}
                 </span>
               </div>
             </div>
             
-            <div className="p-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50 mt-auto">
+            <div className="px-6 py-4 border-t border-border/80 flex justify-end gap-2.5 bg-background/50 mt-auto">
               <button 
-                className="px-4 py-2 border border-gray-300 rounded text-gray-700 text-sm font-medium hover:bg-gray-100 transition-colors"
+                type="button"
+                className="px-4 py-2 rounded-xl border border-border text-secondary-text hover:text-main-text hover:bg-surface-hover text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                 onClick={() => setShowSettingsModal(false)}
                 disabled={isSaving}
               >
-                បោះបង់ (Cancel)
+                បោះបង់
               </button>
               <button 
-                className="px-4 py-2 bg-[#2a5298] text-white rounded text-sm font-bold hover:bg-blue-800 transition-colors disabled:opacity-50 flex items-center gap-2 shadow-sm"
+                type="button"
+                className="px-5 py-2 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
                 onClick={() => void handleSaveConfig()}
                 disabled={isSaving || (tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0) !== 50}
               >

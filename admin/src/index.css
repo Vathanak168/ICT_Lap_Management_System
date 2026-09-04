@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Battambang:wght@400;700&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Siemreap&family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -11,7 +11,7 @@
   --color-bg-light: #f8fafc;
   
   --font-sans: 'Inter', sans-serif;
-  --font-khmer: 'Battambang', sans-serif;
+  --font-khmer: 'Siemreap', sans-serif;
 }
 
 :root {
@@ -62,3 +62,23 @@ body {
 .badge-inactive {
   @apply px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-xs font-bold border border-slate-200 shadow-sm;
 }
+
+/* Custom Sleek Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+

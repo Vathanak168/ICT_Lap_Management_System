@@ -5,8 +5,14 @@ import { handleGradeAction } from './gradeActions';
 import { handleAttendanceAction } from './attendanceActions';
 import { handleLessonLogAction } from './lessonLogActions';
 import { handleLessonPlanAction } from './lessonPlanActions';
+import { handleTeachingAction, type TeachingActionContext } from './teachingActions';
 
-export const handleAction = async (actionStr: string, data: any, activeYear: string) => {
+export const handleAction = async (
+  actionStr: string,
+  data: any,
+  activeYear: string,
+  context?: TeachingActionContext,
+) => {
   let handled = false;
   
   handled = await handleClassAction(actionStr, data, activeYear);
@@ -29,6 +35,9 @@ export const handleAction = async (actionStr: string, data: any, activeYear: str
   
   handled = await handleLessonPlanAction(actionStr, data, activeYear);
   if (handled) return;
+
+  handled = await handleTeachingAction(actionStr, data, activeYear, context);
+  if (handled) return;
   
-  throw new Error(`មិនគាំទ្រសកម្មភាពប្រភេទនេះទេ (Unsupported action: ${actionStr})`);
+  throw new Error(`មិនគាំទ្រសកម្មភាពប្រភេទនេះទេ៖ ${actionStr}`);
 };

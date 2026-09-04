@@ -1,7 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
-import { useOutletContext } from 'react-router-dom';
-import { Monitor, Search, Plus, Edit2, Trash2, X } from 'lucide-react';
+import { useOutletContext, useNavigate } from 'react-router-dom';
+import { 
+  GraduationCap, 
+  Search, 
+  Plus, 
+  Edit2, 
+  Trash2, 
+  X, 
+  Users, 
+  ArrowUpRight
+} from 'lucide-react';
+import { useToast } from '../components/ui/Toast';
 
 interface ClassInfo {
   id: string;
@@ -10,13 +20,15 @@ interface ClassInfo {
   academic_year: string;
   branch: string;
   notes: string;
+  studentCount?: number;
 }
 
 const Classes = () => {
-  const { selectedBranch } = useOutletContext<{ selectedBranch: string }>();
+  const { selectedBranch, selectedYear } = useOutletContext<{ selectedBranch: string; selectedYear: string }>();
   const [classes, setClasses] = useState<ClassInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [filterShift, setFilterShift] = useState('All');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -31,29 +43,55 @@ const Classes = () => {
     notes: ''
   });
 
+  const { success, error: toastError } = useToast();
+  const navigate = useNavigate();
+
   useEffect(() => {
-    if (selectedBranch === 'None') {
-      setClasses([]);
-      return;
-    }
     fetchClasses();
-  }, [selectedBranch]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBranch, selectedYear]);
 
   const fetchClasses = async () => {
     try {
       setLoading(true);
       let query = supabase.from('classes').select('*').order('name', { ascending: true });
+      let studentsQ = supabase.from('students').select('id, class');
       
       if (selectedBranch !== 'All') {
         query = query.eq('branch', selectedBranch);
+        studentsQ = studentsQ.eq('branch', selectedBranch);
       }
 
-      const { data, error } = await query;
+      if (selectedYear && selectedYear !== 'All') {
+        query = query.eq('academic_year', selectedYear);
+        studentsQ = studentsQ.eq('academic_year', selectedYear);
+      }
 
-      if (error) throw error;
-      setClasses(data || []);
+      const [classRes, studentsRes] = await Promise.all([query, studentsQ]);
+
+      if (classRes.error) throw classRes.error;
+      
+      const loadedClasses = classRes.data || [];
+      const loadedStudents = studentsRes.data || [];
+
+      // Calculate student count per class
+      const countMap = new Map<string, number>();
+      loadedStudents.forEach((s: any) => {
+        if (s.class) {
+          countMap.set(s.class, (countMap.get(s.class) || 0) + 1);
+        }
+      });
+
+      const enrichedClasses = loadedClasses.map((c: any) => ({
+        ...c,
+        studentCount: countMap.get(c.id) || 0
+      }));
+
+      enrichedClasses.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }));
+      setClasses(enrichedClasses);
     } catch (error) {
       console.error('Error fetching classes:', error);
+      toastError('បរាជ័យក្នុងការទាញយកទិន្នន័យថ្នាក់រៀន');
     } finally {
       setLoading(false);
     }
@@ -66,8 +104,8 @@ const Classes = () => {
         id: cls.id || '',
         name: cls.name || '',
         shift: cls.shift || 'Morning',
-        academic_year: cls.academic_year || '2026-2027',
-        branch: cls.branch || (selectedBranch !== 'All' ? selectedBranch : 'BELTEI IS 1'),
+        academic_year: cls.academic_year || (selectedYear !== 'All' ? selectedYear : '2026-2027'),
+        branch: cls.branch || (selectedBranch !== 'All' ? selectedBranch : 'BELTEI IS 25'),
         notes: cls.notes || ''
       });
     } else {
@@ -76,8 +114,8 @@ const Classes = () => {
         id: '',
         name: '',
         shift: 'Morning',
-        academic_year: '2026-2027',
-        branch: selectedBranch !== 'All' ? selectedBranch : 'BELTEI IS 1',
+        academic_year: selectedYear !== 'All' ? selectedYear : '2026-2027',
+        branch: selectedBranch !== 'All' ? selectedBranch : 'BELTEI IS 25',
         notes: ''
       });
     }
@@ -89,318 +127,296 @@ const Classes = () => {
     setIsSaving(true);
     
     try {
+      const payload = {
+        name: formData.name.trim(),
+        shift: formData.shift,
+        academic_year: formData.academic_year,
+        branch: formData.branch,
+        notes: formData.notes.trim()
+      };
+
       if (editingClass) {
         const { error } = await supabase
           .from('classes')
-          .update({
-            name: formData.name,
-            shift: formData.shift,
-            academic_year: formData.academic_year,
-            branch: formData.branch,
-            notes: formData.notes
-          })
+          .update(payload)
           .eq('id', editingClass.id);
-          
-        if (error) throw error;
-        setClasses(classes.map(c => c.id === editingClass.id ? { ...c, ...formData } : c));
 
-        if (formData.shift !== editingClass.shift) {
-          const updates = { shift: formData.shift };
-          
-          await supabase
-            .from('students')
-            .update(updates)
-            .eq('class', editingClass.id)
-            .eq('academic_year', formData.academic_year);
-            
-          await Promise.all([
-            supabase.from('attendance').update(updates).eq('class_id', editingClass.id),
-            supabase.from('grades').update(updates).eq('class_id', editingClass.id),
-            supabase.from('seating_plans').update(updates).eq('class_id', editingClass.id),
-            supabase.from('lesson_logs').update(updates).eq('class_id', editingClass.id)
-          ]);
-        }
-      } else {
-        // If it's new, check if ID needs generating
-        let finalId = formData.id;
-        if (!finalId) {
-           finalId = crypto.randomUUID();
-        }
-        
-        const newClass = { ...formData, id: finalId };
-        const { data, error } = await supabase
-          .from('classes')
-          .insert([newClass])
-          .select()
-          .single();
-          
         if (error) throw error;
-        if (data) setClasses([...classes, data]);
+        success('បានកែប្រែព័ត៌មានថ្នាក់ដោយជោគជ័យ');
+      } else {
+        const { error } = await supabase
+          .from('classes')
+          .insert([payload]);
+
+        if (error) throw error;
+        success('បានបង្កើតថ្នាក់ថ្មីដោយជោគជ័យ');
       }
+
       setIsModalOpen(false);
+      fetchClasses();
     } catch (error: any) {
-      alert(`មានបញ្ហាក្នុងការរក្សាទុក: ${error.message}`);
+      console.error('Error saving class:', error);
+      toastError(`មានបញ្ហាក្នុងការរក្សាទុក៖ ${error.message}`);
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`តើអ្នកពិតជាចង់លុបថ្នាក់ "${name}" មែនទេ?`)) return;
-    
-    try {
-      const [studentRes] = await Promise.all([
-        supabase.from('students').delete().eq('class', id),
-        supabase.from('attendance').delete().eq('class_id', id),
-        supabase.from('grades').delete().eq('class_id', id),
-        supabase.from('seating_plans').delete().eq('class_id', id),
-        supabase.from('lesson_logs').delete().eq('class_id', id),
-        supabase.from('lesson_plans').delete().eq('class_id', id) // Also clean up lesson plans linked to class
-      ]);
-      
-      if (studentRes.error) {
-        console.error('Failed to cascade delete students:', studentRes.error);
-        // Continue to delete the class anyway, or throw?
-        // Let's not throw, but log it.
-      }
+    if (!window.confirm(`តើអ្នកពិតជាចង់លុបថ្នាក់ "${name}" មែនទេ? (សិស្សក្នុងថ្នាក់នេះនឹងបាត់បង់ការចាត់ថ្នាក់)`)) return;
 
-      // 2. Delete the class
+    try {
       const { error } = await supabase.from('classes').delete().eq('id', id);
       if (error) throw error;
-      
-      setClasses(classes.filter(c => c.id !== id));
+      setClasses(prev => prev.filter(c => c.id !== id));
+      success(`បានលុបថ្នាក់ "${name}" ដោយជោគជ័យ`);
     } catch (error: any) {
-      alert(`មានបញ្ហាក្នុងការលុប: ${error.message}`);
+      toastError(`មានបញ្ហាក្នុងការលុប: ${error.message}`);
     }
   };
 
-  const filteredClasses = classes.filter(c => 
-    c.name.toLowerCase().includes(search.toLowerCase()) || 
-    c.id.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredClasses = useMemo(() => {
+    return classes.filter(c => {
+      const matchSearch = !search || c.name.toLowerCase().includes(search.toLowerCase().trim());
+      const matchShift = filterShift === 'All' || c.shift === filterShift;
+      return matchSearch && matchShift;
+    });
+  }, [classes, search, filterShift]);
 
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-7xl mx-auto">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
+    <div className="space-y-6 animate-in fade-in duration-300">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800 mb-2 font-khmer flex items-center gap-3">
-            <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
-              <Monitor size={24} />
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 font-khmer flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20">
+              <GraduationCap size={22} />
             </div>
-            ថ្នាក់រៀន
+            <span>ការគ្រប់គ្រងថ្នាក់រៀន</span>
           </h1>
-          <p className="text-slate-500 font-khmer text-sm">
-            កំពុងបង្ហាញទិន្នន័យសម្រាប់៖ <strong className="text-blue-600">{selectedBranch === 'None' ? 'មិនទាន់ជ្រើសរើសសាខា' : (selectedBranch === 'All' ? 'គ្រប់សាខាទាំងអស់' : selectedBranch)}</strong>
+          <p className="text-slate-500 font-khmer text-xs sm:text-sm mt-1">
+            សាខា៖ <strong className="text-blue-600">{selectedBranch}</strong> · សរុប <strong className="text-slate-800">{filteredClasses.length}</strong> ថ្នាក់
           </p>
         </div>
-        
-        <div className="flex gap-3 w-full sm:w-auto">
-          <div className="relative w-full sm:w-80 group">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-              <Search size={18} className="text-slate-400 group-focus-within:text-blue-500 transition-colors" />
-            </div>
+
+        <button
+          onClick={() => handleOpenModal()}
+          className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl text-xs sm:text-sm font-khmer font-bold transition-all shadow-md shadow-indigo-500/20 active:scale-95"
+        >
+          <Plus size={17} />
+          <span>បង្កើតថ្នាក់ថ្មី</span>
+        </button>
+      </div>
+
+      {/* Filter Bar */}
+      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto flex-1">
+          <div className="relative w-full sm:w-72">
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              className="w-full h-11 pl-11 pr-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer shadow-sm text-slate-700 placeholder:text-slate-400 placeholder:font-khmer"
-              placeholder="ស្វែងរកលេខបន្ទប់..."
+              className="w-full h-10 pl-10 pr-3 bg-slate-50/70 border border-slate-200 rounded-xl text-xs sm:text-sm font-khmer text-slate-700 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+              placeholder="ស្វែងរកឈ្មោះថ្នាក់រៀន..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              disabled={selectedBranch === 'None'}
             />
           </div>
-          <button 
-            onClick={() => handleOpenModal()}
-            className="btn-primary flex items-center gap-2 whitespace-nowrap bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 shadow-indigo-500/20 h-11 px-6 rounded-xl" 
-            disabled={selectedBranch === 'None'}
-          >
-            <Plus size={18} />
-            <span className="hidden sm:inline font-khmer">ថ្នាក់ថ្មី</span>
-          </button>
+
+          <div className="relative w-full sm:w-56">
+            <select
+              value={filterShift}
+              onChange={(e) => setFilterShift(e.target.value)}
+              className="w-full h-10 px-3.5 bg-slate-50/70 border border-slate-200 rounded-xl text-xs sm:text-sm font-khmer text-slate-700 focus:bg-white focus:border-indigo-500 outline-none transition-all cursor-pointer"
+            >
+              <option value="All">គ្រប់វេនសិក្សា</option>
+              <option value="Morning">វេនព្រឹក</option>
+              <option value="Afternoon">វេនរសៀល</option>
+              <option value="Evening">វេនយប់</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="text-xs text-slate-500 font-khmer w-full sm:w-auto text-right">
+          បង្ហាញ <strong>{filteredClasses.length}</strong> នៃ <strong>{classes.length}</strong> ថ្នាក់
         </div>
       </div>
 
-      <div className="card overflow-hidden">
-        {selectedBranch === 'None' ? (
-          <div className="p-12 text-center flex flex-col items-center justify-center">
-            <Monitor size={48} className="text-slate-300 mb-4" />
-            <h2 className="text-xl font-bold text-slate-700 font-khmer mb-2">សូមជ្រើសរើសសាខា</h2>
-            <p className="text-slate-500 font-khmer">អ្នកត្រូវជ្រើសរើសសាខាណាមួយនៅខាងលើសិន ទើបអាចមើល ឬកែប្រែទិន្នន័យថ្នាក់រៀនបាន។</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 border-b border-slate-200">
-                  <th className="px-6 py-4 font-khmer font-semibold text-slate-600 text-sm">លេខបន្ទប់</th>
-                  <th className="px-6 py-4 font-khmer font-semibold text-slate-600 text-sm">វេនសិក្សា</th>
-                  <th className="px-6 py-4 font-khmer font-semibold text-slate-600 text-sm">ឆ្នាំសិក្សា</th>
-                  <th className="px-6 py-4 font-khmer font-semibold text-slate-600 text-sm">សាខា</th>
-                  <th className="px-6 py-4 font-khmer font-semibold text-slate-600 text-sm text-right">សកម្មភាព</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {loading ? (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-8 text-center text-slate-500 font-khmer">
-                      កំពុងទាញយកទិន្នន័យ...
-                    </td>
-                  </tr>
-                ) : filteredClasses.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-8 text-center text-slate-500 font-khmer">
-                      មិនមានទិន្នន័យ
-                    </td>
-                  </tr>
-                ) : (
-                  filteredClasses.map((c) => (
-                    <tr key={c.id} className="hover:bg-slate-50/50 transition-colors group">
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-slate-800">{c.name}</p>
-                        <p className="text-xs text-slate-500">ID: {c.id}</p>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-semibold border border-blue-100">
-                          {c.shift}
+      {/* Grid of Class Cards */}
+      {loading ? (
+        <div className="py-20 text-center text-slate-400 font-khmer flex flex-col items-center justify-center gap-3">
+          <div className="w-8 h-8 border-3 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs">កំពុងទាញយកបញ្ជីថ្នាក់រៀន...</p>
+        </div>
+      ) : filteredClasses.length === 0 ? (
+        <div className="py-20 text-center text-slate-400 font-khmer flex flex-col items-center justify-center gap-2 bg-white rounded-2xl border border-slate-200">
+          <GraduationCap size={40} className="text-slate-300" />
+          <p className="text-sm font-bold text-slate-600">មិនមានទិន្នន័យថ្នាក់រៀនទេ</p>
+          <p className="text-xs text-slate-400">សូមបង្កើតថ្នាក់ថ្មី ឬជ្រើសរើសសាខាផ្សេង។</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+          {filteredClasses.map(c => (
+            <div
+              key={c.id}
+              className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all flex flex-col justify-between group"
+            >
+              <div>
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-bold text-base font-sans">
+                      {c.name.slice(0, 3)}
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-slate-900 font-khmer">
+                        ថ្នាក់ {c.name}
+                      </h3>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-bold font-khmer ${c.shift === 'Morning' ? 'bg-blue-50 text-blue-700' : c.shift === 'Afternoon' ? 'bg-amber-50 text-amber-700' : 'bg-purple-50 text-purple-700'}`}>
+                          {c.shift === 'Morning' ? 'វេនព្រឹក' : c.shift === 'Afternoon' ? 'វេនរសៀល' : 'វេនយប់'}
                         </span>
-                      </td>
-                      <td className="px-6 py-4 font-medium text-slate-700">{c.academic_year}</td>
-                      <td className="px-6 py-4">
-                        <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-xs font-semibold">
-                          {c.branch}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => handleOpenModal(c)}
-                            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                          >
-                            <Edit2 size={18} />
-                          </button>
-                          <button 
-                            onClick={() => handleDelete(c.id, c.name)}
-                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                        <span className="text-xs text-slate-400 font-sans">{c.academic_year}</span>
+                      </div>
+                    </div>
+                  </div>
 
-      {/* Class Modal */}
+                  <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => handleOpenModal(c)}
+                      className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                      title="កែសម្រួល"
+                    >
+                      <Edit2 size={15} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(c.id, c.name)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                      title="លុប"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+
+                {c.notes && (
+                  <p className="text-xs text-slate-500 font-khmer line-clamp-2 mt-2 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                    {c.notes}
+                  </p>
+                )}
+              </div>
+
+              <div className="mt-4 pt-3.5 border-t border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs text-slate-600 font-khmer font-semibold">
+                  <Users size={14} className="text-blue-600" />
+                  <span>សិស្ស៖ <strong className="text-slate-900 font-bold">{c.studentCount} នាក់</strong></span>
+                </div>
+
+                <button
+                  onClick={() => navigate(`/students`)}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-700 font-khmer group-hover:translate-x-0.5 transition-transform"
+                >
+                  <span>បញ្ជីសិស្ស</span>
+                  <ArrowUpRight size={13} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add / Edit Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
-              <h2 className="text-xl font-bold text-slate-800 font-khmer flex items-center gap-2">
-                <Monitor className="text-indigo-500" size={24} />
-                {editingClass ? 'កែប្រែព័ត៌មានថ្នាក់' : 'បន្ថែមថ្នាក់ថ្មី'}
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-slate-50/50">
+              <h2 className="text-lg font-bold text-slate-800 font-khmer flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center">
+                  <GraduationCap size={17} />
+                </div>
+                <span>{editingClass ? 'កែប្រែព័ត៌មានថ្នាក់' : 'បង្កើតថ្នាក់រៀនថ្មី'}</span>
               </h2>
               <button 
                 onClick={() => setIsModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
               >
-                <X size={20} />
+                <X size={18} />
               </button>
             </div>
-            
-            <form onSubmit={handleSave} className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+            <form onSubmit={handleSave} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 font-khmer">ឈ្មោះថ្នាក់រៀន *</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="w-full h-10 px-3.5 bg-white border border-slate-200 rounded-xl text-sm font-khmer focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+                  placeholder="ឧ. 4A1, 7A2, Grade 12"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5 font-khmer">ID ថ្នាក់រៀន</label>
-                  <input
-                    type="text"
-                    required
-                    disabled={!!editingClass}
-                    value={formData.id}
-                    onChange={(e) => setFormData({...formData, id: e.target.value})}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer disabled:bg-slate-50 disabled:text-slate-500"
-                    placeholder="ឧ. 2026-2027_6A1_Morning (បើមិនបញ្ជូល វានឹងបង្កើតដោយស្វ័យប្រវត្តិ)"
-                  />
-                  <p className="text-[10px] text-slate-500 mt-1">មិនអាចកែប្រែបានទេបន្ទាប់ពីបង្កើតរួច</p>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5 font-khmer">ឈ្មោះថ្នាក់</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.name}
-                    onChange={(e) => setFormData({...formData, name: e.target.value})}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer"
-                    placeholder="ឧ. 6A1"
-                  />
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 font-khmer">វេនសិក្សា</label>
+                  <select
+                    value={formData.shift}
+                    onChange={(e) => setFormData({ ...formData, shift: e.target.value })}
+                    className="w-full h-10 px-3.5 bg-white border border-slate-200 rounded-xl text-sm font-khmer focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all cursor-pointer"
+                  >
+                    <option value="Morning">វេនព្រឹក</option>
+                    <option value="Afternoon">វេនរសៀល</option>
+                    <option value="Evening">វេនយប់</option>
+                  </select>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5 font-khmer">វេនសិក្សា</label>
-                  <select
-                    value={formData.shift}
-                    onChange={(e) => setFormData({...formData, shift: e.target.value})}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer"
-                  >
-                    <option value="Morning">ព្រឹក (Morning)</option>
-                    <option value="Afternoon">រសៀល (Afternoon)</option>
-                    <option value="Evening">យប់ (Evening)</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5 font-khmer">ឆ្នាំសិក្សា</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 font-khmer">ឆ្នាំសិក្សា</label>
                   <input
                     type="text"
                     value={formData.academic_year}
-                    onChange={(e) => setFormData({...formData, academic_year: e.target.value})}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer"
-                    placeholder="ឧ. 2026-2027"
+                    onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })}
+                    className="w-full h-10 px-3.5 bg-white border border-slate-200 rounded-xl text-sm font-sans focus:border-indigo-500 outline-none"
+                    placeholder="2026-2027"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5 font-khmer">សាខា</label>
-                  <select
-                    value={formData.branch}
-                    onChange={(e) => setFormData({...formData, branch: e.target.value})}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer"
-                  >
-                    {Array.from({ length: 32 }, (_, i) => (
-                      <option key={i + 1} value={`BELTEI IS ${i + 1}`}>BELTEI IS {i + 1}</option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5 font-khmer">ចំណាំ (បើមាន)</label>
-                  <textarea
-                    value={formData.notes || ''}
-                    onChange={(e) => setFormData({...formData, notes: e.target.value})}
-                    className="w-full p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-khmer min-h-[100px] resize-y"
-                    placeholder="បញ្ចូលចំណាំផ្សេងៗ..."
-                  ></textarea>
-                </div>
               </div>
-              
-              <div className="flex items-center justify-end gap-3 pt-6 mt-6 border-t border-slate-100">
-                <button 
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 font-khmer">សាខា</label>
+                <input
+                  type="text"
+                  value={formData.branch}
+                  onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
+                  className="w-full h-10 px-3.5 bg-white border border-slate-200 rounded-xl text-sm font-khmer focus:border-indigo-500 outline-none"
+                  placeholder="BELTEI IS 25"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 font-khmer">កំណត់សម្គាល់</label>
+                <textarea
+                  rows={3}
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm font-khmer focus:border-indigo-500 outline-none resize-none"
+                  placeholder="ព័ត៌មានបន្ថែមអំពីថ្នាក់..."
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-5 py-2.5 text-slate-600 font-medium font-khmer hover:bg-slate-100 rounded-xl transition-colors"
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs sm:text-sm font-khmer font-semibold hover:bg-slate-50 transition-colors"
                 >
                   បោះបង់
                 </button>
-                <button 
+                <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium font-khmer rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-indigo-600/20"
+                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-khmer font-bold shadow-md shadow-indigo-500/20 disabled:opacity-50 transition-all"
                 >
-                  {isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក'}
+                  {isSaving ? 'កំពុងរក្សាទុក...' : editingClass ? 'កែប្រែថ្នាក់' : 'បង្កើតថ្នាក់'}
                 </button>
               </div>
             </form>

@@ -4,10 +4,10 @@ export const handleClassAction = async (action: string, data: any, activeYear: s
   const db = await initDB();
   
   if (action === 'DELETE_CLASS') {
-    if (!data.classId) throw new Error('បញ្ជាក់លេខកូដថ្នាក់ (Missing classId)');
+    if (!data.classId) throw new Error('សូមបញ្ជាក់លេខកូដថ្នាក់');
     const classRecs = await db.getAll('classes');
     const classToDelete = classRecs.find((c: any) => c.id === data.classId || c.name === data.classId);
-    if (!classToDelete) throw new Error('រកមិនឃើញថ្នាក់នេះទេ (Class not found)');
+    if (!classToDelete) throw new Error('រកមិនឃើញថ្នាក់នេះទេ');
     
     const [students, attendance, grades, seatingPlans, lessonLogs] = await Promise.all([
       db.getAllFromIndex('students', 'class', classToDelete.id),
@@ -28,7 +28,7 @@ export const handleClassAction = async (action: string, data: any, activeYear: s
   }
   
   if (action === 'ADD_CLASS') {
-    if (!data.name || !data.shift) throw new Error('ទិន្នន័យមិនពេញលេញ (Missing class name or shift)');
+    if (!data.name || !data.shift) throw new Error('ទិន្នន័យមិនពេញលេញ');
     const newClass = {
       id: crypto.randomUUID(),
       name: data.name,
@@ -41,10 +41,10 @@ export const handleClassAction = async (action: string, data: any, activeYear: s
   }
   
   if (action === 'UPDATE_CLASS') {
-    if (!data.classId) throw new Error('បញ្ជាក់លេខកូដថ្នាក់ (Missing classId)');
+    if (!data.classId) throw new Error('សូមបញ្ជាក់លេខកូដថ្នាក់');
     const classesToUpdate = await db.getAll('classes');
     const classToUpdate = classesToUpdate.find((c: any) => c.id === data.classId || c.name === data.classId);
-    if (!classToUpdate) throw new Error('រកមិនឃើញថ្នាក់នេះទេ (Class not found)');
+    if (!classToUpdate) throw new Error('រកមិនឃើញថ្នាក់នេះទេ');
     
     const newName = data.name || classToUpdate.name;
     const newShift = data.shift || classToUpdate.shift;

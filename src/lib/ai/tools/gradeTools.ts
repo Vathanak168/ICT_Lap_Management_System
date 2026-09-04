@@ -24,9 +24,7 @@ export const gradeToolDeclarations = [
         month: { type: Type.STRING, description: 'The month (e.g., October)' },
         practice: { type: Type.NUMBER, description: 'Practice score (Optional)' },
         book: { type: Type.NUMBER, description: 'Book score (Optional)' },
-        exam: { type: Type.NUMBER, description: 'Exam score (Optional)' },
-        adjustment: { type: Type.NUMBER, description: 'Adjustment score (Optional)' },
-        adjustmentNote: { type: Type.STRING, description: 'Reason for adjustment (Optional)' }
+        exam: { type: Type.NUMBER, description: 'Exam score (Optional). Bonus adjustment is calculated automatically from the student points bank.' }
       },
       required: ['classId', 'studentId', 'month']
     }

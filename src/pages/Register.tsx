@@ -3,6 +3,12 @@ import { supabase } from '../lib/supabase';
 import { User, Lock, Mail, Phone, MapPin, Camera, AlertCircle, CheckCircle2, ChevronDown, Eye, EyeOff } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 
+const TOTAL_BRANCHES = 36;
+const getAllBranches = () => Array.from(
+  { length: TOTAL_BRANCHES },
+  (_, index) => `BELTEI IS ${index + 1}`,
+);
+
 const Register: React.FC = () => {
   const [name, setName] = useState('');
   const [branch, setBranch] = useState('BELTEI IS 1');
@@ -38,15 +44,12 @@ const Register: React.FC = () => {
   useEffect(() => {
     const fetchAvailableBranches = async () => {
       try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('branch')
-          .in('role', ['teacher', 'admin']);
+        const { data, error } = await supabase.rpc('get_taken_branches');
           
         if (error) throw error;
         
-        const takenBranches = data?.map(p => p.branch) || [];
-        const allBranches = Array.from({ length: 32 }, (_, i) => `BELTEI IS ${i + 1}`);
+        const takenBranches = data?.map((p: any) => p.branch) || [];
+        const allBranches = getAllBranches();
         const free = allBranches.filter(b => !takenBranches.includes(b));
         
         setAvailableBranches(free);
@@ -58,7 +61,7 @@ const Register: React.FC = () => {
       } catch (err) {
         console.error("Error fetching branches:", err);
         // Fallback
-        const allBranches = Array.from({ length: 32 }, (_, i) => `BELTEI IS ${i + 1}`);
+        const allBranches = getAllBranches();
         setAvailableBranches(allBranches);
         setBranch(allBranches[0]);
       } finally {
@@ -170,21 +173,14 @@ const Register: React.FC = () => {
 
     try {
       // Re-validate branch availability right before signup to reduce race window
-      const { data: recheckData } = await supabase
-        .from('profiles')
-        .select('branch')
-        .in('role', ['teacher', 'admin'])
-        .eq('branch', branch);
+      const { data: recheckData, error: recheckError } = await supabase.rpc('get_taken_branches');
 
-      if (recheckData && recheckData.length > 0) {
+      if (!recheckError && recheckData && recheckData.some((p: any) => p.branch === branch)) {
         setError('សាខានេះត្រូវបានយកទៅហើយ សូមជ្រើសរើសសាខាផ្សេង។');
         // Refresh available branches
-        const { data: freshData } = await supabase
-          .from('profiles')
-          .select('branch')
-          .in('role', ['teacher', 'admin']);
-        const takenBranches = freshData?.map(p => p.branch) || [];
-        const allBranches = Array.from({ length: 32 }, (_, i) => `BELTEI IS ${i + 1}`);
+        const { data: freshData } = await supabase.rpc('get_taken_branches');
+        const takenBranches = freshData?.map((p: any) => p.branch) || [];
+        const allBranches = getAllBranches();
         const free = allBranches.filter(b => !takenBranches.includes(b));
         setAvailableBranches(free);
         if (free.length > 0) setBranch(free[0]);

@@ -89,9 +89,12 @@ Be accurate, context-aware, concise, safe, and natural.
 export interface AIContext {
   branch: string;
   academicYear: string;
+  userId?: string;
+  userName?: string;
   semester?: string;
   activeClass?: string;
   activeStudent?: string;
+  activeTab?: string;
   activePage?: string;
 }
 
@@ -183,10 +186,10 @@ async function sendGeminiRequest(
 
     if (pendingActions.length > 0) {
       let textPart: string = '';
-      try { textPart = currentResponse.text || ''; } catch (e) {}
+      try { textPart = currentResponse.text || ''; } catch { /* ignore */ }
 
       return {
-        text: textPart || 'ខ្ញុំបានរៀបចំទិន្នន័យរួចរាល់ហើយ។ សូមលោកគ្រូពិនិត្យ និងយល់ព្រម (Approve) ខាងក្រោមនេះ៖',
+        text: textPart || 'ខ្ញុំបានរៀបចំទិន្នន័យរួចរាល់ហើយ។ សូមលោកគ្រូពិនិត្យ និងយល់ព្រមខាងក្រោមនេះ៖',
         pendingActions
       };
     }
@@ -200,7 +203,7 @@ async function sendGeminiRequest(
   }
 
   let finalText: string = '';
-  try { finalText = currentResponse.text || ''; } catch (e) {}
+  try { finalText = currentResponse.text || ''; } catch { /* ignore */ }
   return { text: finalText };
 }
 

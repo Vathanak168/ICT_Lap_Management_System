@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { BookOpen, Plus, Calendar, Search } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { LessonLog as LogType, ClassRecord } from '../store/db';
+import type { LessonLog as LogType, ClassRecord, LessonPlanTrack } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -11,6 +11,7 @@ import './LessonLog.css';
 const LessonLog = () => {
   const [logs, setLogs] = useState<LogType[]>([]);
   const [classes, setClasses] = useState<ClassRecord[]>([]);
+  const [lessonPlans, setLessonPlans] = useState<LessonPlanTrack[]>([]);
   const { activeYear } = useAcademicYear();
 
   // Filtering state
@@ -24,7 +25,7 @@ const LessonLog = () => {
 
   // Modal State
   const [showModal, setShowModal] = useState(false);
-  const [currentLog, setCurrentLog] = useState<Partial<LogType>>({});
+  const [currentLog, setCurrentLog] = useState<Partial<LogType> & { lessonPlanId?: string }>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const loadData = async (targetYear: string) => {
@@ -36,9 +37,10 @@ const LessonLog = () => {
     try {
       const db = await initDB();
       // Concurrent fetching for performance
-      const [allLogs, allClasses] = await Promise.all([
+      const [allLogs, allClasses, allPlans] = await Promise.all([
         db.getAll('lessonLogs', targetYear),
-        db.getAll('classes', targetYear)
+        db.getAll('classes', targetYear),
+        db.getAll('lessonPlans', targetYear)
       ]);
       
       if (requestId !== loadRequestRef.current) return;
@@ -46,6 +48,7 @@ const LessonLog = () => {
       allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
       setLogs(allLogs);
       setClasses(allClasses);
+      setLessonPlans(allPlans);
     } catch (error) {
       if (requestId === loadRequestRef.current) {
         console.error('Failed to load lesson logs:', error);
@@ -110,6 +113,14 @@ const LessonLog = () => {
       };
 
       await db.put('lessonLogs', logToSave);
+      
+      if (currentLog.lessonPlanId) {
+        await db.update('lessonPlans', currentLog.lessonPlanId, {
+          status: 'Completed',
+          completedDate: new Date().toISOString()
+        });
+      }
+
       setShowModal(false);
       await loadData(targetYear);
     } catch (error) {
@@ -147,98 +158,115 @@ const LessonLog = () => {
     return matchSearch && matchClass;
   });
 
+  const availablePlans = lessonPlans.filter(p => p.classId === currentLog.classId && p.status === 'Planned');
+
   return (
     <div className="flex flex-col w-full pb-10">
       
-      {/* Top Panel: Filters & Actions */}
-      <div className="bg-white border border-gray-300 mb-6">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
-          <span>កំណត់លក្ខខណ្ឌ និងសកម្មភាព (Filters & Actions)</span>
+      {/* Header Banner - Clean Ribbon */}
+      <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 rounded-2xl p-4 sm:p-5 text-white shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-5">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-white/10 backdrop-blur-xs rounded-xl shadow-2xs">
+            <BookOpen size={22} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-base sm:text-lg font-bold tracking-tight">កំណត់ហេតុបង្រៀន</h1>
+            <p className="text-xs text-blue-100/80">កត់ត្រា និងតាមដានរឿងហេតុ និងការបង្រៀនជាក់ស្តែង</p>
+          </div>
         </div>
-        <div className="p-4 flex flex-col sm:flex-row gap-4 justify-between items-end">
-          <div className="flex flex-wrap items-center gap-6 w-full sm:w-auto">
-            <div className="flex flex-col gap-1.5 flex-1 min-w-[250px]">
-              <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ស្វែងរក (Search)</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Search size={16} className="text-gray-400" />
-                </div>
-                <input 
-                  type="text"
-                  placeholder="ស្វែងរកតាមមេរៀន ឬកំណត់សម្គាល់..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full bg-white border border-gray-300 text-gray-800 text-sm rounded-sm pl-9 pr-3 py-2 outline-none focus:border-[#2a5298] transition-colors"
-                />
-              </div>
-            </div>
-            
-            <div className="flex flex-col gap-1.5 flex-1 min-w-[200px]">
-              <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ថ្នាក់រៀន (Class Name)</label>
-              <select 
-                className="w-full bg-white border border-gray-300 text-gray-800 text-sm rounded-sm px-3 py-2 outline-none focus:border-[#2a5298] transition-colors"
-                value={filterClass}
-                onChange={(e) => setFilterClass(e.target.value)}
-              >
-                <option value="All">ថ្នាក់ទាំងអស់</option>
-                {classes.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} ({c.shift === 'Morning' ? 'ព្រឹក' : c.shift === 'Afternoon' ? 'រសៀល' : 'យប់'})</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-3 mt-4 sm:mt-0">
-            <button 
-              className="bg-[#48b5c9] hover:bg-[#3aa3b7] text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent disabled:opacity-50"
-              onClick={openAddModal}
-              disabled={isLoading || isSaving || !activeYear}
-            >
-              <Plus size={16} /> បន្ថែមរឿងហេតុថ្មី
-            </button>
-          </div>
+
+        <div className="flex items-center gap-2.5 self-end sm:self-center">
+          {activeYear && (
+            <span className="text-xs font-semibold px-3 py-1 rounded-full bg-white/15 text-white shadow-2xs">
+              ឆ្នាំសិក្សា {activeYear}
+            </span>
+          )}
+          <button 
+            type="button"
+            className="inline-flex items-center gap-1.5 bg-white hover:bg-blue-50 text-blue-800 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer"
+            onClick={openAddModal}
+            disabled={isLoading || isSaving || !activeYear}
+          >
+            <Plus size={16} />
+            <span>បន្ថែមរឿងហេតុថ្មី</span>
+          </button>
         </div>
       </div>
 
-      {/* Bottom Panel: List */}
-      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
-          <span>កំណត់ហេតុបង្រៀន (Lesson Logs)</span>
-          <span className="text-xs font-medium bg-white/20 px-2 py-0.5 rounded">សរុប {filteredLogs.length} កំណត់ហេតុ</span>
+      {/* Filter Bar */}
+      <div className="bg-surface rounded-2xl border border-border/80 p-4 shadow-xs mb-5 flex flex-col sm:flex-row gap-4 justify-between items-stretch sm:items-center">
+        <div className="flex flex-wrap items-center gap-3 flex-1">
+          <div className="flex flex-col gap-1 flex-1 min-w-[240px]">
+            <label className="text-[11px] font-bold text-secondary-text uppercase tracking-wider">ស្វែងរក</label>
+            <div className="relative">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary-text" />
+              <input 
+                type="text"
+                placeholder="ស្វែងរកតាមមេរៀន ឬកំណត់សម្គាល់..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 text-xs bg-background border border-border rounded-xl font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs"
+              />
+            </div>
+          </div>
+          
+          <div className="flex flex-col gap-1 min-w-[200px]">
+            <label className="text-[11px] font-bold text-secondary-text uppercase tracking-wider">ថ្នាក់រៀន</label>
+            <select 
+              className="w-full bg-background border border-border text-main-text text-xs rounded-xl px-3 py-2 font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all cursor-pointer shadow-2xs"
+              value={filterClass}
+              onChange={(e) => setFilterClass(e.target.value)}
+            >
+              <option value="All">ថ្នាក់ទាំងអស់</option>
+              {classes.map(c => (
+                <option key={c.id} value={c.id}>{c.name} ({c.shift === 'Morning' ? 'ព្រឹក' : c.shift === 'Afternoon' ? 'រសៀល' : 'យប់'})</option>
+              ))}
+            </select>
+          </div>
         </div>
-        
+
+        <div className="self-end sm:self-center">
+          <span className="inline-flex items-center text-xs font-bold text-secondary-text bg-background px-3 py-1.5 rounded-xl border border-border/60">
+            សរុប {filteredLogs.length} កំណត់ហេតុ
+          </span>
+        </div>
+      </div>
+
+      {/* Logs List Panel */}
+      <div className="bg-surface rounded-2xl border border-border/80 shadow-xs overflow-hidden mb-6">
         {isLoading && !isSaving ? (
-          <div className="flex items-center justify-center p-12 text-secondary-text">
+          <div className="flex items-center justify-center p-12 text-xs font-medium text-secondary-text">
             កំពុងទាញយកទិន្នន័យ...
           </div>
         ) : (
-          <div className="overflow-x-auto p-6 flex flex-col gap-4 bg-gray-50/30">
+          <div className="p-4 sm:p-5 flex flex-col gap-3.5">
             {filteredLogs.map(log => {
               const logClassObj = classes.find(c => c.id === (log.classId || log.class));
               const displayClassName = logClassObj?.name || log.class;
               
               return (
-                <div key={log.id} className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow rounded-sm p-5">
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4">
+                <div key={log.id} className="bg-background/40 hover:bg-surface-hover/50 border border-border/70 rounded-xl p-4 transition-all shadow-2xs">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-3">
                     <div className="flex items-start gap-3">
-                      <div className="mt-1 w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-                        <BookOpen size={20} />
+                      <div className="mt-0.5 w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 shadow-2xs">
+                        <BookOpen size={16} />
                       </div>
                       <div>
-                        <h3 className="text-lg font-bold text-gray-800 mb-1 leading-tight">{log.topic}</h3>
-                        <div className="flex items-center gap-4 text-sm text-gray-500">
-                          <span className="flex items-center gap-1">
-                            <Calendar size={14} /> {log.date}
+                        <h3 className="text-sm font-bold text-main-text leading-snug">{log.topic}</h3>
+                        <div className="flex items-center gap-2.5 mt-1 text-xs text-secondary-text">
+                          <span className="flex items-center gap-1 font-mono">
+                            <Calendar size={13} className="text-secondary-text" /> {log.date}
                           </span>
-                          <span className="bg-gray-100 text-gray-700 px-2.5 py-0.5 rounded-sm font-medium border border-gray-200">
-                            {displayClassName}
+                          <span>·</span>
+                          <span className="bg-blue-50/70 text-blue-700 px-2 py-0.5 rounded-md font-semibold text-[11px] border border-blue-200/50">
+                            ថ្នាក់ {displayClassName}
                           </span>
                         </div>
                       </div>
                     </div>
                     <div className="shrink-0 flex items-start">
                       <button 
-                        className="text-sm font-medium text-gray-500 border border-gray-300 hover:bg-gray-50 px-4 py-1.5 rounded-sm transition-colors disabled:opacity-50"
+                        className="text-xs font-semibold text-secondary-text hover:text-main-text bg-surface hover:bg-background border border-border px-3 py-1.5 rounded-lg transition-all shadow-2xs cursor-pointer disabled:opacity-50"
                         onClick={() => openEditModal(log)}
                         disabled={isSaving}
                       >
@@ -247,14 +275,14 @@ const LessonLog = () => {
                     </div>
                   </div>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-gray-50/50 p-4 rounded-sm border border-gray-100">
-                      <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">លំហាត់ដែលបានដាក់</h4>
-                      <p className="text-gray-700 text-sm leading-relaxed">{log.exercises || 'មិនមាន'}</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
+                    <div className="bg-surface p-3 rounded-xl border border-border/60">
+                      <h4 className="text-[11px] font-bold text-secondary-text uppercase tracking-wider mb-1">លំហាត់ដែលបានដាក់</h4>
+                      <p className="text-main-text text-xs leading-relaxed">{log.exercises || 'មិនមាន'}</p>
                     </div>
-                    <div className="bg-yellow-50/30 p-4 rounded-sm border border-yellow-100">
-                      <h4 className="text-xs font-bold text-yellow-700 uppercase tracking-wide mb-2">កំណត់សម្គាល់ / វាយតម្លៃ</h4>
-                      <p className="text-gray-800 text-sm leading-relaxed font-medium">{log.notes || '---'}</p>
+                    <div className="bg-amber-50/40 p-3 rounded-xl border border-amber-200/50">
+                      <h4 className="text-[11px] font-bold text-amber-800 uppercase tracking-wider mb-1">កំណត់សម្គាល់ / វាយតម្លៃ</h4>
+                      <p className="text-amber-900 text-xs leading-relaxed font-medium">{log.notes || '---'}</p>
                     </div>
                   </div>
                 </div>
@@ -262,10 +290,10 @@ const LessonLog = () => {
             })}
             
             {filteredLogs.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                <BookOpen size={48} className="mb-4 opacity-50" />
-                <p className="text-lg font-medium text-gray-600">មិនទាន់មានកំណត់ហេតុទេ</p>
-                <p className="text-sm mt-1">សូមចុចប៊ូតុង "បន្ថែមរឿងហេតុថ្មី" ដើម្បីកត់ត្រា។</p>
+              <div className="flex flex-col items-center justify-center py-16 text-secondary-text">
+                <BookOpen size={36} className="mb-2 opacity-40 text-secondary-text" />
+                <p className="text-sm font-bold text-main-text">មិនទាន់មានកំណត់ហេតុទេ</p>
+                <p className="text-xs text-secondary-text mt-0.5">សូមចុចប៊ូតុង "បន្ថែមរឿងហេតុថ្មី" ដើម្បីកត់ត្រា។</p>
               </div>
             )}
           </div>
@@ -305,6 +333,32 @@ const LessonLog = () => {
             </div>
           </div>
           
+          {currentLog.classId && availablePlans.length > 0 && (
+            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+              <label className="block text-sm font-medium text-blue-800 mb-1">ជ្រើសរើសពីកាលវិភាគ (ស្រេចចិត្ត)</label>
+              <select 
+                className="block w-full rounded-md border-blue-200 focus:border-blue-400 focus:ring-blue-400 sm:text-sm py-2 px-3 border bg-white disabled:opacity-50"
+                value={currentLog.lessonPlanId || ''}
+                onChange={(e) => {
+                  const planId = e.target.value;
+                  const plan = availablePlans.find(p => p.id === planId);
+                  setCurrentLog({
+                    ...currentLog, 
+                    lessonPlanId: planId,
+                    topic: plan ? plan.lessonTitle : currentLog.topic,
+                    exercises: plan ? plan.exercises : currentLog.exercises
+                  });
+                }}
+                disabled={isSaving}
+              >
+                <option value="">-- បញ្ចូលមេរៀនថ្មីដោយខ្លួនឯង --</option>
+                {availablePlans.map(p => (
+                  <option key={p.id} value={p.id}>({p.month}, {p.week}) {p.lessonTitle}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-primary mb-1">មេរៀន / ប្រធានបទ *</label>
             <Input 

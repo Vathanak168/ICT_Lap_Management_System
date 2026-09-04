@@ -4,7 +4,7 @@ export const handlePcIssueAction = async (action: string, data: any, activeYear:
   const db = await initDB();
   
   if (action === 'ADD_PC_ISSUE') {
-    if (!data.pcNumber) throw new Error('បញ្ជាក់លេខកុំព្យូទ័រ (Missing PC Number)');
+    if (!data.pcNumber) throw new Error('សូមបញ្ជាក់លេខកុំព្យូទ័រ');
     const newIssue = {
       id: crypto.randomUUID(),
       pcNumber: data.pcNumber,
@@ -19,7 +19,7 @@ export const handlePcIssueAction = async (action: string, data: any, activeYear:
   }
   
   if (action === 'RESOLVE_PC_ISSUE') {
-    if (!data.id) throw new Error('បញ្ជាក់លេខកូដបញ្ហា (Missing Issue ID)');
+    if (!data.id) throw new Error('សូមបញ្ជាក់លេខកូដបញ្ហា');
     await db.update('pcIssues', data.id, {
       status: 'Resolved',
       resolution: data.resolution || 'Resolved by AI',

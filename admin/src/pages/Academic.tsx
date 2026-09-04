@@ -15,6 +15,7 @@ const Academic = () => {
       return;
     }
     fetchData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, selectedBranch]);
 
   const fetchData = async () => {

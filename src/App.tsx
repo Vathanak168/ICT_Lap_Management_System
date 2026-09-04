@@ -17,6 +17,10 @@ import LessonPlan from './pages/LessonPlan';
 import MiniApps from './pages/MiniApps';
 import Profile from './pages/Profile';
 import PcSync from './pages/PcSync';
+import TeachingToday from './pages/teaching/TeachingToday';
+import TeachingProgress from './pages/teaching/TeachingProgress';
+import CurriculumLibrary from './pages/teaching/CurriculumLibrary';
+import TeachingSchedule from './pages/teaching/TeachingSchedule';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { AuthProvider } from './contexts/AuthContext';
@@ -41,6 +45,12 @@ function App() {
                 <Route path="/seating" element={<SeatingPlan />} />
                 <Route path="/grades" element={<Gradebook />} />
                 <Route path="/issues" element={<PCIssues />} />
+                {/* Teaching Tracker */}
+                <Route path="/teaching/today" element={<TeachingToday />} />
+                <Route path="/teaching/progress" element={<TeachingProgress />} />
+                <Route path="/teaching/schedule" element={<TeachingSchedule />} />
+                <Route path="/teaching/curriculum" element={<CurriculumLibrary />} />
+                {/* Legacy routes (hidden from nav, kept for bookmarks) */}
                 <Route path="/lesson-log" element={<LessonLog />} />
                 <Route path="/lesson-plan" element={<LessonPlan />} />
                 <Route path="/shift-switching" element={<ShiftSwitching />} />

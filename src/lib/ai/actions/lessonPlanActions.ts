@@ -4,13 +4,13 @@ export const handleLessonPlanAction = async (action: string, data: any, activeYe
   const db = await initDB();
   
   if (action === 'DELETE_LESSON_PLAN') {
-    if (!data.planId) throw new Error('បញ្ជាក់លេខកូដផែនការបង្រៀន (Missing planId)');
+    if (!data.planId) throw new Error('សូមបញ្ជាក់លេខកូដផែនការបង្រៀន');
     await db.delete('lessonPlans', data.planId);
     return true;
   }
   
   if (action === 'ADD_LESSON_PLAN') {
-    if (!data.classId || !data.lessonTitle) throw new Error('ទិន្នន័យមិនពេញលេញ (Missing classId or lessonTitle)');
+    if (!data.classId || !data.lessonTitle) throw new Error('ទិន្នន័យមិនពេញលេញ');
     
     const newPlan = {
       id: crypto.randomUUID(),
@@ -30,11 +30,11 @@ export const handleLessonPlanAction = async (action: string, data: any, activeYe
   }
   
   if (action === 'UPDATE_LESSON_PLAN') {
-    if (!data.planId) throw new Error('បញ្ជាក់លេខកូដផែនការបង្រៀន (Missing planId)');
+    if (!data.planId) throw new Error('សូមបញ្ជាក់លេខកូដផែនការបង្រៀន');
     
     const plans = await db.getAll('lessonPlans', activeYear);
     const planToUpdate = plans.find((p: any) => p.id === data.planId);
-    if (!planToUpdate) throw new Error('រកមិនឃើញផែនការបង្រៀននេះទេ (Lesson Plan not found)');
+    if (!planToUpdate) throw new Error('រកមិនឃើញផែនការបង្រៀននេះទេ');
     
     const updates: any = {};
     if (data.classId !== undefined) updates.classId = data.classId;

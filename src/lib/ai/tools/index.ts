@@ -5,6 +5,7 @@ import { attendanceToolDeclarations, executeAttendanceTool } from './attendanceT
 import { gradeToolDeclarations, executeGradeTool } from './gradeTools';
 import { lessonLogToolDeclarations, executeLessonLogTool } from './lessonLogTools';
 import { lessonPlanToolDeclarations, executeLessonPlanTool } from './lessonPlanTools';
+import { teachingToolDeclarations, executeTeachingTool } from './teachingTools';
 
 export const tools: any = [{
   functionDeclarations: [
@@ -14,11 +15,17 @@ export const tools: any = [{
     ...attendanceToolDeclarations,
     ...gradeToolDeclarations,
     ...lessonLogToolDeclarations,
-    ...lessonPlanToolDeclarations
+    ...lessonPlanToolDeclarations,
+    ...teachingToolDeclarations
   ]
 }];
 
-export const executeTool = async (name: string, args: any, academicYear?: string) => {
+export const executeTool = async (
+  name: string,
+  args: any,
+  academicYear?: string,
+  context?: { userId?: string },
+) => {
   let result;
   
   result = await executeClassTool(name, args, academicYear);
@@ -40,6 +47,9 @@ export const executeTool = async (name: string, args: any, academicYear?: string
   if (result !== null) return result;
   
   result = await executeLessonPlanTool(name, args, academicYear);
+  if (result !== null) return result;
+
+  result = await executeTeachingTool(name, args, academicYear, context);
   if (result !== null) return result;
   
   throw new Error(`Tool ${name} not found or not implemented.`);

@@ -129,7 +129,7 @@ const Settings = () => {
           <div className="p-2 bg-slate-200 text-slate-700 rounded-lg">
             <SettingsIcon size={24} />
           </div>
-          ការកំណត់ (Settings)
+          ការកំណត់
         </h1>
         <p className="text-slate-500 font-khmer text-sm">កំណត់ព័ត៌មានគណនីរបស់អ្នក</p>
       </div>
@@ -200,10 +200,10 @@ const Settings = () => {
           <div className="card p-6 border-indigo-200">
             <h3 className="text-lg font-bold text-indigo-700 mb-4 flex items-center gap-2 border-b border-indigo-100 pb-3">
               <Bot size={20} />
-              កំណត់រចនាសម្ព័ន្ធ AI (System-wide AI)
+              កំណត់រចនាសម្ព័ន្ធ AI
             </h3>
             <p className="text-slate-600 font-khmer text-sm mb-4 leading-relaxed">
-              Keys ដែលដាក់បញ្ចូលនៅទីនេះ នឹងត្រូវបានអនុញ្ញាតឱ្យប្រើប្រាស់ដោយគ្រប់អ្នកប្រើប្រាស់ (Users) ទាំងអស់នៅក្នុងប្រព័ន្ធ។
+              Keys ដែលដាក់បញ្ចូលនៅទីនេះ នឹងត្រូវបានអនុញ្ញាតឱ្យប្រើប្រាស់ដោយគ្រប់អ្នកប្រើប្រាស់ ទាំងអស់នៅក្នុងប្រព័ន្ធ។
             </p>
             
             <form onSubmit={handleSaveAiKeys} className="space-y-4">

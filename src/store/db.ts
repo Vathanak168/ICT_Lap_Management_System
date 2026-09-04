@@ -34,8 +34,7 @@ export interface Student {
   status: string;
 
   /**
-   * @deprecated Kept only for migration compatibility. Do not expose reusable
-   * passwords to the browser. This adapter excludes the column from SELECTs.
+   * Student 3-digit lab PC password for logging into assigned desktop.
    */
   password?: string;
 
@@ -114,6 +113,7 @@ export interface LessonPlanTrack {
   status: LessonPlanStatus;
   academicYear: string;
   completedDate?: string | null;
+  links?: string[];
 }
 
 export interface GradeRecord {
@@ -123,7 +123,7 @@ export interface GradeRecord {
   shift: string;
   academicYear: string;
   type: GradeType;
-  scores: Record<string, Record<string, number>>;
+  scores: Record<string, Record<string, any>>;
 }
 
 export interface SettingRecord {
@@ -147,7 +147,61 @@ export interface PcSyncTask {
   password?: string | null;
   status: 'PENDING' | 'COMPLETED';
   createdAt: string;
-  branch: string;
+  branch?: string;
+  academicYear: string;
+}
+
+export interface SubjectRecord {
+  id: string;
+  name: string;
+  color: string;
+  icon?: string;
+  academicYear: string;
+}
+
+export interface CurriculumLessonRecord {
+  id: string;
+  subjectId: string;
+  orderNo: number;
+  module: string;
+  title: string;
+  objectives?: string | null;
+  exercise?: string | null;
+  estimatedPeriods: number;
+  academicYear: string;
+}
+
+export interface ClassCurriculumRecord {
+  id: string;
+  classId: string;
+  subjectId: string;
+  startDate?: string | null;
+  academicYear: string;
+}
+
+export type TeachingLogStatus = 'completed' | 'partial' | 'skipped';
+
+export interface TeachingLogRecord {
+  id: string;
+  classId: string;
+  lessonId: string;
+  teacherId?: string | null;
+  status: TeachingLogStatus;
+  progressPercent: number;
+  taughtAt: string;
+  note?: string | null;
+  academicYear: string;
+}
+
+export interface TeachingScheduleRecord {
+  id: string;
+  teacherId: string;
+  shift: Shift;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  classId: string;
+  subjectId: string;
   academicYear: string;
 }
 
@@ -163,6 +217,11 @@ const tableMap = {
   settings: 'settings',
   aiHistory: 'ai_history',
   pcSyncTasks: 'pc_sync_tasks',
+  subjects: 'subjects',
+  curriculumLessons: 'curriculum_lessons',
+  classCurriculums: 'class_curriculums',
+  teachingLogs: 'teaching_logs',
+  teachingSchedules: 'teaching_schedules',
 } as const;
 
 export type StoreName = keyof typeof tableMap;
@@ -180,6 +239,11 @@ export interface StoreRecordMap {
   settings: SettingRecord;
   aiHistory: AiHistoryRecord;
   pcSyncTasks: PcSyncTask;
+  subjects: SubjectRecord;
+  curriculumLessons: CurriculumLessonRecord;
+  classCurriculums: ClassCurriculumRecord;
+  teachingLogs: TeachingLogRecord;
+  teachingSchedules: TeachingScheduleRecord;
 }
 
 export type StoreRecord<K extends StoreName> = StoreRecordMap[K];
@@ -270,7 +334,6 @@ const storeSchemas: Record<StoreName, StoreSchema> = {
       status: field('status', 'string', { requiredRead: true, requiredWrite: true }),
       password: field('password', 'string', {
         nullable: true,
-        omitFromSelect: true,
         omitWhenUndefined: true,
       }),
       pcNumber: field('pc_number', 'string', { nullable: true }),
@@ -491,10 +554,105 @@ const storeSchemas: Record<StoreName, StoreSchema> = {
       password: field('password', 'string', { nullable: true }),
       status: field('status', 'string', { requiredRead: true, requiredWrite: true, allowed: ['PENDING', 'COMPLETED'] }),
       createdAt: field('created_at', 'string', { requiredRead: true, requiredWrite: true }),
-      branch: field('branch', 'string', { requiredRead: true, requiredWrite: true }),
+      branch: field('branch', 'string', { nullable: true, omitWhenUndefined: true }),
       academicYear: field('academic_year', 'string', { requiredRead: true, requiredWrite: true }),
     },
     indexColumns: new Set(['id', 'pc_number', 'student_id', 'status', 'branch', 'academic_year']),
+  },
+  subjects: {
+    table: 'subjects',
+    branchScoped: true,
+    academicYear: true,
+    fields: {
+      id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
+      name: field('name', 'string', { requiredRead: true, requiredWrite: true }),
+      color: field('color', 'string', { requiredRead: true, requiredWrite: true }),
+      icon: field('icon', 'string', { nullable: true }),
+      academicYear: field('academic_year', 'string', { requiredRead: true, requiredWrite: true }),
+    },
+    indexColumns: new Set(['id', 'name', 'academic_year']),
+  },
+  curriculumLessons: {
+    table: 'curriculum_lessons',
+    branchScoped: true,
+    academicYear: true,
+    fields: {
+      id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
+      subjectId: field('subject_id', 'string', { requiredRead: true, requiredWrite: true }),
+      orderNo: field('order_no', 'number', { requiredRead: true, requiredWrite: true }),
+      module: field('module', 'string', { requiredRead: true, requiredWrite: true }),
+      title: field('title', 'string', { requiredRead: true, requiredWrite: true }),
+      objectives: field('objectives', 'string', { nullable: true }),
+      exercise: field('exercise', 'string', { nullable: true }),
+      estimatedPeriods: field('estimated_periods', 'number', { requiredRead: true, requiredWrite: true }),
+      academicYear: field('academic_year', 'string', { requiredRead: true, requiredWrite: true }),
+    },
+    indexColumns: new Set(['id', 'subject_id', 'order_no', 'academic_year']),
+  },
+  classCurriculums: {
+    table: 'class_curriculums',
+    branchScoped: true,
+    academicYear: true,
+    fields: {
+      id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
+      classId: field('class_id', 'string', { requiredRead: true, requiredWrite: true }),
+      subjectId: field('subject_id', 'string', { requiredRead: true, requiredWrite: true }),
+      startDate: field('start_date', 'string', { nullable: true }),
+      academicYear: field('academic_year', 'string', { requiredRead: true, requiredWrite: true }),
+    },
+    indexColumns: new Set(['id', 'class_id', 'subject_id', 'academic_year']),
+  },
+  teachingLogs: {
+    table: 'teaching_logs',
+    branchScoped: true,
+    academicYear: true,
+    fields: {
+      id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
+      classId: field('class_id', 'string', { requiredRead: true, requiredWrite: true }),
+      lessonId: field('lesson_id', 'string', { requiredRead: true, requiredWrite: true }),
+      teacherId: field('teacher_id', 'string', { nullable: true }),
+      status: field('status', 'string', {
+        requiredRead: true,
+        requiredWrite: true,
+        allowed: ['completed', 'partial', 'skipped'],
+      }),
+      progressPercent: field('progress_percent', 'number', { requiredRead: true, requiredWrite: true }),
+      taughtAt: field('taught_at', 'string', { requiredRead: true, requiredWrite: true }),
+      note: field('note', 'string', { nullable: true }),
+      academicYear: field('academic_year', 'string', { requiredRead: true, requiredWrite: true }),
+    },
+    indexColumns: new Set(['id', 'class_id', 'lesson_id', 'teacher_id', 'status', 'academic_year', 'taught_at']),
+  },
+  teachingSchedules: {
+    table: 'teaching_schedules',
+    branchScoped: true,
+    academicYear: true,
+    fields: {
+      id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
+      teacherId: field('teacher_id', 'string', { requiredRead: true, requiredWrite: true }),
+      shift: field('shift', 'string', {
+        requiredRead: true,
+        requiredWrite: true,
+        allowed: ['Morning', 'Afternoon', 'Evening'],
+      }),
+      dayOfWeek: field('day_of_week', 'number', { requiredRead: true, requiredWrite: true }),
+      startTime: field('start_time', 'string', { requiredRead: true, requiredWrite: true }),
+      endTime: field('end_time', 'string', { requiredRead: true, requiredWrite: true }),
+      classId: field('class_id', 'string', { requiredRead: true, requiredWrite: true }),
+      subjectId: field('subject_id', 'string', { requiredRead: true, requiredWrite: true }),
+      academicYear: field('academic_year', 'string', { requiredRead: true, requiredWrite: true }),
+    },
+    indexColumns: new Set([
+      'id',
+      'teacher_id',
+      'shift',
+      'day_of_week',
+      'start_time',
+      'end_time',
+      'class_id',
+      'subject_id',
+      'academic_year',
+    ]),
   },
 };
 

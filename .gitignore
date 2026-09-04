@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Temporary agent and scratch files
+scratch/
+dist_usb*/
+patch*.cjs
+restored_*.txt
+match_*.json
+.agents/

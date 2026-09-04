@@ -156,7 +156,7 @@ const Profile = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
             {/* Name */}
             <div className="col-span-1 md:col-span-2">
-              <label className="block text-sm font-bold text-gray-700 mb-2">ឈ្មោះ (Name)</label>
+              <label className="block text-sm font-bold text-gray-700 mb-2">ឈ្មោះ</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <User size={18} className="text-gray-400" />
@@ -173,7 +173,7 @@ const Profile = () => {
 
             {/* Email (Read Only) */}
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">អ៊ីមែល (Email)</label>
+              <label className="block text-sm font-bold text-gray-700 mb-2">អ៊ីមែល</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <Mail size={18} className="text-gray-400" />
@@ -189,7 +189,7 @@ const Profile = () => {
 
             {/* Phone */}
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">លេខទូរស័ព្ទ (Phone)</label>
+              <label className="block text-sm font-bold text-gray-700 mb-2">លេខទូរស័ព្ទ</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <Phone size={18} className="text-gray-400" />
@@ -206,7 +206,7 @@ const Profile = () => {
 
             {/* Branch (Read Only) */}
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">សាខា (Branch)</label>
+              <label className="block text-sm font-bold text-gray-700 mb-2">សាខា</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <MapPin size={18} className="text-gray-400" />
@@ -222,7 +222,7 @@ const Profile = () => {
 
             {/* Role (Read Only) */}
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">តួនាទី (Role)</label>
+              <label className="block text-sm font-bold text-gray-700 mb-2">តួនាទី</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <ShieldAlert size={18} className="text-gray-400" />
@@ -244,7 +244,7 @@ const Profile = () => {
               className="w-full sm:w-auto flex justify-center items-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-6 py-3 rounded-xl font-bold transition-colors shadow-sm"
             >
               <LogOut size={20} />
-              ចាកចេញពីគណនី (Logout)
+              ចាកចេញពីគណនី
             </button>
             
             <button
@@ -257,7 +257,7 @@ const Profile = () => {
               ) : (
                 <Save size={20} />
               )}
-              រក្សាទុក (Save)
+              រក្សាទុក
             </button>
           </div>
         </form>

@@ -25,11 +25,11 @@ const Login = () => {
     setError('');
 
     // Map username to email
-    let loginEmail = username;
-    if (username.toLowerCase() === 'admin' || username.toLowerCase() === 'vathanak') {
-      loginEmail = 'chhaysereyvathanak@gmail.com';
-    } else if (!username.includes('@')) {
-      loginEmail = `${username}@beltei.edu.kh`;
+    let loginEmail = username.trim();
+    if (loginEmail.toLowerCase() === 'admin' || loginEmail.toLowerCase() === 'vathanak') {
+      loginEmail = 'vathanak@gmail.com';
+    } else if (!loginEmail.includes('@')) {
+      loginEmail = `${loginEmail}@beltei.edu.kh`;
     }
 
     let { data, error } = await supabase.auth.signInWithPassword({
@@ -73,7 +73,7 @@ const Login = () => {
           <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg transform rotate-3 hover:rotate-0 transition-transform duration-300">
             <ShieldCheck size={40} className="text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-white mb-2 tracking-wide">ប្រព័ន្ធគ្រប់គ្រង (Admin)</h1>
+          <h1 className="text-3xl font-bold text-white mb-2 tracking-wide">ប្រព័ន្ធគ្រប់គ្រង</h1>
           <p className="text-slate-400 font-medium text-sm">ICT Lab Management System</p>
         </div>
         

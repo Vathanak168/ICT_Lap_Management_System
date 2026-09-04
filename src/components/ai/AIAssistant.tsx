@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Send, Bot, Paperclip, LayoutGrid, Mic, Loader2, X, Trash2, Edit, ChevronRight, MessageSquare, AlertTriangle, Check, XCircle, FileText, User, Pin, Minimize2, Maximize2, RefreshCw, Sparkles, Settings, UserPlus, Wrench, PlusCircle } from 'lucide-react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { Send, Bot, Loader2, X, Trash2, Edit, ChevronRight, MessageSquare, AlertTriangle, Check, XCircle, FileText, Minimize2, Maximize2, RefreshCw, Sparkles, UserPlus, Wrench, PlusCircle, BookOpen, CalendarDays, Clock3 } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { initDB, type AiHistoryRecord, type JsonValue } from '../../store/db';
 import { generateAIResponse, hasApiKey } from '../../lib/ai/core';
@@ -12,6 +12,131 @@ type Message = {
   sender: 'ai' | 'user';
   text: string;
   pendingActions?: any[];
+};
+
+const renderInlineText = (text: string): ReactNode[] => text
+  .split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+  .filter(Boolean)
+  .map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={index} className="px-1 py-0.5 rounded bg-black/5 text-[0.9em]">{part.slice(1, -1)}</code>;
+    return <span key={index}>{part}</span>;
+  });
+
+const AssistantMessageContent = ({ text }: { text: string }) => (
+  <div className="space-y-2 leading-relaxed">
+    {text.split('\n').map((rawLine, index) => {
+      const line = rawLine.trim();
+      if (!line) return <div key={index} className="h-1" />;
+      if (/^#{1,3}\s/.test(line)) return <h4 key={index} className="font-bold text-gray-900 mt-3">{renderInlineText(line.replace(/^#{1,3}\s/, ''))}</h4>;
+      if (/^[-•]\s+/.test(line)) return <div key={index} className="flex gap-2 pl-1"><span className="text-blue-600">•</span><span>{renderInlineText(line.replace(/^[-•]\s+/, ''))}</span></div>;
+      const numbered = line.match(/^(\d+)[.)]\s+(.+)$/);
+      if (numbered) return <div key={index} className="flex gap-2 pl-1"><span className="font-bold text-blue-700">{numbered[1]}.</span><span>{renderInlineText(numbered[2])}</span></div>;
+      return <p key={index}>{renderInlineText(line)}</p>;
+    })}
+  </div>
+);
+
+const dayLabel = (value: unknown) => {
+  const labels = ['អាទិត្យ', 'ចន្ទ', 'អង្គារ', 'ពុធ', 'ព្រហស្បតិ៍', 'សុក្រ', 'សៅរ៍'];
+  return labels[Number(value)] || String(value);
+};
+
+const shiftLabel = (value: unknown) => value === 'Morning' ? 'ព្រឹក' : value === 'Afternoon' ? 'រសៀល' : value === 'Evening' ? 'យប់' : String(value);
+
+const statusLabel = (value: unknown) => value === 'completed' ? 'បានបង្រៀនរួច' : value === 'partial' ? 'មិនទាន់ចប់' : value === 'skipped' ? 'រំលង' : String(value);
+
+const approvalMeta = (action: string) => {
+  const titles: Record<string, string> = {
+    ADD_SUBJECT: 'បន្ថែមមុខវិជ្ជា', UPDATE_SUBJECT: 'កែប្រែមុខវិជ្ជា',
+    ADD_CURRICULUM_LESSON: 'បន្ថែមមេរៀន', UPDATE_CURRICULUM_LESSON: 'កែប្រែមេរៀន', DELETE_CURRICULUM_LESSON: 'លុបមេរៀន',
+    ASSIGN_SUBJECT_TO_CLASS: 'ភ្ជាប់មុខវិជ្ជាទៅថ្នាក់', UNASSIGN_SUBJECT_FROM_CLASS: 'ដកមុខវិជ្ជាចេញពីថ្នាក់',
+    RECORD_TEACHING: 'កត់ត្រាការបង្រៀន', SET_TEACHING_SCHEDULE: 'រៀបចំកាលវិភាគ', DELETE_TEACHING_SCHEDULE: 'លុបម៉ោងក្នុងកាលវិភាគ',
+    ADD_CLASS: 'បង្កើតថ្នាក់ថ្មី', UPDATE_CLASS: 'កែប្រែថ្នាក់', DELETE_CLASS: 'លុបថ្នាក់',
+    ADD_STUDENT: 'បន្ថែមសិស្ស', UPDATE_STUDENT: 'កែប្រែសិស្ស', DELETE_STUDENT: 'លុបសិស្ស',
+    UPDATE_ATTENDANCE: 'កត់ត្រាវត្តមាន', UPDATE_GRADES: 'កែប្រែពិន្ទុ',
+    ADD_PC_ISSUE: 'រាយការណ៍បញ្ហាកុំព្យូទ័រ', RESOLVE_PC_ISSUE: 'កត់ត្រាដំណោះស្រាយ',
+    ADD_LESSON_PLAN: 'បន្ថែមផែនការបង្រៀន', UPDATE_LESSON_PLAN: 'កែផែនការបង្រៀន', DELETE_LESSON_PLAN: 'លុបផែនការបង្រៀន',
+    ADD_LESSON_LOG: 'បន្ថែមកំណត់ត្រាបង្រៀន',
+  };
+  if (action.includes('DELETE') || action.includes('UNASSIGN')) return { title: titles[action] || 'លុបចេញពីប្រព័ន្ធ', icon: Trash2, tone: 'red' };
+  if (action === 'RECORD_TEACHING') return { title: titles[action], icon: Clock3, tone: 'indigo' };
+  if (action.includes('SCHEDULE')) return { title: titles[action] || 'កែប្រែកាលវិភាគ', icon: CalendarDays, tone: 'purple' };
+  if (action.includes('LESSON') || action.includes('SUBJECT')) return { title: titles[action] || 'រៀបចំមេរៀន', icon: BookOpen, tone: 'blue' };
+  if (action.includes('STUDENT')) return { title: titles[action] || 'ព័ត៌មានសិស្ស', icon: UserPlus, tone: 'blue' };
+  if (action.includes('CLASS')) return { title: titles[action] || 'ព័ត៌មានថ្នាក់', icon: FileText, tone: 'green' };
+  if (action.includes('ATTENDANCE')) return { title: titles[action], icon: Check, tone: 'teal' };
+  if (action.includes('GRADE')) return { title: titles[action], icon: FileText, tone: 'purple' };
+  if (action.includes('PC_ISSUE')) return { title: titles[action] || 'បញ្ហាកុំព្យូទ័រ', icon: Wrench, tone: 'amber' };
+  return { title: titles[action] || 'ការផ្លាស់ប្តូរទិន្នន័យ', icon: FileText, tone: 'gray' };
+};
+
+const approvalFields = (action: any): Array<{ label: string; value: ReactNode }> => {
+  const data = { ...action?.data, ...action?.preview };
+  const labels: Record<string, string> = {
+    name: action.action === 'ADD_SUBJECT' ? 'មុខវិជ្ជា' : 'ឈ្មោះ',
+    className: 'ថ្នាក់', classId: 'ថ្នាក់', subjectName: 'មុខវិជ្ជា', subject: 'មុខវិជ្ជា',
+    lessonTitle: 'មេរៀន', lesson: 'មេរៀន', title: 'ចំណងជើង', module: 'ក្រុមមេរៀន',
+    orderNo: 'លេខលំដាប់', objectives: 'គោលបំណង', exercise: 'លំហាត់', estimatedPeriods: 'ចំនួនម៉ោង',
+    color: 'ពណ៌', shift: 'វេន', dayOfWeek: 'ថ្ងៃ', startTime: 'ចាប់ផ្តើម', endTime: 'បញ្ចប់',
+    status: 'ស្ថានភាព', progressPercent: 'ភាគរយ', note: 'កំណត់សម្គាល់',
+    studentId: 'អត្តលេខសិស្ស', gender: 'ភេទ', date: 'កាលបរិច្ឆេទ', month: 'ខែ', week: 'សប្តាហ៍',
+    pcNumber: 'កុំព្យូទ័រ', description: 'បញ្ហា', resolution: 'ដំណោះស្រាយ',
+  };
+  const hidden = new Set(['scheduleId', 'planId', 'id', 'reportedBy']);
+  if (data.className) hidden.add('classId');
+  if (data.subjectName) hidden.add('subject');
+  if (data.lessonTitle) {
+    hidden.add('lesson');
+    hidden.add('title');
+  }
+
+  return Object.entries(data)
+    .filter(([key, value]) => value !== undefined && value !== null && value !== '' && !hidden.has(key))
+    .map(([key, value]) => {
+      let display: ReactNode = String(value);
+      if (key === 'dayOfWeek') display = dayLabel(value);
+      if (key === 'shift') display = shiftLabel(value);
+      if (key === 'status') display = statusLabel(value);
+      if (key === 'progressPercent') display = `${value}%`;
+      if (key === 'gender') display = value === 'F' ? 'ស្រី' : value === 'M' ? 'ប្រុស' : String(value);
+      return { label: labels[key] || key, value: display };
+    });
+};
+
+const ApprovalListItem = ({ action, index }: { action: any; index: number }) => {
+  const meta = approvalMeta(action?.action || '');
+  const Icon = meta.icon;
+  const fields = approvalFields(action);
+  const toneClasses: Record<string, string> = {
+    red: 'bg-red-50 text-red-700 border-red-100', blue: 'bg-blue-50 text-blue-700 border-blue-100',
+    green: 'bg-emerald-50 text-emerald-700 border-emerald-100', purple: 'bg-purple-50 text-purple-700 border-purple-100',
+    indigo: 'bg-indigo-50 text-indigo-700 border-indigo-100', teal: 'bg-teal-50 text-teal-700 border-teal-100',
+    amber: 'bg-amber-50 text-amber-800 border-amber-100', gray: 'bg-gray-50 text-gray-700 border-gray-100',
+  };
+
+  return (
+    <li className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3 p-3.5 border-b border-gray-100 last:border-0">
+      <span className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-xs font-bold">{index + 1}</span>
+      <div className="min-w-0">
+        <div className="flex items-center justify-between gap-2 mb-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 ${toneClasses[meta.tone]}`}><Icon size={16} /></span>
+            <strong className="text-sm text-gray-900 truncate">{meta.title}</strong>
+          </div>
+          {meta.tone === 'red' && <span className="text-[10px] font-bold text-red-700 bg-red-50 px-2 py-1 rounded-full">ត្រូវប្រុងប្រយ័ត្ន</span>}
+        </div>
+        <dl className="grid sm:grid-cols-2 gap-x-5 gap-y-1.5">
+          {fields.map((field, fieldIndex) => (
+            <div key={`${field.label}-${fieldIndex}`} className="flex justify-between gap-3 text-xs py-1 border-b border-dashed border-gray-100 last:border-0">
+              <dt className="text-gray-500 shrink-0">{field.label}</dt>
+              <dd className="font-semibold text-gray-800 text-right break-words">{field.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </li>
+  );
 };
 
 const AIAssistant = () => {
@@ -27,17 +152,21 @@ const AIAssistant = () => {
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { activeYear } = useAcademicYear();
-  const { branch } = useAuth();
+  const { branch, user } = useAuth();
   const location = useLocation();
 
   const getPageContext = () => {
     const path = location.pathname;
+    if (path.includes('/teaching/today')) return 'Teaching Today';
+    if (path.includes('/teaching/progress')) return 'Teaching Status';
+    if (path.includes('/teaching/curriculum')) return 'Curriculum';
+    if (path.includes('/teaching/schedule')) return 'Teaching Schedule';
     if (path.includes('/classes')) return 'Classes';
     if (path.includes('/students')) return 'Students';
     if (path.includes('/attendance')) return 'Attendance';
-    if (path.includes('/gradebook')) return 'Gradebook';
-    if (path.includes('/lesson-plans')) return 'Lesson Plans';
-    if (path.includes('/pc-issues')) return 'PC Issues';
+    if (path.includes('/grades')) return 'Gradebook';
+    if (path.includes('/lesson-plan')) return 'Lesson Plans';
+    if (path.includes('/issues')) return 'PC Issues';
     return 'Dashboard';
   };
   
@@ -228,7 +357,7 @@ const AIAssistant = () => {
     if (!textToSend.trim()) return;
 
     if (!hasApiKey()) {
-      alert('សូមបញ្ចូល Gemini API Key នៅក្នុងទំព័រ "ការកំណត់ (Settings)" ជាមុនសិន!');
+      alert('សូមបញ្ចូល Gemini API Key នៅក្នុងទំព័រ "ការកំណត់" ជាមុនសិន!');
       return;
     }
 
@@ -255,6 +384,8 @@ const AIAssistant = () => {
       const context = {
         branch: branch || localStorage.getItem('userBranch') || 'BELTEI IS 1',
         academicYear: activeYear || '',
+        userId: user?.id,
+        userName: user?.user_metadata?.name || user?.email || undefined,
         activePage: activePage
       };
 
@@ -275,11 +406,11 @@ const AIAssistant = () => {
       let friendlyMessage = `❌ មានបញ្ហាបច្ចេកទេសបន្តិចបន្តួច៖
 ${message}`;
       if (message.includes('429') || message.toLowerCase().includes('quota') || message.includes('RESOURCE_EXHAUSTED')) {
-        friendlyMessage = `⚠️ **ធនធានរបស់ AI ឈានដល់កម្រិតកំណត់ (Limit Reached)**
-សូមរង់ចាំបន្តិចសិន ចាំសួរម្តងទៀត ព្រោះយើងកំពុងប្រើប្រាស់កញ្ចប់ឥតគិតថ្លៃ (Free Tier) ដែលមានការកំណត់ចំនួនសួរក្នុងមួយនាទី។ បើអ្នកចង់ប្រើប្រាស់ដោយគ្មានដែនកំណត់ សូមបញ្ចូល API Key ផ្ទាល់ខ្លួន!`;
+        friendlyMessage = `⚠️ **ធនធានរបស់ AI ឈានដល់កម្រិតកំណត់**
+សូមរង់ចាំបន្តិចសិន ចាំសួរម្តងទៀត ព្រោះយើងកំពុងប្រើប្រាស់កញ្ចប់ឥតគិតថ្លៃ ដែលមានការកំណត់ចំនួនសួរក្នុងមួយនាទី។ បើអ្នកចង់ប្រើប្រាស់ដោយគ្មានដែនកំណត់ សូមបញ្ចូល API Key ផ្ទាល់ខ្លួន!`;
       } else if (message.includes('API Key not found')) {
         friendlyMessage = `🔑 **មិនទាន់មាន API Key**
-សូមចូលទៅកំណត់វានៅទំព័រ ការកំណត់ (Settings) ដោយបញ្ចូល Gemini API Key ជាមុនសិន!`;
+សូមចូលទៅកំណត់វានៅទំព័រ ការកំណត់ ដោយបញ្ចូល Gemini API Key ជាមុនសិន!`;
       }
       
       const errorMessage: Message = {
@@ -304,7 +435,7 @@ const handleApproveAllActions = async (msgId: string, actions: any[]) => {
 
     for (const action of actions) {
       try {
-        await handleAction(action.action, action.data, activeYear || '2026-2027');
+        await handleAction(action.action, action.data, activeYear || '2026-2027', { userId: user?.id });
         successCount++;
       } catch (e: any) {
         console.error(e);
@@ -319,7 +450,7 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
 
     setMessages(prev => prev.map(m => {
       if (m.id === msgId) {
-        const { pendingActions, ...rest } = m;
+        const { pendingActions: _pendingActions, ...rest } = m;
         return { ...rest, text: m.text + statusMessage };
       }
       return m;
@@ -332,8 +463,8 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
   const handleRejectAllActions = (msgId: string) => {
     setMessages(prev => prev.map(m => {
       if (m.id === msgId) {
-        const { pendingActions, ...rest } = m;
-        return { ...rest, text: m.text + '\\n\\n❌ អ្នកបានបដិសេធមិនអនុវត្តប្រតិបត្តិការនេះទេ។' };
+        const { pendingActions: _pendingActions, ...rest } = m;
+        return { ...rest, text: m.text + '\n\n❌ អ្នកបានបដិសេធមិនអនុវត្តប្រតិបត្តិការនេះទេ។' };
       }
       return m;
     }));
@@ -576,7 +707,7 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
         return (
           <div className="bg-white border border-gray-200 rounded-md overflow-hidden mb-3 shadow-sm text-sm">
             <div className="bg-gray-100 px-3 py-2 border-b border-gray-200 text-gray-700 font-bold flex items-center gap-2 text-sm">
-              <FileText size={16} /> ទិន្នន័យ (Data)
+              <FileText size={16} /> ទិន្នន័យ
             </div>
             <div className="p-3 flex flex-col gap-1.5">
               {Object.entries(d || {}).map(([key, value]) => (
@@ -595,44 +726,45 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
     <>
       {/* Chat Window */}
       {isOpen && (
-        <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-2 md:p-6 lg:p-8 animate-in fade-in duration-200">
-          <div className={`w-full bg-white rounded-2xl shadow-2xl flex overflow-hidden animate-in zoom-in-95 duration-300 transition-all ${isFullscreen ? 'h-full max-w-none rounded-none' : 'max-w-6xl h-[90vh] max-h-[900px]'}`}>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-2 backdrop-blur-sm animate-in fade-in duration-200 md:p-5">
+          <div className={`flex w-full overflow-hidden border border-black/5 bg-white shadow-2xl animate-in zoom-in-95 duration-200 transition-all ${isFullscreen ? 'h-full max-w-none rounded-none' : 'h-[92vh] max-h-[920px] max-w-[1280px] rounded-[22px]'}`}>
             
             {/* Left Sidebar */}
-            <div className="hidden md:flex w-64 bg-[#f8f9fa] border-r border-gray-200 flex-col">
+            <div className="hidden w-[270px] shrink-0 flex-col border-r border-slate-200 bg-[#f7f7f8] md:flex">
               {/* Header */}
-              <div className="p-4 flex items-center gap-3 text-[#1a73e8] font-bold text-lg border-b border-gray-100">
-                <Bot size={24} /> ជំនួយការគ្រូ AI
+              <div className="flex items-center gap-3 px-4 py-4">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#2a5298] text-white shadow-sm"><Sparkles size={18} /></span>
+                <div className="min-w-0"><p className="truncate text-sm font-bold text-slate-900">ជំនួយការគ្រូ AI</p><p className="mt-0.5 text-[10px] text-slate-500">ICT Lab Assistant</p></div>
               </div>
               
               {/* New Chat Button */}
               <button 
                 onClick={handleNewChat}
-                className="mx-4 mt-5 mb-3 bg-white hover:bg-gray-50 border border-gray-200 text-[#1a73e8] font-bold py-2.5 px-4 rounded-xl flex items-center gap-2 shadow-sm transition-all hover:shadow-md"
+                className="mx-3 mb-3 flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-800 shadow-sm transition-all hover:border-slate-400 hover:bg-slate-50"
               >
-                <MessageSquare size={18} /> សំណួរថ្មី
+                <MessageSquare size={16} /> ការសន្ទនាថ្មី
               </button>
               
 
               {/* History */}
-              <div className="px-4 py-3 flex-1 overflow-y-auto">
-                <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase tracking-wider">ប្រវត្តិខាងក្រោយ</h3>
-                <div className="flex flex-col gap-1 max-h-[200px] md:max-h-none overflow-y-auto pr-1 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto px-3 py-2">
+                <h3 className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">ការសន្ទនាថ្មីៗ</h3>
+                <div className="flex max-h-[200px] flex-col gap-1 overflow-y-auto pr-1 md:max-h-none custom-scrollbar">
                   {historyList.length === 0 ? (
-                    <div className="text-xs text-gray-400 p-2 text-center">មិនទាន់មានប្រវត្តិទេ</div>
+                    <div className="rounded-xl border border-dashed border-slate-200 px-3 py-5 text-center text-[11px] leading-5 text-slate-400">ការសន្ទនាដែលបានរក្សាទុកនឹងបង្ហាញនៅទីនេះ</div>
                   ) : (
                     historyList.map(rec => (
-                      <div key={rec.id} className={`group w-full flex items-center justify-between rounded-lg transition-colors ${historyRecordId === rec.id ? 'bg-blue-50 text-[#1a73e8]' : 'text-gray-700 hover:bg-gray-100'}`}>
+                      <div key={rec.id} className={`group flex w-full items-center justify-between rounded-lg transition-colors ${historyRecordId === rec.id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-slate-200/60'}`}>
                         <button 
                           onClick={() => handleSelectHistory(rec.id)}
-                          className="flex-1 text-left p-2.5 text-sm font-medium flex items-center gap-2 truncate"
+                          className="flex flex-1 items-center gap-2 truncate p-2.5 text-left text-xs font-medium"
                         >
-                          <MessageSquare size={14} className={`shrink-0 ${historyRecordId === rec.id ? "text-[#1a73e8]" : "text-gray-400"}`} /> 
+                          <MessageSquare size={14} className={`shrink-0 ${historyRecordId === rec.id ? "text-[#2a5298]" : "text-slate-400"}`} />
                           <span className="truncate">{rec.title || 'ការសន្ទនាថ្មី'}</span>
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDeleteHistory(rec.id); }}
-                          className={`p-2 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity focus:opacity-100 ${historyRecordId === rec.id ? "text-[#1a73e8]" : "text-gray-400"}`}
+                          className="p-2 text-slate-400 opacity-0 transition-opacity hover:text-red-500 focus:opacity-100 group-hover:opacity-100"
                           title="លុប"
                         >
                           <Trash2 size={14} />
@@ -643,67 +775,102 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
                 </div>
               </div>
               
-              <div className="flex-1" />
-              
-              {/* Settings */}
-              <button className="p-4 border-t border-gray-200 text-sm font-bold text-gray-600 flex items-center gap-3 hover:bg-gray-100 w-full text-left transition-colors">
-                <Settings size={18} /> ការកំណត់
-              </button>
+              <div className="border-t border-slate-200 p-3">
+                <div className="flex items-center gap-2.5 rounded-xl px-2 py-2">
+                  <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#2a5298] shadow-sm"><Bot size={16} /><span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[#f7f7f8] bg-emerald-500" /></span>
+                  <div className="min-w-0"><p className="truncate text-xs font-bold text-slate-700">AI រួចរាល់ប្រើប្រាស់</p><p className="truncate text-[10px] text-slate-400">{branch || 'ICT Lab System'}</p></div>
+                </div>
+              </div>
             </div>
             
             {/* Main Content */}
-            <div className="flex-1 flex flex-col bg-white relative">
+            <div className="relative flex min-w-0 flex-1 flex-col bg-white">
               {/* Top Window Controls */}
-              <div className="h-14 flex items-center justify-between md:justify-end px-4 border-b border-gray-100 bg-white z-10 shrink-0">
-                <div className="md:hidden flex items-center gap-2 text-[#1a73e8] font-bold">
-                  <Bot size={20} /> AI
+              <div className="z-10 flex h-14 shrink-0 items-center justify-between border-b border-slate-100 bg-white px-3 md:px-5">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#2a5298] text-white md:hidden"><Sparkles size={16} /></span>
+                  <div className="min-w-0"><p className="truncate text-sm font-bold text-slate-900">ជំនួយការ AI</p><p className="hidden text-[10px] text-emerald-600 sm:block">● កំពុងប្រើទិន្នន័យ System</p></div>
                 </div>
                 
                 {/* Context Chips */}
-                <div className="hidden md:flex items-center gap-2 ml-4 flex-1">
-                  <div className="bg-blue-50 text-blue-700 text-xs px-2.5 py-1 rounded-md font-medium border border-blue-100">
+                <div className="ml-4 hidden flex-1 items-center gap-2 md:flex">
+                  <div className="rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-[10px] font-semibold text-blue-700">
                     {activePage}
                   </div>
-                  <div className="bg-gray-50 text-gray-600 text-xs px-2.5 py-1 rounded-md font-medium border border-gray-200">
+                  <div className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
                     ឆ្នាំ {activeYear}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 text-gray-400">
-                  <button className="p-1.5 hover:bg-gray-100 rounded-md transition-colors" title="Pin window">
-                    <Pin size={16} />
-                  </button>
-                  <button onClick={() => setIsFullscreen(!isFullscreen)} className="hidden md:block p-1.5 hover:bg-gray-100 rounded-md transition-colors">
+                <div className="flex items-center gap-1 text-slate-400">
+                  <button onClick={handleNewChat} className="rounded-lg p-2 transition-colors hover:bg-slate-100 hover:text-slate-700 md:hidden" title="ការសន្ទនាថ្មី"><MessageSquare size={17} /></button>
+                  <button onClick={() => setIsFullscreen(!isFullscreen)} className="hidden rounded-lg p-2 transition-colors hover:bg-slate-100 hover:text-slate-700 md:block">
                     {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </button>
-                  <button onClick={() => setIsOpen(false)} className="p-1.5 hover:bg-red-50 hover:text-red-500 rounded-md transition-colors ml-1">
-                    <X size={20} />
+                  <button onClick={() => setIsOpen(false)} className="rounded-lg p-2 transition-colors hover:bg-red-50 hover:text-red-500">
+                    <X size={18} />
                   </button>
                 </div>
               </div>
               
               {/* Scrollable Chat Area */}
-              <div className="flex-1 overflow-y-auto p-4 md:p-8 flex flex-col">
+              <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6 md:px-8 md:py-8">
                 
                 {messages.length === 0 ? (
                   /* Welcome Screen (Empty State) */
-                  <div className="flex-1 flex flex-col justify-center items-center max-w-3xl mx-auto w-full py-10">
-                    <div className="bg-[#f0f4f9] rounded-3xl p-6 md:p-10 text-center w-full mb-10 shadow-sm border border-gray-100">
-                      <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-md mx-auto mb-6 text-[#1a73e8]">
-                        <Bot size={40} />
+                  <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center py-8">
+                    <div className="mb-8 text-center">
+                      <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#2a5298] text-white shadow-lg shadow-blue-900/15">
+                        <Sparkles size={25} />
                       </div>
-                      <h2 className="text-2xl md:text-3xl font-bold text-gray-800 mb-4 leading-tight">សួស្តី! ខ្ញុំជាជំនួយការគ្រូកុំព្យូទ័រ</h2>
-                      <p className="text-gray-600 text-lg">តើខ្ញុំអាចជួយអ្វីបានសម្រាប់អ្នកនៅថ្ងៃនេះ?</p>
+                      <h2 className="text-2xl font-bold leading-tight text-slate-900 md:text-3xl">តើខ្ញុំអាចជួយអ្វីបាន?</h2>
+                      <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-500">សួរអំពីថ្នាក់ សិស្ស កាលវិភាគ កម្មវិធីមេរៀន ឬស្នើឲ្យខ្ញុំរៀបចំការងារនៅក្នុង System។</p>
                     </div>
                     
 
                     {/* Suggested Prompts */}
                     <div className="w-full">
-                      <h3 className="text-sm font-bold text-gray-500 mb-3 flex items-center gap-2">
+                      <h3 className="mb-3 flex items-center gap-2 text-xs font-bold text-slate-500">
                         សំណួរណែនាំ <button className="hover:text-blue-500 transition-colors p-1"><RefreshCw size={14} /></button>
                       </h3>
-                      <div className="space-y-2">
-                        {activePage === 'Students' ? (
+                      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+                        {activePage === 'Teaching Today' ? (
+                          <>
+                            <button onClick={() => handleQuickAction('តើថ្ងៃនេះខ្ញុំត្រូវបង្រៀនថ្នាក់ណាខ្លះ ហើយមេរៀនបន្ទាប់ជាអ្វី?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>បង្ហាញថ្នាក់ និងមេរៀនដែលត្រូវបង្រៀនថ្ងៃនេះ</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('ជួយកត់ត្រាថាខ្ញុំបានបង្រៀនមេរៀនបន្ទាប់រួច។ សួរខ្ញុំតែថ្នាក់ និងមុខវិជ្ជាដែលខ្វះ។', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>កត់ត្រាការបង្រៀនថ្ងៃនេះ</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                          </>
+                        ) : activePage === 'Teaching Status' ? (
+                          <>
+                            <button onClick={() => handleQuickAction('សង្ខេបស្ថានភាពបង្រៀនតាមថ្នាក់ ហើយប្រាប់មេរៀនបន្ទាប់នៃថ្នាក់នីមួយៗ', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>សង្ខេបស្ថានភាព និងមេរៀនបន្ទាប់</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('បង្ហាញប្រវត្តិបង្រៀនចុងក្រោយរបស់ខ្ញុំ', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>មើលប្រវត្តិបង្រៀនថ្មីៗ</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                          </>
+                        ) : activePage === 'Curriculum' ? (
+                          <>
+                            <button onClick={() => handleQuickAction('បង្ហាញមុខវិជ្ជា មេរៀន និងថ្នាក់ដែលបានភ្ជាប់បច្ចុប្បន្ន', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>ពិនិត្យកម្មវិធីមេរៀនបច្ចុប្បន្ន</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('ជួយបង្កើតមេរៀនថ្មី ហើយភ្ជាប់ទៅថ្នាក់។ សួរខ្ញុំតែព័ត៌មានដែលខ្វះ។', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>បង្កើតមេរៀន និងភ្ជាប់ទៅថ្នាក់</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                          </>
+                        ) : activePage === 'Teaching Schedule' ? (
+                          <>
+                            <button onClick={() => handleQuickAction('បង្ហាញកាលវិភាគបង្រៀនរបស់ខ្ញុំតាមថ្ងៃ និងវេន', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>មើលកាលវិភាគតាមថ្ងៃ និងវេន</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                            <button onClick={() => handleQuickAction('ជួយរៀបចំម៉ោងបង្រៀនថ្មី។ សួរខ្ញុំអំពីថ្ងៃ ម៉ោង ថ្នាក់ និងមុខវិជ្ជាដែលខ្វះ។', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
+                              <Sparkles size={16} className="text-blue-500 shrink-0" /><span>រៀបចំម៉ោងបង្រៀនថ្មី</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
+                            </button>
+                          </>
+                        ) : activePage === 'Students' ? (
                           <>
                             <button onClick={() => handleQuickAction('តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?', true)} className="w-full text-left bg-[#f8f9fa] hover:bg-[#f0f4f9] border border-gray-100 p-3.5 rounded-xl text-sm text-gray-700 flex items-center gap-3 transition-colors">
                               <Sparkles size={16} className="text-blue-500 shrink-0" /><span>តើសិស្សក្នុងថ្នាក់ 6A1 មានចំនួនប៉ុន្មាននាក់?</span><ChevronRight size={16} className="text-gray-400 ml-auto" />
@@ -748,61 +915,57 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
                   </div>
                 ) : (
                   /* Chat Bubbles */
-                  <div className="flex flex-col gap-6 max-w-4xl mx-auto w-full pb-6">
+                  <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 pb-6">
                     {messages.map((msg) => {
                       const isUser = msg.sender === 'user';
                       
                       return (
-                        <div key={msg.id} className={`flex gap-3 max-w-[90%] md:max-w-[85%] ${isUser ? 'self-end flex-row-reverse' : 'self-start'}`}>
-                          <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex-shrink-0 flex items-center justify-center shadow-sm ${isUser ? 'bg-[#1a73e8] text-white' : 'bg-white border border-gray-200 text-[#1a73e8]'}`}>
-                            {isUser ? <User size={isUser ? 16 : 20} /> : <Bot size={20} />}
+                        <div key={msg.id} className={`flex w-full gap-3.5 ${isUser ? 'justify-end' : 'justify-start'}`}>
+                          {!isUser && <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#2a5298] text-white shadow-sm"><Sparkles size={15} /></div>}
+                          <div className={`flex min-w-0 flex-col gap-1 ${isUser ? 'max-w-[82%] items-end' : 'max-w-[calc(100%-3rem)] flex-1 items-start'}`}>
+                            <div className="mb-0.5 px-1 text-[10px] font-semibold text-slate-400">
+                              {isUser ? 'អ្នក' : 'ជំនួយការ AI'}
                           </div>
-                          
-                          <div className={`flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
-                            <div className="text-xs text-gray-400 font-medium px-1 mb-0.5">
-                              {isUser ? 'អ្នក' : 'AI'}
-                            </div>
-                            <div className={`p-3.5 md:p-4 text-sm md:text-base ${isUser ? 'bg-[#1a73e8] text-white rounded-2xl rounded-tr-sm shadow-sm' : 'bg-[#f0f4f9] text-gray-800 rounded-2xl rounded-tl-sm'}`}>
-                              <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                            <div className={`text-sm leading-7 ${isUser ? 'rounded-3xl bg-[#f1f1f1] px-4 py-2.5 text-slate-800' : 'w-full px-1 py-1 text-slate-800'}`}>
+                              {isUser ? <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p> : <AssistantMessageContent text={msg.text} />}
                               
                               {/* Approval Request Cards (Multiple) */}
                               {msg.pendingActions && msg.pendingActions.length > 0 && (
-                                <div className="mt-4 flex flex-col gap-3">
-                                  <div className="bg-yellow-50 px-4 py-2.5 border border-yellow-200 rounded-xl mb-1 shadow-sm">
-                                    <p className="font-bold text-xs text-yellow-800 uppercase flex items-center gap-1.5">
-                                      <AlertTriangle size={14} /> ទាមទារការអនុម័តចំនួន {msg.pendingActions.length} កំណត់ត្រា
-                                    </p>
+                                <div className="mt-4 bg-white border border-gray-200 shadow-sm rounded-2xl overflow-hidden text-gray-800">
+                                  <div className="px-4 py-3 bg-[#f8fafc] border-b border-gray-200 flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <span className="w-8 h-8 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center shrink-0"><AlertTriangle size={16} /></span>
+                                      <div className="min-w-0"><p className="font-bold text-sm text-gray-900">សូមពិនិត្យមុនអនុម័ត</p><p className="text-[11px] text-gray-500">AI មិនទាន់អនុវត្តការផ្លាស់ប្តូរទាំងនេះទេ</p></div>
+                                    </div>
+                                    <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full shrink-0">{msg.pendingActions.length} ការងារ</span>
                                   </div>
-                                  
-                                  <div className="bg-white border border-gray-200 shadow-sm rounded-xl overflow-hidden">
-                                      <div className="p-4 flex flex-col gap-4">
-                                        <div className="max-h-[300px] overflow-y-auto pr-2 space-y-3">
-                                          {msg.pendingActions.map((action, idx) => (
-                                            <div key={idx} className="border-b border-gray-100 last:border-0 pb-3 last:pb-0">
-                                               {renderActionData(action)}
-                                            </div>
-                                          ))}
-                                        </div>
 
-                                        <div className="flex gap-2.5 mt-2 pt-3 border-t border-gray-100">
+                                  <ol className="max-h-[360px] overflow-y-auto">
+                                    {msg.pendingActions.map((action, idx) => approvalFields(action).length > 0
+                                      ? <ApprovalListItem key={idx} action={action} index={idx} />
+                                      : <li key={idx} className="p-3">{renderActionData(action)}</li>)}
+                                  </ol>
+
+                                  <div className="p-3 bg-[#f8fafc] border-t border-gray-200">
+                                    <p className="text-[11px] text-gray-500 mb-2.5">ចុច «អនុម័ត និងអនុវត្ត» ដើម្បីឲ្យ System រក្សាទុកការងារខាងលើទាំងអស់។</p>
+                                    <div className="flex flex-col sm:flex-row gap-2.5">
                                           <button 
                                             className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg flex items-center justify-center gap-2 font-bold transition-colors disabled:opacity-50 text-sm shadow-sm"
                                             onClick={() => handleApproveAllActions(msg.id, msg.pendingActions!)}
                                             disabled={processingActionId === msg.id}
                                           >
                                             {processingActionId === msg.id ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} 
-                                            យល់ព្រមទាំងអស់
+                                            អនុម័ត និងអនុវត្ត
                                           </button>
                                           <button 
                                             className="flex-1 bg-white border border-gray-200 text-gray-700 hover:bg-red-50 hover:text-red-600 hover:border-red-200 py-2 rounded-lg flex items-center justify-center gap-2 font-bold transition-colors disabled:opacity-50 text-sm"
                                             onClick={() => handleRejectAllActions(msg.id)}
                                             disabled={!!processingActionId}
                                           >
-                                            <XCircle size={16} /> បដិសេធទាំងអស់
+                                            <XCircle size={16} /> បោះបង់
                                           </button>
                                         </div>
-                                      </div>
-                                    </div>
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -812,19 +975,17 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
                     })}
                     
                     {loading && (
-                      <div className="self-start flex gap-3 max-w-[90%] md:max-w-[85%]">
-                        <div className="w-8 h-8 md:w-10 md:h-10 rounded-full flex-shrink-0 bg-white border border-gray-200 text-[#1a73e8] flex items-center justify-center shadow-sm">
-                          <Bot size={20} />
-                        </div>
-                        <div className="flex flex-col gap-1 items-start">
-                          <div className="text-xs text-gray-400 font-medium px-1 mb-0.5">AI</div>
-                          <div className="bg-[#f0f4f9] p-4 rounded-2xl rounded-tl-sm flex items-center gap-3">
+                      <div className="flex w-full gap-3.5 self-start">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#2a5298] text-white shadow-sm"><Sparkles size={15} /></div>
+                        <div className="flex flex-col items-start gap-1">
+                          <div className="mb-0.5 px-1 text-[10px] font-semibold text-slate-400">ជំនួយការ AI</div>
+                          <div className="flex items-center gap-3 px-1 py-2">
                             <div className="flex gap-1.5">
-                              <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                              <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                              <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                              <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500" style={{ animationDelay: '0ms' }} />
+                              <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500" style={{ animationDelay: '150ms' }} />
+                              <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500" style={{ animationDelay: '300ms' }} />
                             </div>
-                            <span className="text-sm font-medium text-gray-500">កំពុងគិត...</span>
+                            <span className="text-xs font-medium text-slate-500">កំពុងរៀបចំចម្លើយ...</span>
                           </div>
                         </div>
                       </div>
@@ -835,12 +996,12 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
               </div>
               
               {/* Input Area */}
-              <div className="p-4 md:p-6 bg-white border-t border-gray-50 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)] shrink-0 z-10">
-                <div className="max-w-4xl mx-auto w-full">
-                  <div className="bg-white border border-gray-200 shadow-sm hover:shadow-md hover:border-blue-300 transition-all rounded-2xl p-2 flex flex-col relative focus-within:shadow-md focus-within:border-blue-400">
+              <div className="z-10 shrink-0 bg-white px-4 pb-4 pt-2 md:px-8 md:pb-5">
+                <div className="mx-auto w-full max-w-3xl">
+                  <div className="relative flex flex-col rounded-[26px] border border-slate-200 bg-[#f4f4f4] p-2 shadow-sm transition-all focus-within:border-slate-300 focus-within:shadow-md">
                     <textarea 
-                      className="w-full bg-transparent border-none outline-none resize-none px-4 py-3 text-gray-800 placeholder:text-gray-400 min-h-[60px] max-h-[200px] text-base"
-                      placeholder="សួរអ្វីមួយ..."
+                      className="max-h-[180px] min-h-[52px] w-full resize-none border-none bg-transparent px-3 py-3 text-sm text-slate-800 outline-none placeholder:text-slate-400"
+                      placeholder="ផ្ញើសារទៅជំនួយការ AI..."
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -852,27 +1013,18 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
                       disabled={loading}
                       rows={1}
                     />
-                    <div className="flex items-center justify-between px-2 pt-2 pb-1">
-                      <div className="flex items-center gap-1 text-gray-500">
-                        <button className="p-2 hover:bg-gray-100 rounded-full transition-colors" title="ភ្ចាប់ឯកសារ">
-                          <Paperclip size={18} />
-                        </button>
-                        <button className="p-2 hover:bg-gray-100 rounded-full transition-colors" title="មុខងារបន្ថែម">
-                          <LayoutGrid size={18} />
-                        </button>
-                        <button className="p-2 hover:bg-gray-100 rounded-full transition-colors" title="និយាយបញ្ចូលសំឡេង">
-                          <Mic size={18} />
-                        </button>
-                      </div>
+                    <div className="flex items-center justify-between px-1 pb-1 pt-1">
+                      <span className="px-2 text-[10px] text-slate-400">Enter ដើម្បីផ្ញើ · Shift+Enter ដើម្បីចុះបន្ទាត់</span>
                       <button 
-                        className="w-10 h-10 flex items-center justify-center bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-full transition-colors shadow-sm disabled:opacity-50 disabled:bg-gray-300 disabled:text-gray-500"
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-[#2a5298] text-white shadow-sm transition-colors hover:bg-[#1f427d] disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-60"
                         onClick={() => handleSend()}
                         disabled={loading || !input.trim()}
                       >
-                        <Send size={18} className="ml-0.5" />
+                        <Send size={16} className="ml-0.5" />
                       </button>
                     </div>
                   </div>
+                  <p className="mt-2 text-center text-[10px] text-slate-400">AI អាចមានកំហុស។ សូមពិនិត្យបញ្ជីមុនចុចអនុម័តការផ្លាស់ប្តូរ។</p>
                 </div>
               </div>
               
@@ -883,11 +1035,11 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
 
       {/* Topbar Button */}
       <button 
-        className={`hidden md:flex items-center gap-2 px-4 py-1.5 rounded-full shadow-sm border transition-all text-sm font-bold bg-white text-[#2a5298] hover:bg-blue-50 border-white/20`}
+        className="hidden sm:inline-flex items-center gap-2 rounded-xl border border-white/30 bg-white/95 hover:bg-white text-indigo-900 px-3.5 py-1.5 text-xs font-bold shadow-2xs hover:shadow-xs transition-all active:scale-95 cursor-pointer"
         onClick={() => setIsOpen(true)}
       >
-        <Bot size={18} />
-        <span>Gemini AI</span>
+        <Sparkles size={15} className="text-indigo-600" />
+        <span>ជំនួយការ AI</span>
       </button>
     </>
   );

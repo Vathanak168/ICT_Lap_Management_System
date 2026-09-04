@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
-import { Shield, ShieldAlert, Trash2, Plus, Edit2, Search } from 'lucide-react';
+import { Shield, ShieldAlert, Trash2, Plus, Edit2, Search, Users } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { Navigate } from 'react-router-dom';
 
@@ -92,99 +92,113 @@ const UsersManagement: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col w-full pb-10">
-      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
-          <span>គ្រប់គ្រងអ្នកប្រើប្រាស់ (Users Management)</span>
-        </div>
-        <div className="p-4 flex flex-col sm:flex-row gap-4 justify-between items-end">
-          <div className="flex flex-col gap-1.5 flex-1 min-w-[250px] max-w-md">
-            <label className="text-xs font-bold text-gray-800 uppercase tracking-wide">ស្វែងរក (Search)</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Search size={16} className="text-gray-400" />
-              </div>
-              <input 
-                type="text"
-                placeholder="ស្វែងរកតាមឈ្មោះ ឬអុីមែល..."
-                className="w-full bg-white border border-gray-300 text-gray-800 text-sm rounded-sm pl-9 pr-3 py-2 outline-none focus:border-[#2a5298] transition-colors"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
+    <div className="flex flex-col w-full pb-12 space-y-5">
+      {/* Header Banner - Clean Ribbon */}
+      <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 rounded-2xl p-4 sm:p-5 text-white shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-white/10 backdrop-blur-xs rounded-xl shadow-2xs">
+            <Users size={22} className="text-white" />
           </div>
-          
+          <div>
+            <h1 className="text-base sm:text-lg font-bold tracking-tight">គ្រប់គ្រងអ្នកប្រើប្រាស់</h1>
+            <p className="text-xs text-blue-100/80">គ្រប់គ្រងគណនី និងសិទ្ធិចូលប្រើប្រាស់ប្រព័ន្ធ</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5 self-end sm:self-center">
           <button 
-            className="bg-[#48b5c9] hover:bg-[#3aa3b7] text-white px-6 py-2 rounded-sm text-sm font-medium flex items-center gap-2 transition-colors border border-transparent"
+            type="button"
+            className="inline-flex items-center gap-1.5 bg-white hover:bg-blue-50 text-blue-800 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-xs active:scale-95 cursor-pointer"
             onClick={() => alert('មុខងារនេះមិនទាន់មាននៅឡើយទេ!')}
           >
-            <Plus size={16} /> បង្កើតគណនីថ្មី
+            <Plus size={16} />
+            <span>បង្កើតគណនីថ្មី</span>
           </button>
         </div>
       </div>
 
-      <div className="bg-white border border-gray-200 shadow-sm rounded-sm mb-6">
-        <div className="bg-[#2a5298] text-white px-4 py-2 font-bold text-sm flex justify-between items-center">
-          <span>បញ្ជីគណនី (List of Accounts)</span>
-          <span className="text-xs font-medium bg-white/20 px-2 py-0.5 rounded">សរុប {filteredUsers.length} គណនី</span>
+      {/* Filter / Search Bar */}
+      <div className="bg-surface rounded-2xl border border-border/80 p-4 shadow-xs flex flex-col sm:flex-row gap-4 justify-between items-stretch sm:items-center">
+        <div className="flex flex-col gap-1 flex-1 min-w-[240px] max-w-md">
+          <label className="text-[11px] font-bold text-secondary-text uppercase tracking-wider">ស្វែងរក</label>
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary-text" />
+            <input 
+              type="text"
+              placeholder="ស្វែងរកតាមឈ្មោះ ឬអុីមែល..."
+              className="w-full pl-9 pr-3 py-2 text-xs bg-background border border-border rounded-xl font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-2xs"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
         </div>
-        <div className="overflow-x-auto p-0">
+
+        <div>
+          <span className="inline-flex items-center text-xs font-bold text-secondary-text bg-background px-3 py-1.5 rounded-xl border border-border/60">
+            សរុប {filteredUsers.length} គណនី
+          </span>
+        </div>
+      </div>
+
+      {/* Table Section */}
+      <div className="bg-surface rounded-2xl border border-border/80 shadow-xs overflow-hidden">
+        <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[700px]">
-            <thead className="bg-[#f8f9fa] text-gray-800 sticky top-0 z-10 border-b border-gray-300">
+            <thead className="bg-background/80 text-secondary-text sticky top-0 z-10 border-b border-border">
               <tr>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ឈ្មោះ</th>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">អុីមែល</th>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">តួនាទី (Role)</th>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider">ថ្ងៃបង្កើត</th>
-                <th className="px-5 py-4 font-bold text-xs uppercase tracking-wider text-right">សកម្មភាព</th>
+                <th className="px-5 py-3.5 font-bold text-xs uppercase tracking-wider">ឈ្មោះ</th>
+                <th className="px-5 py-3.5 font-bold text-xs uppercase tracking-wider">អុីមែល</th>
+                <th className="px-5 py-3.5 font-bold text-xs uppercase tracking-wider text-center">តួនាទី</th>
+                <th className="px-5 py-3.5 font-bold text-xs uppercase tracking-wider">ថ្ងៃបង្កើត</th>
+                <th className="px-5 py-3.5 font-bold text-xs uppercase tracking-wider text-right">សកម្មភាព</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
+            <tbody className="divide-y divide-border/60 text-xs">
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="text-center py-10 text-gray-500 font-medium">កំពុងផ្ទុកទិន្នន័យ...</td>
+                  <td colSpan={5} className="text-center py-12 text-secondary-text font-medium">កំពុងផ្ទុកទិន្នន័យ...</td>
                 </tr>
               ) : errorMsg ? (
                 <tr>
                   <td colSpan={5} className="text-center py-10">
-                    <p className="text-red-500 font-medium mb-1">{errorMsg}</p>
-                    <p className="text-sm text-gray-500">សូមពិនិត្យមើលសិទ្ធិ (Permissions) និង Network របស់អ្នក។</p>
+                    <p className="text-rose-500 font-medium mb-1">{errorMsg}</p>
+                    <p className="text-xs text-secondary-text">សូមពិនិត្យមើលសិទ្ធិ និង Network របស់អ្នក។</p>
                   </td>
                 </tr>
               ) : filteredUsers.length > 0 ? (
                 filteredUsers.map((user) => (
-                  <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-5 py-3 font-medium text-gray-900">{user.name || 'មិនមានឈ្មោះ'}</td>
-                    <td className="px-5 py-3 text-gray-600">{user.email}</td>
-                    <td className="px-5 py-3">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-medium ${
+                  <tr key={user.id} className="hover:bg-surface-hover/50 transition-colors">
+                    <td className="px-5 py-3.5 text-sm font-bold text-main-text">{user.name || 'មិនមានឈ្មោះ'}</td>
+                    <td className="px-5 py-3.5 text-xs text-secondary-text font-mono">{user.email}</td>
+                    <td className="px-5 py-3.5 text-center">
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${
                         user.role === 'admin' 
-                          ? 'bg-purple-100 text-purple-800 border border-purple-200' 
-                          : 'bg-blue-100 text-blue-800 border border-blue-200'
+                          ? 'bg-purple-100 text-purple-800 border border-purple-200/80' 
+                          : 'bg-blue-100 text-blue-800 border border-blue-200/80'
                       }`}>
-                        {user.role === 'admin' ? <ShieldAlert size={14} /> : <Shield size={14} />}
-                        {user.role === 'admin' ? 'Admin' : 'Teacher'}
+                        {user.role === 'admin' ? <ShieldAlert size={12} /> : <Shield size={12} />}
+                        <span>{user.role === 'admin' ? 'Admin' : 'Teacher'}</span>
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-gray-600 text-sm">
+                    <td className="px-5 py-3.5 text-xs text-secondary-text font-mono">
                       {renderDate(user.created_at)}
                     </td>
-                    <td className="px-5 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                    <td className="px-5 py-3.5 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
                         <button 
-                          className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" 
+                          className="p-1.5 text-secondary-text hover:text-primary hover:bg-surface-hover rounded-lg transition-colors cursor-pointer" 
                           title="កែប្រែ"
                           onClick={() => alert('មុខងារនេះមិនទាន់មាននៅឡើយទេ!')}
                         >
-                          <Edit2 size={16} />
+                          <Edit2 size={15} />
                         </button>
                         <button 
-                          className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed" 
+                          className="p-1.5 text-secondary-text hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer" 
                           title="លុប" 
                           disabled={user.id === session?.user.id}
                           onClick={() => alert('មុខងារនេះមិនទាន់មាននៅឡើយទេ!')}
                         >
-                          <Trash2 size={16} />
+                          <Trash2 size={15} />
                         </button>
                       </div>
                     </td>
@@ -192,7 +206,7 @@ const UsersManagement: React.FC = () => {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="text-center py-10 text-gray-500 font-medium">មិនមានទិន្នន័យទេ</td>
+                  <td colSpan={5} className="text-center py-12 text-secondary-text font-medium">មិនមានទិន្នន័យទេ</td>
                 </tr>
               )}
             </tbody>

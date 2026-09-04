@@ -59,7 +59,7 @@ const Settings = () => {
       showMessage('រក្សាទុក API Key ជោគជ័យ!', 'success');
     } catch (error) {
       console.error('Failed to save API key:', error);
-      showMessage('មានបញ្ហាក្នុងការរក្សាទុក (Storage Error)', 'error');
+      showMessage('មានបញ្ហាក្នុងការរក្សាទុក', 'error');
     } finally {
       setOperation(null);
     }
@@ -71,7 +71,7 @@ const Settings = () => {
     try {
       const success = await exportDatabase(activeYear || undefined);
       if (success) {
-        showMessage('ទាញយកទិន្នន័យបម្រុង (Backup) ជោគជ័យ!', 'success');
+        showMessage('ទាញយកទិន្នន័យបម្រុង ជោគជ័យ!', 'success');
       } else {
         throw new Error('Export returned false');
       }
@@ -98,7 +98,7 @@ const Settings = () => {
     try {
       const success = await importDatabase(file);
       if (success) {
-        showMessage('បញ្ចូលទិន្នន័យ (Restore) ជោគជ័យ! ប្រព័ន្ធនឹង Restart...', 'success');
+        showMessage('បញ្ចូលទិន្នន័យ ជោគជ័យ! ប្រព័ន្ធនឹង Restart...', 'success');
         if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
         reloadTimerRef.current = setTimeout(() => window.location.reload(), 1500);
       } else {
@@ -153,7 +153,7 @@ const Settings = () => {
 
   const handleClearData = async () => {
     if (role !== 'admin') {
-      showMessage('សិទ្ធិមិនគ្រប់គ្រាន់ (Unauthorized)', 'error');
+      showMessage('សិទ្ធិមិនគ្រប់គ្រាន់', 'error');
       return;
     }
     
@@ -186,7 +186,7 @@ const Settings = () => {
         <div className="flex items-center gap-3">
           <ShieldAlert size={28} className="text-[#2a5298]" />
           <div>
-            <h1 className="text-2xl font-bold text-[#2a5298] font-khmer">ការកំណត់ (Settings)</h1>
+            <h1 className="text-2xl font-bold text-[#2a5298] font-khmer">ការកំណត់</h1>
             <p className="text-sm text-gray-500 font-khmer mt-1">គ្រប់គ្រងទិន្នន័យ ប្រព័ន្ធ និងការកំណត់ទូទៅ</p>
           </div>
         </div>
@@ -207,7 +207,7 @@ const Settings = () => {
           <div className="w-12 h-12 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center mb-4">
             <DownloadCloud size={24} />
           </div>
-          <h2 className="text-lg font-bold text-gray-800 mb-2 border-b border-gray-100 pb-3">បម្រុងទុកទិន្នន័យ (Backup & Restore)</h2>
+          <h2 className="text-lg font-bold text-gray-800 mb-2 border-b border-gray-100 pb-3">បម្រុងទុកទិន្នន័យ</h2>
           <p className="text-sm text-gray-500 mb-6 flex-1">រក្សាទុកទិន្នន័យរបស់អ្នកជា File JSON ដើម្បីការពារការបាត់បង់ពេលមានបញ្ហាកុំព្យូទ័រ ឬប្តូរ Browser។</p>
           
           <div className="flex flex-col gap-3">
@@ -217,7 +217,7 @@ const Settings = () => {
               disabled={!!operation}
             >
               <DownloadCloud size={18} />
-              <span>{operation === 'backup' ? 'កំពុងទាញយក...' : 'ទាញយកទិន្នន័យ (Backup)'}</span>
+              <span>{operation === 'backup' ? 'កំពុងទាញយក...' : 'ទាញយកទិន្នន័យ'}</span>
             </button>
             
             <button 
@@ -226,7 +226,7 @@ const Settings = () => {
               disabled={!!operation}
             >
               <UploadCloud size={18} />
-              <span>{operation === 'restore' ? 'កំពុងបញ្ចូល...' : 'បញ្ចូលទិន្នន័យ (Restore)'}</span>
+              <span>{operation === 'restore' ? 'កំពុងបញ្ចូល...' : 'បញ្ចូលទិន្នន័យ'}</span>
             </button>
             <input 
               type="file" 
@@ -243,7 +243,7 @@ const Settings = () => {
           <div className="w-12 h-12 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center mb-4">
             <FileSpreadsheet size={24} />
           </div>
-          <h2 className="text-lg font-bold text-gray-800 mb-2 border-b border-gray-100 pb-3">នាំចេញជា Excel (Export Excel)</h2>
+          <h2 className="text-lg font-bold text-gray-800 mb-2 border-b border-gray-100 pb-3">នាំចេញជា Excel</h2>
           <p className="text-sm text-gray-500 mb-6 flex-1">ទាញយកទិន្នន័យពីក្នុងប្រព័ន្ធទៅជាឯកសារ Excel ដើម្បីងាយស្រួលក្នុងការផ្ញើ ឬ Print ទុកជាឯកសារយោង។</p>
           
           <div className="flex flex-col gap-3">
@@ -253,7 +253,7 @@ const Settings = () => {
               disabled={!!operation || !activeYear}
             >
               <FileSpreadsheet size={18} />
-              <span>{operation === 'excel' ? 'កំពុងដំណើរការ...' : 'បញ្ជីសិស្ស (Students)'}</span>
+              <span>{operation === 'excel' ? 'កំពុងដំណើរការ...' : 'បញ្ជីសិស្ស'}</span>
             </button>
             
             <button 
@@ -262,7 +262,7 @@ const Settings = () => {
               disabled={!!operation}
             >
               <FileSpreadsheet size={18} />
-              <span>តារាងពិន្ទុ (Grades)</span>
+              <span>តារាងពិន្ទុ</span>
             </button>
           </div>
         </section>
@@ -275,7 +275,7 @@ const Settings = () => {
           <div className="w-12 h-12 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center mb-4 relative z-10">
             <ShieldAlert size={24} />
           </div>
-          <h2 className="text-lg font-bold text-[#2a5298] mb-2 border-b border-gray-100 pb-3 relative z-10">ជំនួយការ AI (Gemini AI)</h2>
+          <h2 className="text-lg font-bold text-[#2a5298] mb-2 border-b border-gray-100 pb-3 relative z-10">ជំនួយការ AI</h2>
           <p className="text-sm text-gray-500 mb-6 flex-1 relative z-10">បញ្ចូល Gemini API Key របស់អ្នក ដើម្បីបើកដំណើរការជំនួយការ AI។ កូដនេះត្រូវបានរក្សាទុកតែលើ Browser របស់អ្នកប៉ុណ្ណោះ។</p>
           
           <div className="flex flex-col gap-3 relative z-10">
@@ -322,7 +322,7 @@ const Settings = () => {
                 disabled={!!operation}
               >
                 <Trash2 size={18} />
-                <span>{operation === 'clear' ? 'កំពុងលុប...' : 'លុបទិន្នន័យទាំងអស់ (Clear All Data)'}</span>
+                <span>{operation === 'clear' ? 'កំពុងលុប...' : 'លុបទិន្នន័យទាំងអស់'}</span>
               </button>
             </div>
           </section>

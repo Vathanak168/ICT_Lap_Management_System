@@ -1,0 +1,396 @@
+/* Curriculum Library Page Styles */
+
+/* Subject Tabs */
+.curriculum-tabs {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.25rem;
+  background: #f1f5f9;
+  border-radius: 0.75rem;
+  width: fit-content;
+}
+
+.curriculum-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.625rem;
+  border: none;
+  background: transparent;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.curriculum-tab:hover {
+  background: rgba(255, 255, 255, 0.6);
+  color: #334155;
+}
+
+.curriculum-tab.active {
+  background: white;
+  color: #1e293b;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.curriculum-tab .tab-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.curriculum-tab .tab-count {
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: #e2e8f0;
+  color: #475569;
+  padding: 0.125rem 0.4rem;
+  border-radius: 9999px;
+  min-width: 1.25rem;
+  text-align: center;
+}
+
+.curriculum-tab.active .tab-count {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+/* Module Section */
+.module-section {
+  margin-bottom: 1.5rem;
+}
+
+.module-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  margin-bottom: 0.75rem;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.module-header h3 {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin: 0;
+}
+
+.module-header .module-count {
+  font-size: 0.7rem;
+  background: #f1f5f9;
+  color: #64748b;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-weight: 600;
+}
+
+/* Lesson Card */
+.lesson-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  margin-bottom: 0.5rem;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.lesson-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.lesson-card .lesson-order {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: white;
+  flex-shrink: 0;
+}
+
+.lesson-card .lesson-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.lesson-card .lesson-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 0.25rem;
+}
+
+.lesson-card .lesson-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.375rem;
+}
+
+.lesson-card .lesson-meta-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.175rem 0.5rem;
+  border-radius: 0.375rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+}
+
+.lesson-card .lesson-actions {
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.lesson-card:hover .lesson-actions {
+  opacity: 1;
+}
+
+.lesson-card .lesson-actions button {
+  padding: 0.375rem;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.lesson-card .lesson-actions button:hover {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.lesson-card .lesson-actions button.delete-btn:hover {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+/* Assign Tab */
+.assign-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.assign-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  transition: all 0.2s ease;
+}
+
+.assign-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.assign-card .class-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 0.75rem;
+}
+
+.assign-card .subject-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  margin-bottom: 0.375rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.assign-card .subject-checkbox:hover {
+  background: #f8fafc;
+}
+
+.assign-card .subject-checkbox input[type="checkbox"] {
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+.assign-card .subject-checkbox label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  flex: 1;
+}
+
+.assign-card .subject-checkbox .assigned-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #16a34a;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  padding: 0.125rem 0.4rem;
+  border-radius: 9999px;
+}
+
+/* Edit Modal */
+.lesson-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.lesson-edit-form label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin-bottom: 0.25rem;
+}
+
+.lesson-edit-form input,
+.lesson-edit-form textarea,
+.lesson-edit-form select {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  color: #1e293b;
+  background: white;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.lesson-edit-form input:focus,
+.lesson-edit-form textarea:focus,
+.lesson-edit-form select:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.lesson-edit-form .form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+/* Empty state */
+.curriculum-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 2rem;
+  text-align: center;
+}
+
+.curriculum-empty .empty-icon {
+  width: 4rem;
+  height: 4rem;
+  background: #f1f5f9;
+  border-radius: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+  color: #94a3b8;
+}
+
+.curriculum-empty h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #334155;
+  margin: 0 0 0.375rem 0;
+}
+
+.curriculum-empty p {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  max-width: 300px;
+}
+
+/* Two-step curriculum management */
+.curriculum-page { display:flex; flex-direction:column; width:100%; gap:1rem; padding-bottom:2.5rem; }
+.curriculum-page-header { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+.curriculum-page-header h1 { margin:0; }
+.curriculum-step-tabs { display:flex; align-self:flex-start; gap:.45rem; padding:.3rem; border:1px solid #dbe3ef; border-radius:.8rem; background:#f1f5f9; }
+.curriculum-step-tabs .curriculum-tab { padding:.62rem .9rem; }
+.curriculum-step-tabs .curriculum-tab.active { color:#2a5298; }
+.step-number { display:inline-flex; align-items:center; justify-content:center; width:1.35rem; height:1.35rem; border-radius:50%; background:#dbeafe; color:#2a5298; font-size:.68rem; font-weight:800; }
+.curriculum-tab.active .step-number { background:#2a5298; color:white; }
+
+.curriculum-workspace { display:grid; grid-template-columns:245px minmax(0,1fr); gap:.85rem; align-items:start; }
+.curriculum-subject-panel,.curriculum-lesson-panel,.curriculum-assign-panel { border:1px solid #e2e8f0; border-radius:.8rem; background:white; box-shadow:0 1px 3px rgba(15,23,42,.04); }
+.curriculum-subject-panel { overflow:hidden; position:sticky; top:1rem; }
+.subject-panel-heading { display:flex; align-items:center; justify-content:space-between; gap:.5rem; padding:.85rem; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
+.subject-panel-heading>div { display:flex; flex-direction:column; }
+.subject-panel-heading strong { color:#1e293b; font-size:.86rem; }
+.subject-panel-heading span { color:#94a3b8; font-size:.68rem; }
+.subject-panel-heading button { display:flex; align-items:center; justify-content:center; width:2rem; height:2rem; border:0; border-radius:.5rem; background:#2a5298; color:white; cursor:pointer; }
+.curriculum-subject-list { display:flex; flex-direction:column; gap:.25rem; padding:.45rem; }
+.curriculum-subject-item { display:grid; grid-template-columns:.65rem minmax(0,1fr) auto; gap:.6rem; align-items:center; width:100%; padding:.65rem .7rem; border:0; border-radius:.55rem; background:transparent; color:#475569; text-align:left; cursor:pointer; }
+.curriculum-subject-item:hover { background:#f8fafc; }
+.curriculum-subject-item.active { background:#eff6ff; color:#1d4ed8; }
+.curriculum-subject-item .tab-dot { width:.6rem; height:.6rem; border-radius:50%; }
+.subject-item-name { display:flex; flex-direction:column; min-width:0; font-size:.78rem; font-weight:700; }
+.subject-item-name small { margin-top:.15rem; color:#94a3b8; font-size:.65rem; font-weight:600; }
+
+.curriculum-lesson-panel { min-width:0; padding:1.15rem; }
+.lesson-panel-heading { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:1rem; }
+.lesson-panel-heading h2 { display:flex; align-items:center; gap:.5rem; margin:0; color:#1e293b; font-size:1rem; font-weight:800; }
+.lesson-panel-actions { display:flex; align-items:center; gap:.5rem; }
+.edit-subject-button { display:inline-flex; align-items:center; gap:.35rem; padding:.5rem .65rem; border:1px solid #dbe3ef; border-radius:.5rem; background:white; color:#64748b; font-size:.7rem; font-weight:700; cursor:pointer; }
+.lesson-card .lesson-actions { opacity:1; }
+
+.curriculum-assign-panel { padding:1.15rem; }
+.assign-panel-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; margin-bottom:1rem; }
+.assign-panel-heading h2 { margin:0; color:#1e293b; font-size:1rem; font-weight:800; }
+.assign-panel-heading p { margin:.25rem 0 0; color:#64748b; font-size:.76rem; }
+.auto-save-note { padding:.3rem .55rem; border-radius:999px; background:#ecfdf5; color:#15803d; font-size:.68rem; font-weight:700; white-space:nowrap; }
+.assign-filters { display:grid; grid-template-columns:minmax(220px,1fr) auto auto; gap:.7rem; align-items:center; margin-bottom:1rem; padding:.7rem; border:1px solid #e2e8f0; border-radius:.7rem; background:#f8fafc; }
+.assign-filters>label { display:flex; align-items:center; gap:.5rem; height:2.4rem; padding:0 .65rem; border:1px solid #dbe3ef; border-radius:.5rem; background:white; color:#94a3b8; }
+.assign-filters input { width:100%; border:0; outline:0; color:#334155; font:inherit; font-size:.78rem; }
+.assign-shift-options { display:flex; gap:.2rem; padding:.2rem; border-radius:.5rem; background:#e9eef5; }
+.assign-shift-options button { padding:.45rem .62rem; border:0; border-radius:.4rem; background:transparent; color:#64748b; font-size:.7rem; font-weight:700; cursor:pointer; }
+.assign-shift-options button.active { background:white; color:#2a5298; box-shadow:0 1px 3px rgba(15,23,42,.1); }
+.assign-result-count { color:#64748b; font-size:.72rem; font-weight:700; white-space:nowrap; }
+.assign-card .class-name { margin-bottom:0; }
+.assign-card .subject-checkbox { border:1px solid transparent; }
+.assign-card .subject-checkbox:has(input:checked) { border-color:#bfdbfe; background:#eff6ff; }
+
+@media (max-width:980px) {
+  .curriculum-workspace { grid-template-columns:1fr; }
+  .curriculum-subject-panel { position:static; }
+  .curriculum-subject-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); }
+  .assign-filters { grid-template-columns:1fr; }
+}
+@media (max-width:680px) {
+  .curriculum-page-header { align-items:flex-start; flex-direction:column; }
+  .curriculum-step-tabs { width:100%; }
+  .curriculum-step-tabs .curriculum-tab { flex:1; white-space:normal; }
+  .lesson-panel-heading,.assign-panel-heading { align-items:flex-start; flex-direction:column; }
+  .lesson-panel-actions { width:100%; flex-wrap:wrap; }
+  .lesson-edit-form .form-row { grid-template-columns:1fr; }
+  .assign-grid { grid-template-columns:1fr; }
+}

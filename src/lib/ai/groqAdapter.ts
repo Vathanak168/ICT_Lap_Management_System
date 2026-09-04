@@ -45,6 +45,10 @@ function convertSchemaToOpenAI(schema: any): any {
       result.properties[key] = convertSchemaToOpenAI(val);
     }
   }
+
+  if (schema.items) {
+    result.items = convertSchemaToOpenAI(schema.items);
+  }
   
   if (schema.required) {
     result.required = schema.required;
@@ -115,7 +119,7 @@ export async function sendGroqRequest(
         messages,
         tools: openAITools,
         tool_choice: 'auto',
-        temperature: 0.5,
+        temperature: 0.35,
         max_tokens: 4096
       })
     });
@@ -148,7 +152,7 @@ export async function sendGroqRequest(
         const funcArgs = JSON.parse(toolCall.function.arguments || '{}');
         
         try {
-          const result: any = await executeTool(funcName, funcArgs, context?.academicYear);
+          const result: any = await executeTool(funcName, funcArgs, context?.academicYear, { userId: context?.userId });
           
           const safeResponse = Array.isArray(result)
             ? {
@@ -181,7 +185,7 @@ export async function sendGroqRequest(
       // If there's a pending action, return it immediately
       if (pendingActions.length > 0) {
         return {
-          text: message.content || 'ខ្ញុំបានរៀបចំទិន្នន័យរួចរាល់ហើយ។ សូមលោកគ្រូពិនិត្យ និងយល់ព្រម (Approve) ខាងក្រោមនេះ：',
+          text: message.content || 'ខ្ញុំបានរៀបចំទិន្នន័យរួចរាល់ហើយ។ សូមលោកគ្រូពិនិត្យ និងយល់ព្រមខាងក្រោមនេះ៖',
           pendingActions
         };
       }
