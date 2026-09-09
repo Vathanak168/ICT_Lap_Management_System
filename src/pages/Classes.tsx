@@ -20,6 +20,7 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { compareKhmer } from '../utils/khmerSort';
 
 const Classes = () => {
   const [classes, setClasses] = useState<ClassRecord[]>([]);
@@ -57,7 +58,7 @@ const Classes = () => {
       const allClasses = await db.getAll('classes', targetYear);
       
       if (requestId !== loadRequestRef.current) return;
-      allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      allClasses.sort((a, b) => compareKhmer(a.name, b.name));
       setClasses(allClasses);
     } catch (error) {
       if (requestId === loadRequestRef.current) {

@@ -5,6 +5,7 @@ import type { ClassRecord, LessonPlanTrack } from '../store/db';
 import { Button } from '../components/ui/Button';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { compareKhmer } from '../utils/khmerSort';
 
 const LessonPlanPage = () => {
   const [classes, setClasses] = useState<ClassRecord[]>([]);
@@ -39,7 +40,7 @@ const LessonPlanPage = () => {
         const allClasses = await db.getAll('classes', activeYear);
         
         if (requestId !== loadRequestRef.current) return;
-        allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        allClasses.sort((a, b) => compareKhmer(a.name, b.name));
         setClasses(allClasses);
         const exists = allClasses.some(c => c.id === selectedClass);
         if (allClasses.length > 0 && (!selectedClass || !exists)) {

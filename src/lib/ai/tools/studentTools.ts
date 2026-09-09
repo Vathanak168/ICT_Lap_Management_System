@@ -1,5 +1,6 @@
 import { Type } from '@google/genai';
 import { initDB } from '../../../store/db';
+import { compareStudentsByKhmerName } from '../../../utils/khmerSort';
 
 export const studentToolDeclarations = [
   {
@@ -64,7 +65,7 @@ export const executeStudentTool = async (name: string, args: any, academicYear?:
   if (name === 'getStudents') {
     const allStudents = await db.getAll('students', academicYear);
     const filtered = args.classId ? allStudents.filter(s => s.class === args.classId) : allStudents;
-    filtered.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    filtered.sort(compareStudentsByKhmerName);
     
     return {
       resultType: 'student_summary',

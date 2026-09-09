@@ -12,6 +12,7 @@ import {
   ArrowUpRight
 } from 'lucide-react';
 import { useToast } from '../components/ui/Toast';
+import { compareKhmer } from '../utils/khmerSort';
 
 interface ClassInfo {
   id: string;
@@ -87,7 +88,7 @@ const Classes = () => {
         studentCount: countMap.get(c.id) || 0
       }));
 
-      enrichedClasses.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }));
+      enrichedClasses.sort((a: any, b: any) => compareKhmer(a.name, b.name));
       setClasses(enrichedClasses);
     } catch (error) {
       console.error('Error fetching classes:', error);

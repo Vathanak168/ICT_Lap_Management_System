@@ -8,6 +8,7 @@ import type { Student, ClassRecord, PcSyncTask, PCIssue } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { getSetupScript, getResetScript, getGlobalSyncScript, getInteractiveCommandLauncher, getSyncRunnerScript } from '../lib/scripts/labScripts';
 import { supabase } from '../lib/supabase';
+import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 // Helper to encode string to Base64 using UTF-8
 function utf8ToBase64(str: string): string {
@@ -181,7 +182,7 @@ const PcSync = () => {
         ...student,
         password: passwordById.get(student.id),
       })));
-      setClasses(classesData);
+      setClasses([...classesData].sort((a, b) => compareKhmer(a.name, b.name) || compareKhmer(a.shift, b.shift)));
       setPendingTasks(taskData.filter(task => task.status === 'PENDING'));
       setPcIssues(issuesData || []);
       setSelectedStudentIds(previous => new Set(
@@ -205,9 +206,13 @@ const PcSync = () => {
     ].filter(Boolean) as string[]
   )).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [allStudents, pendingTasks]);
 
+  const sortedClasses = useMemo(() => {
+    return [...classes].sort((a, b) => compareKhmer(a.name, b.name) || compareKhmer(a.shift, b.shift));
+  }, [classes]);
+
   const classNameById = useMemo(
-    () => new Map(classes.map(classItem => [classItem.id, classItem.name])),
-    [classes]
+    () => new Map(sortedClasses.map(classItem => [classItem.id, classItem.name])),
+    [sortedClasses]
   );
 
   const filteredStudents = useMemo(() => {
@@ -225,9 +230,7 @@ const PcSync = () => {
         (s.englishName && s.englishName.toLowerCase().includes(q)) ||
         (s.studentId && s.studentId.toLowerCase().includes(q))
       );
-    }).sort((a, b) => {
-      return a.studentId.localeCompare(b.studentId, undefined, { numeric: true });
-    });
+    }).sort(compareStudentsByKhmerName);
   }, [allStudents, searchQuery, selectedClass, selectedDesk]);
 
   const missingPasswordStudents = useMemo(
@@ -940,7 +943,7 @@ const PcSync = () => {
               className="w-full bg-white appearance-none rounded-xl border border-slate-200 py-2 pl-9 pr-8 text-xs font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition cursor-pointer font-khmer"
             >
               <option value="ALL">គ្រប់ថ្នាក់ទាំងអស់</option>
-              {classes.map(c => (
+              {sortedClasses.map(c => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>

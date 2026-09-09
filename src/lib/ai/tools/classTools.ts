@@ -1,5 +1,6 @@
 import { Type } from '@google/genai';
 import { initDB } from '../../../store/db';
+import { compareKhmer } from '../../../utils/khmerSort';
 
 export const classToolDeclarations = [
   {
@@ -57,7 +58,7 @@ export const executeClassTool = async (name: string, args: any, academicYear?: s
   
   if (name === 'getClasses') {
     const classes = await db.getAll('classes', academicYear);
-    classes.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    classes.sort((a, b) => compareKhmer(a.name, b.name));
     return {
       resultType: 'class_summary',
       count: classes.length,

@@ -13,6 +13,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { useAuth } from '../contexts/AuthContext';
 import { findSeatConflict } from '../utils/studentPlacement';
+import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 interface Desk {
   id: string;
@@ -120,7 +121,7 @@ const SeatingPlan = () => {
         const result = await db.getAll('classes', activeYear);
 
         if (requestId !== loadClassRequestRef.current) return;
-        result.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        result.sort((a, b) => compareKhmer(a.name, b.name));
         setClasses(result);
         setSelectedClass(previous =>
           result.some(item => item.id === previous) ? previous : result[0]?.id ?? ''
@@ -153,7 +154,7 @@ const SeatingPlan = () => {
       if (requestId !== loadDataRequestRef.current) return;
 
       const activeStudents = studentRows.filter(student => student.status === 'Active');
-      activeStudents.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      activeStudents.sort(compareStudentsByKhmerName);
       setStudents(activeStudents);
       setPcIssues(issueRows);
       
@@ -1086,10 +1087,10 @@ const SeatingPlan = () => {
   const handleAutoAssign = async () => {
     if (!selectedClass || !activeYear) return;
     
-    // Sort unassigned students by ID
+    // Sort unassigned students by Khmer name
     const unassignedStudents = students
       .filter(s => !s.pcNumber)
-      .sort((a, b) => (a.studentId || '').localeCompare(b.studentId || ''));
+      .sort(compareStudentsByKhmerName);
 
     if (unassignedStudents.length === 0) {
       alert('មិនមានសិស្សទំនេរដែលត្រូវរៀបចំទេ។');
@@ -1213,7 +1214,7 @@ const SeatingPlan = () => {
 
   const unassignedStudentsList = students
     .filter(s => !s.pcNumber)
-    .sort((a, b) => (a.studentId || '').localeCompare(b.studentId || ''));
+    .sort(compareStudentsByKhmerName);
 
   const renderDesk = (desk: Desk) => {
     const isTeacher = desk.pcNumber === 'Teacher PC';

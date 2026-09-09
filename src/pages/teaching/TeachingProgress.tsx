@@ -7,6 +7,7 @@ import type {
   Shift, SubjectRecord, TeachingLogRecord,
 } from '../../store/db';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
+import { compareKhmer } from '../../utils/khmerSort';
 import './TeachingProgress.css';
 
 type TabView = 'status' | 'history';
@@ -78,7 +79,7 @@ const TeachingProgress = () => {
         db.getAll('teachingLogs', activeYear),
       ]);
       if (reqId !== loadRef.current) return;
-      cls.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      cls.sort((a, b) => compareKhmer(a.name, b.name));
       lsns.sort((a, b) => a.orderNo - b.orderNo);
       setClasses(cls);
       setSubjects(subs);
@@ -118,8 +119,8 @@ const TeachingProgress = () => {
       currentLesson,
       lastLog: classLogs[0] || null,
     }];
-  }).sort((a, b) => a.className.localeCompare(b.className, undefined, { numeric: true })
-    || a.subjectName.localeCompare(b.subjectName)), [assignments, classes, lessons, subjects, teachingLogs]);
+  }).sort((a, b) => compareKhmer(a.className, b.className)
+    || compareKhmer(a.subjectName, b.subjectName)), [assignments, classes, lessons, subjects, teachingLogs]);
 
   const filteredRows = useMemo(() => {
     const query = searchText.trim().toLocaleLowerCase();

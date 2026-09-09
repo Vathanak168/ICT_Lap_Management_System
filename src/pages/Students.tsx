@@ -26,6 +26,7 @@ import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
 import { translateKhmerToEnglish, translateKhmerNamesBatch } from '../utils/khmerTranslator';
 import { useLanguage } from '../contexts/LanguageContext';
+import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 const addPcSyncTask = async (
   db: any,
@@ -128,8 +129,8 @@ const Students = () => {
 
       if (requestId !== loadRequestRef.current) return;
       
-      allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-      allStudents.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      allClasses.sort((a, b) => compareKhmer(a.name, b.name));
+      allStudents.sort(compareStudentsByKhmerName);
       
       setClasses(allClasses);
       setStudents(allStudents);

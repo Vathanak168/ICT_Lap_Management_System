@@ -10,6 +10,7 @@ import type {
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
+import { compareKhmer } from '../../utils/khmerSort';
 import './CurriculumLibrary.css';
 
 // Default subject configs
@@ -147,9 +148,9 @@ const CurriculumLibrary = () => {
         db.getAll('classes', activeYear),
       ]);
       if (reqId !== loadRef.current) return;
-      subs.sort((a, b) => a.name.localeCompare(b.name));
+      subs.sort((a, b) => compareKhmer(a.name, b.name));
       lsns.sort((a, b) => a.orderNo - b.orderNo);
-      cls.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      cls.sort((a, b) => compareKhmer(a.name, b.name));
       setSubjects(subs);
       setLessons(lsns);
       setAssignments(assigns);

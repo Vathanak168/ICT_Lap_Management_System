@@ -6,6 +6,7 @@ import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
+import { compareKhmer } from '../utils/khmerSort';
 import './LessonLog.css';
 
 const LessonLog = () => {
@@ -45,7 +46,7 @@ const LessonLog = () => {
       
       if (requestId !== loadRequestRef.current) return;
       
-      allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      allClasses.sort((a, b) => compareKhmer(a.name, b.name));
       setLogs(allLogs);
       setClasses(allClasses);
       setLessonPlans(allPlans);

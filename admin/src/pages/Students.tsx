@@ -19,6 +19,7 @@ import {
 import { Pagination } from '../components/ui/Pagination';
 import { useToast } from '../components/ui/Toast';
 import { translateKhmerToEnglish } from '../utils/khmerTranslator';
+import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 interface Student {
   id: string;
@@ -105,8 +106,8 @@ const Students = () => {
       const loadedStudents = studentsRes.data || [];
       const loadedClasses = classesRes.data || [];
       
-      loadedStudents.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }));
-      loadedClasses.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }));
+      loadedStudents.sort(compareStudentsByKhmerName);
+      loadedClasses.sort((a, b) => compareKhmer(a.name, b.name));
       
       setStudents(loadedStudents);
       setClassesList(loadedClasses);
@@ -306,7 +307,7 @@ const Students = () => {
   };
 
   const uniqueClasses = useMemo(() => {
-    return Array.from(new Set(students.map(s => s.class).filter(Boolean))).sort();
+    return Array.from(new Set(students.map(s => s.class).filter(Boolean))).sort(compareKhmer);
   }, [students]);
 
   const filteredStudents = useMemo(() => {

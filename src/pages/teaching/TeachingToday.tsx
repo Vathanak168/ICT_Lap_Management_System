@@ -9,6 +9,7 @@ import type {
 import { useAuth } from '../../contexts/AuthContext';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
 import { Modal } from '../../components/ui/Modal';
+import { compareKhmer } from '../../utils/khmerSort';
 import './TeachingToday.css';
 
 interface ClassTeachingState {
@@ -108,7 +109,7 @@ const TeachingToday = () => {
         db.getAll('teachingSchedules', activeYear),
       ]);
       if (reqId !== loadRef.current) return;
-      cls.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      cls.sort((a, b) => compareKhmer(a.name, b.name));
       lsns.sort((a, b) => a.orderNo - b.orderNo);
       setClasses(cls);
       setSubjects(subs);
@@ -189,7 +190,7 @@ const TeachingToday = () => {
       const aComplete = !a.currentLesson;
       const bComplete = !b.currentLesson;
       if (aComplete !== bComplete) return aComplete ? 1 : -1;
-      return a.className.localeCompare(b.className, undefined, { numeric: true });
+      return compareKhmer(a.className, b.className);
     });
 
     return states;

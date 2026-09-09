@@ -22,6 +22,7 @@ import type {
 import { Modal } from '../../components/ui/Modal';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { compareKhmer } from '../../utils/khmerSort';
 import './TeachingSchedule.css';
 
 interface SchedulePeriod {
@@ -118,8 +119,8 @@ const TeachingSchedule = () => {
       ]);
 
       if (requestId !== loadRequestRef.current) return;
-      classRows.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-      subjectRows.sort((a, b) => a.name.localeCompare(b.name));
+      classRows.sort((a, b) => compareKhmer(a.name, b.name));
+      subjectRows.sort((a, b) => compareKhmer(a.name, b.name));
       setClasses(classRows);
       setSubjects(subjectRows);
       setAssignments(assignmentRows);

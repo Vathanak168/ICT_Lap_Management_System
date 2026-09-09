@@ -7,6 +7,7 @@ import { useAcademicYear } from '../contexts/AcademicYearContext';
 import './Gradebook.css';
 import { translateKhmerToEnglish } from '../utils/khmerTranslator';
 import { useAuth } from '../contexts/AuthContext';
+import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 interface StudentRow extends Student {
   practice: number | null;
@@ -75,7 +76,7 @@ const Gradebook = () => {
       }
     }
 
-    return sorted.sort((a, b) => a.studentId.localeCompare(b.studentId));
+    return sorted.sort(compareStudentsByKhmerName);
   };
 
   const recalculateRow = (s: StudentRow, config: { practice: number, book: number, exam: number }): StudentRow => {
@@ -130,7 +131,7 @@ const Gradebook = () => {
         const allClasses = await db.getAll('classes', activeYear);
         
         if (requestId !== loadClassRequestRef.current) return;
-        allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        allClasses.sort((a, b) => compareKhmer(a.name, b.name));
         setClasses(allClasses);
         const selectedExists = allClasses.some(c => c.id === selectedClass);
         if (allClasses.length > 0 && (!selectedClass || !selectedExists)) {
@@ -193,7 +194,7 @@ const Gradebook = () => {
           classesToFetch.map(cid => db.getAllFromIndex('students', 'class', cid, activeYear))
         );
         const studentsToFetch = studentGroups.flat().filter(s => s.status === 'Active');
-        studentsToFetch.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        studentsToFetch.sort(compareStudentsByKhmerName);
 
         // Load grades concurrently
         const gradeRecords = await Promise.all(

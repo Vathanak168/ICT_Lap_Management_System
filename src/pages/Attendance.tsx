@@ -20,6 +20,7 @@ import type { Student, ClassRecord, AttendanceRecord } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Button } from '../components/ui/Button';
 import { useLanguage } from '../contexts/LanguageContext';
+import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 type AttendanceStatus = 'P' | 'A' | 'E' | 'L' | null;
 
@@ -69,7 +70,7 @@ const Attendance = () => {
         const db = await initDB();
         const allClasses = await db.getAll('classes', activeYear);
         if (requestId !== loadRequestRef.current) return;
-        allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        allClasses.sort((a, b) => compareKhmer(a.name, b.name));
         setClasses(allClasses);
         if (allClasses.length > 0) {
           const currentClassExists = allClasses.some(c => c.id === selectedClass);
@@ -109,7 +110,7 @@ const Attendance = () => {
 
         if (requestId !== loadRequestRef.current) return;
         const activeStudents = allStudents.filter(s => s.status !== 'Inactive');
-        activeStudents.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        activeStudents.sort(compareStudentsByKhmerName);
         setStudents(activeStudents);
         
         if (record) {

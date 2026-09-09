@@ -15,6 +15,7 @@ import {
 import { initDB } from '../store/db';
 import type { Student, ClassRecord } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 const ShiftSwitching = () => {
   const [students, setStudents] = useState<Student[]>([]);
@@ -79,8 +80,8 @@ const ShiftSwitching = () => {
       
       if (requestId !== loadRequestRef.current) return;
       
-      allStudents.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-      allClasses.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      allStudents.sort(compareStudentsByKhmerName);
+      allClasses.sort((a, b) => compareKhmer(a.name, b.name));
       
       setStudents(allStudents);
       setClasses(allClasses);
