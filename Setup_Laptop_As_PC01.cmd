@@ -103,28 +103,38 @@ $DeviceConfig = [ordered]@{
 $DeviceConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$ICTRoot\device-config.json" -Encoding UTF8 -Force
 Write-Host "  device-config.json configured successfully: PC-01 (Token: ICT-SECURE-TOKEN-2026)" -ForegroundColor Green
 
-# 5. Copy UsbListener.ps1 and launch scheduled task
+# 5. Install UsbListener.ps1 and launch scheduled task
 Write-Host "[5/5] Installing UsbListener.ps1 and starting background service..." -ForegroundColor Yellow
-$CandidatePaths = @(
-    "C:\Users\U-ser\Desktop\ICT_Lap_Management_system\scratch\test_ps1\UsbListener.ps1",
-    "E:\scratch\test_ps1\UsbListener.ps1"
-)
-$FoundPath = $null
-foreach ($cp in $CandidatePaths) {
-    if (Test-Path -LiteralPath $cp) { $FoundPath = $cp; break }
+$InstalledListener = Join-Path $ICTRoot "UsbListener.ps1"
+$InstallerCmd = Join-Path $PSScriptRoot "dist_usb_pc1\1_Install_Lab_PC_AUTO.cmd"
+
+if (Test-Path -LiteralPath $InstallerCmd) {
+    try {
+        $CmdContent = Get-Content -LiteralPath $InstallerCmd -Raw -Encoding UTF8
+        $Marker1 = '$ListenerCode = @' + [char]39
+        $Marker2 = [char]39 + '@'
+        $Pos1 = $CmdContent.IndexOf($Marker1)
+        if ($Pos1 -ge 0) {
+            $Pos2 = $CmdContent.IndexOf($Marker2, $Pos1 + $Marker1.Length)
+            if ($Pos2 -gt $Pos1) {
+                $ExtractedCode = $CmdContent.Substring($Pos1 + $Marker1.Length, $Pos2 - ($Pos1 + $Marker1.Length)).Trim()
+                Set-Content -LiteralPath $InstalledListener -Value $ExtractedCode -Encoding UTF8
+                Write-Host "  Installed latest UsbListener.ps1 from package." -ForegroundColor Green
+            }
+        }
+    } catch { }
 }
-if ($null -ne $FoundPath) {
-    Copy-Item -LiteralPath $FoundPath -Destination "$ICTRoot\UsbListener.ps1" -Force
-} else {
-    Write-Host "  Note: UsbListener.ps1 preserved or updated." -ForegroundColor DarkGray
+
+if (-not (Test-Path -LiteralPath $InstalledListener)) {
+    Write-Host "  Notice: UsbListener.ps1 not found in package. Run 1_Install_Lab_PC_AUTO.cmd to install the complete suite." -ForegroundColor DarkYellow
 }
 
 $TaskName = "ICTLab USB Listener"
-$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -File `"$ICTRoot\UsbListener.ps1`""
+$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ICTRoot\UsbListener.ps1`""
 $Trigger = New-ScheduledTaskTrigger -AtStartup
 $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
 
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
-Start-ScheduledTask -TaskName $TaskName
-Write-Host "  Scheduled task started!" -ForegroundColor Green
+Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+Write-Host "  Scheduled task registered and started!" -ForegroundColor Green

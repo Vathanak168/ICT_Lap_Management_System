@@ -54,13 +54,14 @@ CREATE TABLE students (
 
 -- 3. Create attendance table
 CREATE TABLE attendance (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
   class_id TEXT NOT NULL,
   shift TEXT NOT NULL,
   academic_year TEXT NOT NULL,
   branch TEXT NOT NULL DEFAULT 'BELTEI IS 1',
-  records_json JSONB NOT NULL
+  records_json JSONB NOT NULL,
+  CONSTRAINT unique_attendance_per_date UNIQUE (class_id, date, academic_year, branch)
 );
 
 -- 4. Create pc_issues table
@@ -237,20 +238,30 @@ ALTER TABLE mini_apps ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow authenticated users full access to mini_apps" ON mini_apps;
 CREATE POLICY "Allow authenticated users full access to mini_apps" ON mini_apps FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
+-- 11. Create ai_history table
+CREATE TABLE IF NOT EXISTS ai_history (
+  id UUID PRIMARY KEY,
+  title TEXT NOT NULL,
+  messages JSONB NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  branch TEXT NOT NULL DEFAULT 'BELTEI IS 1',
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE
+);
+ALTER TABLE ai_history ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Branch-scoped access to ai_history" ON ai_history
+  FOR ALL TO authenticated
+  USING (branch = (SELECT branch FROM profiles WHERE id = auth.uid()))
+  WITH CHECK (branch = (SELECT branch FROM profiles WHERE id = auth.uid()));
 
- - -   1 1 .   C r e a t e   a i _ h i s t o r y   t a b l e 
- C R E A T E   T A B L E   I F   N O T   E X I S T S   a i _ h i s t o r y   ( 
-     i d   U U I D   P R I M A R Y   K E Y , 
-     t i t l e   T E X T   N O T   N U L L , 
-     m e s s a g e s   J S O N B   N O T   N U L L , 
-     u p d a t e d _ a t   T I M E S T A M P   W I T H   T I M E   Z O N E   D E F A U L T   N O W ( ) , 
-     b r a n c h   T E X T   N O T   N U L L   D E F A U L T   ' B E L T E I   I S   1 ' , 
-     u s e r _ i d   U U I D   R E F E R E N C E S   a u t h . u s e r s ( i d )   O N   D E L E T E   C A S C A D E 
- ) ; 
- A L T E R   T A B L E   a i _ h i s t o r y   E N A B L E   R O W   L E V E L   S E C U R I T Y ; 
- C R E A T E   P O L I C Y   " B r a n c h - s c o p e d   a c c e s s   t o   a i _ h i s t o r y "   O N   a i _ h i s t o r y 
-     F O R   A L L   T O   a u t h e n t i c a t e d 
-     U S I N G   ( b r a n c h   =   ( S E L E C T   b r a n c h   F R O M   p r o f i l e s   W H E R E   i d   =   a u t h . u i d ( ) ) ) 
-     W I T H   C H E C K   ( b r a n c h   =   ( S E L E C T   b r a n c h   F R O M   p r o f i l e s   W H E R E   i d   =   a u t h . u i d ( ) ) ) ; 
-  
- 
+-- 12. Create settings table
+CREATE TABLE IF NOT EXISTS settings (
+  id TEXT PRIMARY KEY,
+  config_json JSONB NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow authenticated users full access to settings" ON settings;
+CREATE POLICY "Allow authenticated users full access to settings" ON settings
+  FOR ALL TO authenticated
+  USING (true)
+  WITH CHECK (true);

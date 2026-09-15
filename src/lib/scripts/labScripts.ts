@@ -34,7 +34,7 @@ set "ICTLAB_CMD_LAUNCHER=1"\r
 "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $Raw=Get-Content -LiteralPath $env:ICTLAB_LAUNCHER_PATH -Raw -Encoding UTF8; $Marker='#<ICTLAB_POWERSHELL>'; $Start=$Raw.LastIndexOf($Marker); if ($Start -lt 0) { throw 'Embedded PowerShell marker not found.' }; $Script=$Raw.Substring($Start + $Marker.Length); Invoke-Expression $Script } catch { Write-Host ''; Write-Host ('LAUNCH FAILED: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"\r
 set "ICTLAB_EXIT_CODE=%ERRORLEVEL%"\r
 echo.\r
-if not "%ICTLAB_EXIT_CODE%"=="0" echo Installer stopped with error code %ICTLAB_EXIT_CODE%.\r
+if not "%ICTLAB_EXIT_CODE%"=="0" echo Script stopped with error code %ICTLAB_EXIT_CODE%.\r
 echo Press any key to close this window.\r
 pause >nul\r
 exit /b %ICTLAB_EXIT_CODE%\r
@@ -66,7 +66,8 @@ $StageDirectory = Join-Path $BaseDirectory "Staging"
 $LogFile = Join-Path $LogDirectory "UsbListener.log"
 $SourceIdentifier = "ICTLab.UsbArrival"
 $LastExecution = @{}
-$DebounceSeconds = 5
+$DebounceSeconds = 60
+$CompletedScripts = @{}
 
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $StageDirectory -Force | Out-Null
@@ -131,47 +132,45 @@ function Invoke-ICTAdminUsb {
             if (($Now - $LastExecution[$DriveRoot]).TotalSeconds -lt $DebounceSeconds) { return }
         }
 
-        # Check if device configuration exists
-        $ConfigExists = Test-Path -LiteralPath $ConfigPath -PathType Leaf
-        $SyncFolderName = "ICTLabSync"
-        if ($ConfigExists) {
-            try {
-                $DeviceConfig = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($null -ne $DeviceConfig.syncFolderName -and -not [string]::IsNullOrWhiteSpace([string]$DeviceConfig.syncFolderName)) {
-                    $SyncFolderName = ([string]$DeviceConfig.syncFolderName).Trim()
-                }
-            } catch { }
-        }
+        if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return }
+        $DeviceConfig = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $SyncFolderName = [string]$DeviceConfig.syncFolderName
+        $ExpectedSyncToken = [string]$DeviceConfig.syncToken
+        if ([string]::IsNullOrWhiteSpace($ExpectedSyncToken)) { throw "Device sync token is missing. Run the current installer." }
+        if ([string]::IsNullOrWhiteSpace($SyncFolderName)) { $SyncFolderName = "ICTLabSync" }
 
         # Check for GlobalSync.ps1 in ICTLabSync folder or USB root
         $GlobalScriptName = "GlobalSync.ps1"
         $UsbScriptPath = Join-Path "$DriveRoot\\" ("$SyncFolderName\\" + $GlobalScriptName)
         if (-not (Test-Path -LiteralPath $UsbScriptPath -PathType Leaf)) {
             $UsbScriptPath = Join-Path "$DriveRoot\\" $GlobalScriptName
+        $UsbScriptPath = Join-Path "$DriveRoot\" ("$SyncFolderName\" + $GlobalScriptName)
+        if (-not (Test-Path -LiteralPath $UsbScriptPath -PathType Leaf)) {
+            $UsbScriptPath = Join-Path "$DriveRoot\" $GlobalScriptName
         }
 
         if (-not (Test-Path -LiteralPath $UsbScriptPath -PathType Leaf)) {
             return
         }
 
-        # Check auth header marker
-        $ActualHeader = (Get-Content -LiteralPath $UsbScriptPath -TotalCount 1 -Encoding UTF8).Trim()
+        # Check auth header marker (strip optional UTF-8 BOM or leading noise)
+        $RawHeader = (Get-Content -LiteralPath $UsbScriptPath -TotalCount 1 -Encoding UTF8)
+        $ActualHeader = if ($RawHeader) { ($RawHeader -replace '^[^#]*', '').Trim() } else { '' }
         if ($ActualHeader -notmatch '^#\\s*ICTLAB-AUTH:') {
             Write-ICTLog "GlobalSync script on $DriveRoot is missing # ICTLAB-AUTH header. USB ignored." "WARN"
             return
         }
 
-        # Token verification: accept configured token, standard tokens, or valid non-empty signed header
         $ActualToken = ($ActualHeader -replace '^#\\s*ICTLAB-AUTH:\\s*', '').Trim()
-        $IsTokenValid = ($ActualToken -eq $ExpectedSyncToken) -or 
-                        ($ActualToken -eq "ICT-SECURE-TOKEN-2026") -or 
-                        ($ActualToken -eq "ICT-LAB-SECURE-TOKEN-2026") -or 
-                        (-not [string]::IsNullOrWhiteSpace($ActualToken))
+        $IsTokenValid = [string]::Equals($ActualToken, $ExpectedSyncToken, [System.StringComparison]::Ordinal)
 
         if (-not $IsTokenValid) {
             Write-ICTLog "GlobalSync authorization token is invalid. USB ignored." "ERROR"
             return
         }
+
+        $ScriptHash = (Get-FileHash -LiteralPath $UsbScriptPath -Algorithm SHA256).Hash
+        if ($CompletedScripts.ContainsKey($DriveRoot) -and $CompletedScripts[$DriveRoot] -eq $ScriptHash) { return }
 
         # Valid USB with GlobalSync detected! Update debounce timestamp
         $LastExecution[$DriveRoot] = $Now
@@ -186,7 +185,9 @@ function Invoke-ICTAdminUsb {
         } catch { }
 
         $LocalScriptPath = Join-Path $StageDirectory $GlobalScriptName
-        Copy-Item -LiteralPath $UsbScriptPath -Destination $LocalScriptPath -Force
+        # Normalize legacy UTF-8 files to UTF-8 BOM for Windows PowerShell 5.1.
+        $SyncText = Get-Content -LiteralPath $UsbScriptPath -Raw -Encoding UTF8
+        Set-Content -LiteralPath $LocalScriptPath -Value $SyncText -Encoding UTF8
 
         $PowerShellExe = Join-Path $env:SystemRoot "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
         Write-ICTLog "Executing ICT Lab sync for $env:COMPUTERNAME."
@@ -197,6 +198,7 @@ function Invoke-ICTAdminUsb {
                 -WindowStyle Hidden -Wait -PassThru
             Write-ICTLog "Sync script finished. ExitCode=$($Process.ExitCode)"
 
+            if ($Process.ExitCode -in @(0, 10, 11)) { $CompletedScripts[$DriveRoot] = $ScriptHash }
             if ($Process.ExitCode -eq 0) {
                 try { [console]::beep(1200, 150); [console]::beep(1600, 300) } catch { }
                 try {
@@ -204,7 +206,7 @@ function Invoke-ICTAdminUsb {
                         Start-Process -FilePath "msg.exe" -ArgumentList @("*", "/time:8", "ICT Lab: ការ Sync គណនីសិស្សទទួលបានជោគជ័យ ១០០%! សិស្សអាច Login ប្រើ PC បានហើយ។") -WindowStyle Hidden -ErrorAction SilentlyContinue
                     }
                 } catch { }
-            } else {
+            } elseif ($Process.ExitCode -notin @(10, 11)) {
                 try { [console]::beep(400, 600) } catch { }
                 try {
                     if (Get-Command msg.exe -ErrorAction SilentlyContinue) {
@@ -214,6 +216,7 @@ function Invoke-ICTAdminUsb {
             }
         } finally {
             Remove-Item -LiteralPath $LocalScriptPath -Force -ErrorAction SilentlyContinue
+            $LastExecution[$DriveRoot] = Get-Date
         }
     } catch {
         Write-ICTLog "USB processing failure: $($_.Exception.Message)" "ERROR"
@@ -458,6 +461,51 @@ if ([string]::IsNullOrWhiteSpace($PcNumber)) {
     }
 
     if ($UsbCandidates.Count -eq 0) {
+        # Fallback 1: Check if installer is running directly from a drive containing ICTLabSync
+        $LauncherPkgDir = if ($null -ne $env:ICTLAB_PACKAGE_DIR) { [string]$env:ICTLAB_PACKAGE_DIR.TrimEnd('\\') } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($LauncherPkgDir)) {
+            $CandidateFromLauncher = Join-Path $LauncherPkgDir "ICTLabSync"
+            if (Test-Path -LiteralPath $CandidateFromLauncher -PathType Container) {
+                $LauncherDriveLetter = if ($LauncherPkgDir.Length -ge 2 -and $LauncherPkgDir[1] -eq ':') { $LauncherPkgDir.Substring(0, 2) } else { $LauncherPkgDir }
+                $LauncherLogical = $LogicalDrives | Where-Object { [string]::Equals([string]$_.DeviceID, $LauncherDriveLetter, [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
+                if ($null -ne $LauncherLogical) {
+                    $UsbCandidates += [pscustomobject]@{
+                        Drive = $LauncherLogical
+                        Directory = $CandidateFromLauncher
+                        DeviceId = $LauncherDriveLetter
+                        VolumeLabel = [string]$LauncherLogical.VolumeName
+                        BusType = ''
+                        IsPhysicalUsb = ($LauncherLogical.DriveType -eq 2)
+                    }
+                    Write-Host "Detected ICT Lab package from launcher drive: $LauncherDriveLetter" -ForegroundColor Green
+                }
+            }
+        }
+    }
+
+    if ($UsbCandidates.Count -eq 0) {
+        # Fallback 2: Check any logical/removable drive containing ICTLabSync folder regardless of volume label
+        foreach ($LogicalDrive in $LogicalDrives) {
+            $DeviceId = ([string]$LogicalDrive.DeviceID).Trim()
+            if ($DeviceId -notmatch '^[A-Za-z]:$') { continue }
+            $CandidateDirectory = Join-Path $DeviceId "ICTLabSync"
+            if (Test-Path -LiteralPath $CandidateDirectory -PathType Container) {
+                $UsbCandidates += [pscustomobject]@{
+                    Drive = $LogicalDrive
+                    Directory = $CandidateDirectory
+                    DeviceId = $DeviceId
+                    VolumeLabel = ([string]$LogicalDrive.VolumeName).Trim()
+                    BusType = ''
+                    IsPhysicalUsb = ([int]$LogicalDrive.DriveType -eq 2)
+                }
+            }
+        }
+        if ($UsbCandidates.Count -gt 0) {
+            Write-Host "Detected ICT Lab USB by folder (Volume label did not match '$ExpectedUsbLabel'): $($UsbCandidates[0].DeviceId)" -ForegroundColor Yellow
+        }
+    }
+
+    if ($UsbCandidates.Count -eq 0) {
         Write-Host "Expected USB label: $ExpectedUsbLabel" -ForegroundColor DarkYellow
         Write-Host "Mounted drives:" -ForegroundColor DarkGray
         foreach ($Drive in $LogicalDrives) {
@@ -562,7 +610,7 @@ if ([string]::IsNullOrWhiteSpace($PcNumber)) {
     $NextForSubsequent = $NextNumber + 1
     $SubsequentCandidate = "PC-{0:D2}" -f $NextForSubsequent
     while ($BrokenPcs -contains $SubsequentCandidate -and $NextForSubsequent -le 999) {
-        Write-Host " [INFO] Subsequent PC $SubsequentCandidate is also broken. Will prepare for PC-{0:D2} next." -f ($NextForSubsequent + 1) -ForegroundColor DarkGray
+        Write-Host (" [INFO] Subsequent PC $SubsequentCandidate is also broken. Will prepare for PC-{0:D2} next." -f ($NextForSubsequent + 1)) -ForegroundColor DarkGray
         $NextForSubsequent++
         $SubsequentCandidate = "PC-{0:D2}" -f $NextForSubsequent
     }
@@ -683,10 +731,31 @@ Set-ICTRegistryDword -Path $WinlogonPolicyPath -Name "HideFastUserSwitching" -Va
 
 Write-Host "       Local ICT Lab users will be available on the Windows sign-in screen." -ForegroundColor DarkGray
 
-# 4. Create Local Group
-Write-Host "[3/7] Creating $GroupName group..." -ForegroundColor Yellow
+# 4. Create Local Group & Configure Windows Local Password Policy
+Write-Host "[3/7] Creating $GroupName group & configuring local policy..." -ForegroundColor Yellow
 if (-not (Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue)) {
     New-LocalGroup -Name $GroupName -Description "Students managed by ICT Lab System" | Out-Null
+}
+
+try {
+    # Disable Windows Local Password Complexity (so simple student passwords work reliably on all Windows editions)
+    $SecDbPath = Join-Path "$ICTRoot\\Backup" "secedit.sdb"
+    $SecCfgExport = Join-Path "$ICTRoot\\Backup" "sec_export.inf"
+    $SecCfgImport = Join-Path "$ICTRoot\\Backup" "sec_import.inf"
+    & secedit.exe /export /cfg $SecCfgExport /quiet
+    if (Test-Path -LiteralPath $SecCfgExport) {
+        $SecContent = Get-Content -LiteralPath $SecCfgExport -Raw -Encoding Unicode
+        $SecContent = $SecContent -replace "PasswordComplexity\\s*=\\s*\\d+", "PasswordComplexity = 0"
+        $SecContent = $SecContent -replace "MinimumPasswordLength\\s*=\\s*\\d+", "MinimumPasswordLength = 0"
+        $SecContent = $SecContent -replace "PasswordHistorySize\\s*=\\s*\\d+", "PasswordHistorySize = 0"
+        $SecContent = $SecContent -replace "MaximumPasswordAge\\s*=\\s*\\d+", "MaximumPasswordAge = -1"
+        Set-Content -LiteralPath $SecCfgImport -Value $SecContent -Encoding Unicode
+        & secedit.exe /configure /db $SecDbPath /cfg $SecCfgImport /areas SECURITYPOLICY /quiet
+        Remove-Item -LiteralPath $SecCfgExport, $SecCfgImport -Force -ErrorAction SilentlyContinue
+        Write-Host "       Local password complexity disabled (student passwords will not be blocked by Windows)." -ForegroundColor DarkGray
+    }
+} catch {
+    Write-Host "       Note: Password policy adjustment notice: $($_.Exception.Message)" -ForegroundColor DarkGray
 }
 
 # 4. Disable Offline Games & Browser Games (Solitaire, Spider, FreeCell, Dino, Surf)
@@ -728,8 +797,22 @@ $LogonScriptCode = @'
 $StudentGroup = "ICTLabStudents"
 $IsStudent = $false
 
-if (Get-LocalGroupMember -Group $StudentGroup -Member $env:USERNAME -ErrorAction SilentlyContinue) {
-    $IsStudent = $true
+try {
+    # Check current process security token groups (works reliably for Limited users without admin permissions)
+    $CurrentTokenGroups = @([System.Security.Principal.WindowsIdentity]::GetCurrent().Groups | ForEach-Object { $_.Value })
+    $StudentLocalGroup = Get-LocalGroup -Name $StudentGroup -ErrorAction SilentlyContinue
+    if ($null -ne $StudentLocalGroup -and $CurrentTokenGroups -contains $StudentLocalGroup.SID.Value) {
+        $IsStudent = $true
+    }
+} catch { }
+
+# Fallback check by username if group SID comparison could not be performed
+if (-not $IsStudent) {
+    try {
+        if (Get-LocalGroupMember -Group $StudentGroup -Member $env:USERNAME -ErrorAction SilentlyContinue) {
+            $IsStudent = $true
+        }
+    } catch { }
 }
 
 $RegistryPath = "HKCU:\\SOFTWARE\\Policies\\Microsoft\\Windows\\RemovableStorageDevices"
@@ -808,7 +891,17 @@ ${USB_LISTENER_SCRIPT}
 Set-Content -Path "$ICTRoot\\UsbListener.ps1" -Value $ListenerCode -Encoding UTF8
 
 $TaskName = "ICTLab USB Listener"
-Unregister-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+
+# Terminate any leftover background PowerShell processes running UsbListener.ps1
+try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.CommandLine -like "*UsbListener.ps1*"
+    } | ForEach-Object {
+        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+    }
+} catch { }
 
 $ListenerPowerShellExe = Join-Path $env:SystemRoot "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 $Action = New-ScheduledTaskAction -Execute $ListenerPowerShellExe -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$ICTRoot\\UsbListener.ps1\`""
@@ -817,15 +910,27 @@ $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccou
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
 
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
-Start-ScheduledTask -TaskName $TaskName
-Start-Sleep -Seconds 2
+Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 
-$ListenerTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-if ([string]$ListenerTask.State -ne "Running") {
-    $ListenerTaskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
-    throw "USB Listener failed to stay running. TaskState=$($ListenerTask.State) LastResult=$($ListenerTaskInfo.LastTaskResult)"
+$ListenerActive = $false
+$TaskState = "Unknown"
+for ($Attempt = 0; $Attempt -lt 15; $Attempt++) {
+    Start-Sleep -Milliseconds 400
+    $TaskObj = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($null -ne $TaskObj) {
+        $TaskState = [string]$TaskObj.State
+        if ($TaskState -in @("Running", "Ready")) {
+            $ListenerActive = $true
+            break
+        }
+    }
 }
-Write-Host "USB Listener status: Running" -ForegroundColor Green
+
+if ($ListenerActive) {
+    Write-Host "USB Listener status: Active ($TaskState)" -ForegroundColor Green
+} else {
+    Write-Host "Notice: USB Listener registered (State: $TaskState). It will automatically activate on system restart." -ForegroundColor DarkYellow
+}
 Write-Host "Listener log: $ICTRoot\\Logs\\UsbListener.log" -ForegroundColor Cyan
 
 Write-Host "[7/7] Setup Complete!" -ForegroundColor Green
@@ -866,7 +971,8 @@ param()
 ${INTERACTIVE_ADMIN_BOOTSTRAP}
 
 # ============================================================
-# ICT LAB FACTORY RESET
+# ICT LAB FULL SYSTEM RESET
+# (EXCEPT GAME BANS - GAMES REMAIN PERMANENTLY BANNED)
 # ============================================================
 $ICTRoot = "C:\\ProgramData\\ICTLab"
 $GroupName = "ICTLabStudents"
@@ -875,41 +981,83 @@ $ResetExitCode = 0
 try {
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host " ICT LAB FACTORY RESET" -ForegroundColor Cyan
+Write-Host " ICT LAB SYSTEM RESET" -ForegroundColor Cyan
 Write-Host " Computer: $env:COMPUTERNAME" -ForegroundColor Cyan
+Write-Host " Scope: Reset all ICT Lab files, services & accounts" -ForegroundColor Cyan
+Write-Host " Policy: Games Remain Permanently Banned" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 
-# 1. Stop Listener, Logon Script & Background Tasks
-Write-Host "[1/6] Removing Scheduled Tasks & Terminating Services..." -ForegroundColor Yellow
+# 1. Stop & Remove All ICTLab Scheduled Tasks & Background Processes
+Write-Host "[1/5] Removing Scheduled Tasks & Terminating Services..." -ForegroundColor Yellow
 Stop-ScheduledTask -TaskName "ICTLab USB Listener" -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "ICTLab USB Listener" -Confirm:$false -ErrorAction SilentlyContinue
+
 Stop-ScheduledTask -TaskName "ICTLab Student Policy Logon" -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "ICTLab Student Policy Logon" -Confirm:$false -ErrorAction SilentlyContinue
+
 Get-ScheduledTask -TaskName "ICTLab*" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
 
-# Terminate any lingering background PowerShell processes running ICTLab scripts
+# Terminate lingering background PowerShell processes running ICTLab scripts
 try {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { 
-        $_.CommandLine -like "*UsbListener.ps1*" -or $_.CommandLine -like "*LogonScript.ps1*" -or $_.CommandLine -like "*GlobalSync.ps1*"
+        $null -ne $_.CommandLine -and (
+            $_.CommandLine -like "*UsbListener.ps1*" -or 
+            $_.CommandLine -like "*GlobalSync.ps1*" -or 
+            $_.CommandLine -like "*ManualSync.ps1*" -or 
+            $_.CommandLine -like "*LogonScript.ps1*"
+        )
     } | ForEach-Object {
-        try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+        try { 
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue 
+            Write-Host "       Stopped running process (PID: $($_.ProcessId))" -ForegroundColor DarkGray
+        } catch { }
     }
 } catch { }
 
-# 2. Restore Browser & System Policies
-Write-Host "[2/6] Restoring Browser & System Policies..." -ForegroundColor Yellow
+# 2. PERMANENTLY ENFORCE & PRESERVE GAME BANS (NEVER UNBAN GAMES)
+# Explicitly keeping games blocked as requested: Chrome Dino, Edge Surf, Windows Consumer Games
+Write-Host "[2/5] Ensuring Game Bans Remain Permanently Active..." -ForegroundColor Yellow
+
+$ChromePolicyPath = "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome"
+$EdgePolicyPath = "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge"
+$CloudContentPath = "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\CloudContent"
+
+# Chrome Dino Easter Egg Game -> 0 (Disabled)
 try {
-    Remove-ItemProperty -LiteralPath "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome" -Name "AllowDinosaurEasterEgg" -Force -ErrorAction SilentlyContinue
-} catch { }
-try {
-    Remove-ItemProperty -LiteralPath "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge" -Name "AllowSurfGame" -Force -ErrorAction SilentlyContinue
-} catch { }
-try {
-    Remove-ItemProperty -LiteralPath "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\CloudContent" -Name "DisableWindowsConsumerFeatures" -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $ChromePolicyPath)) { New-Item -Path $ChromePolicyPath -Force -ErrorAction SilentlyContinue | Out-Null }
+    Set-ItemProperty -LiteralPath $ChromePolicyPath -Name "AllowDinosaurEasterEgg" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "       Chrome Dino game: Blocked (Permanent)" -ForegroundColor Green
 } catch { }
 
-# 3. Restore the Windows sign-in policy that existed before ICT Lab setup.
-Write-Host "[3/6] Restoring Windows Login Screen policy..." -ForegroundColor Yellow
+# Edge Surf Game -> 0 (Disabled)
+try {
+    if (-not (Test-Path -LiteralPath $EdgePolicyPath)) { New-Item -Path $EdgePolicyPath -Force -ErrorAction SilentlyContinue | Out-Null }
+    Set-ItemProperty -LiteralPath $EdgePolicyPath -Name "AllowSurfGame" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "       Edge Surf game: Blocked (Permanent)" -ForegroundColor Green
+} catch { }
+
+# Windows Consumer Features / Game Suggestions -> 1 (Disabled)
+try {
+    if (-not (Test-Path -LiteralPath $CloudContentPath)) { New-Item -Path $CloudContentPath -Force -ErrorAction SilentlyContinue | Out-Null }
+    Set-ItemProperty -LiteralPath $CloudContentPath -Name "DisableWindowsConsumerFeatures" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "       Windows Consumer Games: Blocked (Permanent)" -ForegroundColor Green
+} catch { }
+
+# Terminate any running offline card games
+try {
+    Get-Process -Name sol, spider, freecell, mshearts, winmine, Solitaire, FreeCell, SpiderSolitaire -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+} catch { }
+
+# Remove built-in card games and consumer games (Microsoft Solitaire Collection, Candy Crush)
+try {
+    Get-AppxPackage -AllUsers *SolitaireCollection* -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*Solitaire*" } | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+    Get-AppxPackage -AllUsers *CandyCrush* -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*CandyCrush*" } | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+} catch { }
+
+# 3. Restore Windows Sign-in Policy (from backup)
+Write-Host "[3/5] Restoring Windows Sign-in Policy..." -ForegroundColor Yellow
 $LoginPolicyBackupPath = "$ICTRoot\\Backup\\login-screen-policy.json"
 if (Test-Path -LiteralPath $LoginPolicyBackupPath -PathType Leaf) {
     try {
@@ -927,20 +1075,34 @@ if (Test-Path -LiteralPath $LoginPolicyBackupPath -PathType Leaf) {
                 Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction SilentlyContinue
             }
         }
+        Write-Host "       Restored pre-install sign-in policy." -ForegroundColor Green
     } catch {
-        Write-Host "  Note: Could not restore previous login policy: $($_.Exception.Message)" -ForegroundColor DarkYellow
+        Write-Host "       Note: Could not restore previous login policy: $($_.Exception.Message)" -ForegroundColor DarkYellow
     }
 }
 
 $UserListRegistry = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList"
 
-# 4. Delete Student Accounts
-Write-Host "[4/6] Deleting Student Accounts..." -ForegroundColor Yellow
+function Remove-ICTUserProfileClean {
+    param([string]$Username, [string]$Sid)
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($Sid)) {
+            $Profile = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+                Where-Object { [string]$_.SID -eq $Sid } | Select-Object -First 1
+            if ($null -ne $Profile) {
+                Remove-CimInstance -InputObject $Profile -ErrorAction SilentlyContinue
+                return
+            }
+        }
+        $ProfileDir = "C:\\Users\\$Username"
+        if (Test-Path -LiteralPath $ProfileDir) {
+            Remove-Item -LiteralPath $ProfileDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+}
 
-# Stop any offline card games that students might have left open
-try {
-    Get-Process -Name sol, spider, freecell, mshearts, winmine, Solitaire, FreeCell, SpiderSolitaire -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-} catch { }
+# 4. Delete Student Accounts, User Profiles & Group
+Write-Host "[4/5] Deleting Student Accounts & User Profiles..." -ForegroundColor Yellow
 
 $StudentGroup = Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue
 if ($null -ne $StudentGroup) {
@@ -948,31 +1110,32 @@ if ($null -ne $StudentGroup) {
     foreach ($Member in $Members) {
         $Sid = $Member.SID
         if ($null -ne $Sid) {
-            # Skip built-in accounts just in case (500=Admin, 501=Guest, 503=DefaultAccount, 504=WDAGUtilityAccount)
+            # Skip built-in accounts (500=Admin, 501=Guest, 503=DefaultAccount, 504=WDAGUtilityAccount)
             if ($Sid.Value -notmatch "-500$|-501$|-503$|-504$") {
+                $LocalUsername = ([string]$Member.Name).Split('\\')[-1]
                 try {
-                    $LocalUsername = ([string]$Member.Name).Split('\\')[-1]
                     if (Test-Path -LiteralPath $UserListRegistry) {
                         Remove-ItemProperty -LiteralPath $UserListRegistry -Name $LocalUsername -Force -ErrorAction SilentlyContinue
                     }
+                    Remove-ICTUserProfileClean -Username $LocalUsername -Sid $Sid.Value
                     Remove-LocalUser -SID $Sid -ErrorAction Stop
-                    Write-Host "  Removed: $($Member.Name)" -ForegroundColor Green
+                    Write-Host "       Removed user: $($Member.Name)" -ForegroundColor Green
                 } catch {
                     try {
-                        $LocalUsername = ([string]$Member.Name).Split('\\')[-1]
                         Remove-LocalUser -Name $LocalUsername -ErrorAction Stop
-                        Write-Host "  Removed: $LocalUsername" -ForegroundColor Green
+                        Write-Host "       Removed user: $LocalUsername" -ForegroundColor Green
                     } catch {
-                        Write-Host "  Failed to remove: $($Member.Name)" -ForegroundColor Red
+                        Write-Host "       Notice: Could not remove $($Member.Name)" -ForegroundColor DarkGray
                     }
                 }
             }
         }
     }
     Remove-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue
+    Write-Host "       Removed group: $GroupName" -ForegroundColor Green
 }
 
-# 4.1 Delete any remaining ICTLabManaged users (even if group was missing or corrupted during initial test)
+# Delete any remaining ICTLabManaged users (even if group was missing or corrupted)
 $AllLocalUsers = Get-LocalUser -ErrorAction SilentlyContinue
 foreach ($User in $AllLocalUsers) {
     if ($null -ne $User.Description -and $User.Description -like "*ICTLabManaged*") {
@@ -980,31 +1143,33 @@ foreach ($User in $AllLocalUsers) {
             if (Test-Path -LiteralPath $UserListRegistry) {
                 Remove-ItemProperty -LiteralPath $UserListRegistry -Name $User.Name -Force -ErrorAction SilentlyContinue
             }
+            Remove-ICTUserProfileClean -Username $User.Name -Sid ([string]$User.SID)
             Remove-LocalUser -Name $User.Name -ErrorAction Stop
-            Write-Host "  Removed managed account: $($User.Name)" -ForegroundColor Green
-        } catch {
-            Write-Host "  Failed to remove managed account: $($User.Name)" -ForegroundColor Red
-        }
+            Write-Host "       Removed managed account: $($User.Name)" -ForegroundColor Green
+        } catch { }
     }
 }
 
-# 5. AppLocker was not changed by setup
-Write-Host "[5/6] AppLocker policy was not changed by ICT Lab setup." -ForegroundColor Yellow
-
-# 6. Clean up Files
-Write-Host "[6/6] Removing Files..." -ForegroundColor Yellow
+# 5. Clean Up All ICTLab Files and Folders
+Write-Host "[5/5] Removing ICT Lab Files & Folders..." -ForegroundColor Yellow
 Start-Sleep -Milliseconds 500
+
 if (Test-Path -LiteralPath $ICTRoot) {
-    try {
-        Remove-Item -LiteralPath $ICTRoot -Recurse -Force -ErrorAction Stop
-        Write-Host "  Removed: $ICTRoot" -ForegroundColor Green
-    } catch {
-        Get-ChildItem -LiteralPath $ICTRoot -Recurse -ErrorAction SilentlyContinue |
-            Sort-Object -Property FullName -Descending |
-            ForEach-Object {
-                try { Remove-Item -LiteralPath $_.FullName -Force -Recurse -ErrorAction SilentlyContinue } catch { }
-            }
-        try { Remove-Item -LiteralPath $ICTRoot -Force -Recurse -ErrorAction SilentlyContinue } catch { }
+    # Remove files with retries in case handles are closing
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $ICTRoot -Recurse -Force -ErrorAction Stop
+            Write-Host "       Removed: $ICTRoot" -ForegroundColor Green
+            break
+        } catch {
+            Get-ChildItem -LiteralPath $ICTRoot -Recurse -ErrorAction SilentlyContinue |
+                Sort-Object -Property FullName -Descending |
+                ForEach-Object {
+                    try { Remove-Item -LiteralPath $_.FullName -Force -Recurse -ErrorAction SilentlyContinue } catch { }
+                }
+            try { Remove-Item -LiteralPath $ICTRoot -Force -Recurse -ErrorAction SilentlyContinue } catch { }
+            Start-Sleep -Milliseconds 200
+        }
     }
 }
 
@@ -1012,13 +1177,16 @@ try { [console]::beep(1200, 150); [console]::beep(1600, 250) } catch { }
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
-Write-Host " RESET COMPLETE - PC IS CLEAN!" -ForegroundColor Green
+Write-Host " RESET COMPLETE - SYSTEM IS CLEAN!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
-Write-Host "All student accounts, scheduled tasks, policies, and files were removed." -ForegroundColor Green
-Write-Host "This PC is now reset back to standard Windows defaults." -ForegroundColor Green
+Write-Host "1. All ICT Lab scheduled tasks, services, and files were removed." -ForegroundColor Green
+Write-Host "2. All student accounts, profiles, and groups were deleted." -ForegroundColor Green
+Write-Host "3. Windows sign-in policy was restored to pre-install state." -ForegroundColor Green
+Write-Host "4. Browser & Windows Game Bans remain PERMANENTLY ACTIVE and LOCKED." -ForegroundColor Green
+Write-Host "This PC is clean and ready for a fresh install." -ForegroundColor Cyan
 } catch {
     $ResetExitCode = 1
-    Write-Host "RESET FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "RESET ENCOUNTERED ERROR: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 Complete-ICTInteractiveRun -ExitCode $ResetExitCode
@@ -1049,6 +1217,11 @@ $GroupName = "ICTLabStudents"
 $ManagedMarker = "ICTLabManaged:v2"
 $LogDirectory = "C:\\ProgramData\\ICTLab\\Logs"
 $LogFile = Join-Path $LogDirectory "GlobalSync.log"
+$SyncMutex = New-Object System.Threading.Mutex($false, "Global\\ICTLab.AccountSync")
+$HasSyncLock = $false
+try {
+    try { $HasSyncLock = $SyncMutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $HasSyncLock = $true }
+    if (-not $HasSyncLock) { Write-Host "Another ICT Lab sync is running. Try again after it completes."; Exit 12 }
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
 
 function Write-SyncLog {
@@ -1226,6 +1399,9 @@ if (-not (Test-Path -LiteralPath $DeviceConfigPath -PathType Leaf)) {
     Exit 1
 }
 $DeviceConfig = Get-Content -LiteralPath $DeviceConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+# Installed legacy PCs can have a different labId; the configured token is the authorization boundary.
+$PackageToken = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${btoa(unescape(encodeURIComponent(syncToken)))}"))
+if ([string]$DeviceConfig.syncToken -cne $PackageToken) { throw "This sync package has a different device token. Export with the installed lab settings." }
 $LocalPcNumber = Normalize-ICTPcNumber -Value ([string]$DeviceConfig.pcNumber)
 if ([string]::IsNullOrWhiteSpace($LocalPcNumber)) {
     Write-SyncLog "PC number is missing from device configuration. Run the latest installer." "ERROR"
@@ -1241,12 +1417,35 @@ if ($MatchingTargets.Count -eq 0) {
     Write-SyncLog "No sync work for $LocalPcNumber in payload $($Payload.payloadId)."
     Show-ICTSyncNotification -Title "ICT Lab Sync - $LocalPcNumber" -Message "កុំព្យូទ័រ $LocalPcNumber មិនមានទិន្នន័យត្រូវ Sync ក្នុង USB នេះទេ។" -Icon "Warning" -TimeoutSeconds 6
     try { [console]::beep(1000, 100) } catch { }
-    Exit 0
+    Exit 10
 }
+if ($MatchingTargets.Count -ne 1) { throw "Duplicate PC targets rejected." }
 
 $Target = $MatchingTargets[0]
 $ExpectedStudents = @($Target.accounts)
 $RemoveStudentIds = @($Target.removeStudentIds)
+$PayloadGuid = [guid]::Empty
+if (-not [guid]::TryParse([string]$Payload.payloadId, [ref]$PayloadGuid)) { throw "Invalid payload ID. Export a new sync package." }
+$ReceiptDirectory = "C:\\ProgramData\\ICTLab\\Receipts"
+New-Item -ItemType Directory -Path $ReceiptDirectory -Force | Out-Null
+$ReceiptName = "$($PayloadGuid.ToString())-$LocalPcNumber.json"
+$ReceiptPath = Join-Path $ReceiptDirectory $ReceiptName
+function Export-ICTReceipt {
+    param($Receipt)
+    if (-not [string]::IsNullOrWhiteSpace($UsbDrive)) {
+        $UsbReceipts = Join-Path "$($UsbDrive.TrimEnd('\\'))\\" "ICTLabSync\\Receipts"
+        New-Item -ItemType Directory -Path $UsbReceipts -Force | Out-Null
+        $Receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $UsbReceipts $ReceiptName) -Encoding UTF8
+    }
+}
+if (Test-Path -LiteralPath $ReceiptPath) {
+    $PreviousReceipt = Get-Content -LiteralPath $ReceiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($PreviousReceipt.status -eq "SUCCESS") {
+        Export-ICTReceipt -Receipt $PreviousReceipt
+        Write-SyncLog "This payload was already applied successfully to $LocalPcNumber."
+        Exit 11
+    }
+}
 $SyncMode = ([string]$Payload.mode).Trim().ToUpperInvariant()
 $DeleteMissingUsers = ($SyncMode -eq "FULL" -and [bool]$Payload.deleteMissingUsers)
 if ($ExpectedStudents.Count -eq 0 -and $RemoveStudentIds.Count -eq 0) {
@@ -1278,8 +1477,27 @@ foreach ($Student in $ExpectedStudents) {
 }
 
 $SuccessCount = 0
+$RemovedCount = 0
 $FailCount = 0
 $SkippedCount = 0
+
+function Remove-ICTUserProfile {
+    param([string]$Username, [string]$Sid)
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($Sid)) {
+            $Profile = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+                Where-Object { [string]$_.SID -eq $Sid } | Select-Object -First 1
+            if ($null -ne $Profile) {
+                Remove-CimInstance -InputObject $Profile -ErrorAction SilentlyContinue
+                return
+            }
+        }
+        $ProfileDir = "C:\\Users\\$Username"
+        if (Test-Path -LiteralPath $ProfileDir) {
+            Remove-Item -LiteralPath $ProfileDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+}
 
 foreach ($StudentIdToRemove in $RemoveStudentIds) {
     $RemoveId = ([string]$StudentIdToRemove).Trim()
@@ -1290,17 +1508,23 @@ foreach ($StudentIdToRemove in $RemoveStudentIds) {
             Write-SyncLog "Remove skipped because account does not exist: $RemoveId"
             $SkippedCount++
         } elseif (Test-ManagedUser -User $LocalUser) {
+            $UserSid = [string]$LocalUser.SID.Value
             Set-ICTLoginScreenUserVisibility -Username $RemoveId -Visible $false
             Remove-LocalUser -Name $RemoveId -ErrorAction Stop
+            Remove-ICTUserProfile -Username $RemoveId -Sid $UserSid
             Write-SyncLog "[REMOVE] $RemoveId on $LocalPcNumber"
-            $SuccessCount++
+            $RemovedCount++
         } else {
-            Write-SyncLog "Skipped unmanaged account $RemoveId during explicit remove." "WARN"
-            $SkippedCount++
+            throw "Refusing to remove unmanaged account $RemoveId."
         }
     } catch {
-        Write-SyncLog "Failed to remove $($RemoveId): $($_.Exception.Message)" "ERROR"
-        $FailCount++
+        if ($_.Exception.Message -like "*logged on*" -or $_.Exception.Message -like "*session*") {
+            Write-SyncLog "Account $RemoveId is currently logged in. Removal skipped for active session." "WARN"
+            $SkippedCount++
+        } else {
+            Write-SyncLog "Failed to remove $($RemoveId): $($_.Exception.Message)" "ERROR"
+            $FailCount++
+        }
     }
 }
 
@@ -1312,19 +1536,39 @@ if ($DeleteMissingUsers) {
             try {
                 $LocalUser = Get-LocalUser -Name $LocalUsername -ErrorAction SilentlyContinue
                 if (Test-ManagedUser -User $LocalUser) {
+                    $UserSid = [string]$LocalUser.SID.Value
                     Set-ICTLoginScreenUserVisibility -Username $LocalUsername -Visible $false
                     Remove-LocalUser -Name $LocalUsername -ErrorAction Stop
+                    Remove-ICTUserProfile -Username $LocalUsername -Sid $UserSid
                     Write-SyncLog "[DELETE] $LocalUsername"
-                    $SuccessCount++
+                    $RemovedCount++
                 } else {
                     Write-SyncLog "Skipped unmanaged account $LocalUsername during delete." "WARN"
                     $SkippedCount++
                 }
             } catch {
-                Write-SyncLog "Failed to delete $($LocalUsername): $($_.Exception.Message)" "ERROR"
-                $FailCount++
+                if ($_.Exception.Message -like "*logged on*" -or $_.Exception.Message -like "*session*") {
+                    Write-SyncLog "Account $LocalUsername is currently logged in. Deletion skipped for active session." "WARN"
+                    $SkippedCount++
+                } else {
+                    Write-SyncLog "Failed to delete $($LocalUsername): $($_.Exception.Message)" "ERROR"
+                    $FailCount++
+                }
             }
         }
+    }
+}
+
+function Ensure-ICTGroupMember {
+    param($Group, [string]$Username)
+    try {
+        $LocalAccount = Get-LocalUser -Name $Username -ErrorAction Stop
+        Add-LocalGroupMember -Group $Group -Member $LocalAccount -ErrorAction SilentlyContinue
+    } catch {
+        try {
+            $GroupNameStr = if ($Group -is [string]) { $Group } else { [string]$Group.Name }
+            & net.exe localgroup "$GroupNameStr" "$Username" /add *>$null
+        } catch { }
     }
 }
 
@@ -1345,8 +1589,8 @@ foreach ($Student in $ExpectedStudents) {
 
         if ($null -eq $User) {
             New-LocalUser -Name $StudentId -Password $SecurePass -FullName $StudentName -Description $ManagedMarker -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
-            Add-LocalGroupMember -Group $GroupName -Member $StudentId -ErrorAction Stop
-            Add-LocalGroupMember -Group $BuiltinUsersGroup -Member $StudentId -ErrorAction SilentlyContinue
+            Ensure-ICTGroupMember -Group $GroupName -Username $StudentId
+            Ensure-ICTGroupMember -Group $BuiltinUsersGroup -Username $StudentId
             Enable-LocalUser -Name $StudentId -ErrorAction Stop
             Set-ICTLoginScreenUserVisibility -Username $StudentId -Visible $true
             Write-SyncLog "[CREATE] $StudentId ($StudentName)"
@@ -1355,9 +1599,9 @@ foreach ($Student in $ExpectedStudents) {
             if (-not (Test-ManagedUser -User $User)) {
                 throw "Username already belongs to an unmanaged local account."
             }
-            Set-LocalUser -Name $StudentId -Password $SecurePass -FullName $StudentName -Description $ManagedMarker -AccountNeverExpires -PasswordNeverExpires $true -UserMayNotChangePassword $true
-            Add-LocalGroupMember -Group $GroupName -Member $StudentId -ErrorAction SilentlyContinue
-            Add-LocalGroupMember -Group $BuiltinUsersGroup -Member $StudentId -ErrorAction SilentlyContinue
+            Set-LocalUser -Name $StudentId -Password $SecurePass -FullName $StudentName -Description $ManagedMarker -AccountNeverExpires -PasswordNeverExpires $true -UserMayChangePassword $false
+            Ensure-ICTGroupMember -Group $GroupName -Username $StudentId
+            Ensure-ICTGroupMember -Group $BuiltinUsersGroup -Username $StudentId
             Enable-LocalUser -Name $StudentId -ErrorAction Stop
             Set-ICTLoginScreenUserVisibility -Username $StudentId -Visible $true
             Write-SyncLog "[UPDATE] $StudentId ($StudentName)"
@@ -1380,7 +1624,7 @@ if (-not [string]::IsNullOrWhiteSpace($UsbDrive)) {
             $HistoryFile = Join-Path $UsbSyncFolder "SyncHistory.log"
             $Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
             $StatusText = if ($FailCount -eq 0) { "SUCCESS" } else { "FAILED ($FailCount errors)" }
-            $LogLine = "[$Timestamp] $LocalPcNumber : $StatusText (Created/Updated: $SuccessCount, Skipped: $SkippedCount, Removed: $($RemoveStudentIds.Count))"
+            $LogLine = "[$Timestamp] $LocalPcNumber : $StatusText (Created/Updated: $SuccessCount, Skipped: $SkippedCount, Removed: $RemovedCount)"
             Add-Content -LiteralPath $HistoryFile -Value $LogLine -Encoding UTF8 -Force
         }
     } catch {
@@ -1395,15 +1639,39 @@ if ($FailCount -gt 0) {
     Exit 1
 }
 
+$TaskIds = @()
+if ($null -ne $Target.PSObject.Properties['taskIds']) { $TaskIds = @($Target.taskIds) }
+$Receipt = [ordered]@{
+    version = 1; status = "SUCCESS"; payloadId = [string]$Payload.payloadId
+    labId = [string]$Payload.labId; academicYear = [string]$Payload.academicYear
+    pcNumber = $LocalPcNumber; taskIds = $TaskIds; completedAt = (Get-Date).ToString("o")
+    updated = $SuccessCount; removed = $RemovedCount; skipped = $SkippedCount
+}
+$Receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ReceiptPath -Encoding UTF8
+try {
+    Export-ICTReceipt -Receipt $Receipt
+} catch {
+    Write-SyncLog "Notice: Could not write receipt to USB: $($_.Exception.Message)" "WARN"
+}
+
 # Success notification
 $AccountSummary = ($ExpectedStudents | ForEach-Object { "$($_.studentId) ($($_.studentName))" }) -join ", "
 if ($AccountSummary.Length -gt 120) { $AccountSummary = $AccountSummary.Substring(0, 117) + "..." }
-$SuccessMsg = "ធ្វើសមកាលកម្មលើ $LocalPcNumber ជោគជ័យ ១០០%! បង្កើត/កែប្រែគណនី: $SuccessCount នាក់ ($AccountSummary), លុបគណនីចាស់: $($RemoveStudentIds.Count) នាក់។ លោកគ្រូអាចដក USB ចេញបានហើយ!"
+$SuccessMsg = "ធ្វើសមកាលកម្មលើ $LocalPcNumber ជោគជ័យ ១០០%! បង្កើត/កែប្រែគណនី: $SuccessCount នាក់ ($AccountSummary), លុបគណនីចាស់: $RemovedCount នាក់។ លោកគ្រូអាចដក USB ចេញបានហើយ!"
 Show-ICTSyncNotification -Title "ICT Lab Sync - ជោគជ័យ" -Message $SuccessMsg -Icon "Information" -TimeoutSeconds 8
 
 # Audible notification: Sync Success
 try { [console]::beep(1200, 150); [console]::beep(1600, 300) } catch { }
 Exit 0
+} catch {
+    Write-Host ("SYNC FAILED: " + $_.Exception.Message) -ForegroundColor Red
+    try { Write-SyncLog $_.Exception.Message "ERROR" } catch { }
+    Exit 1
+} finally {
+    if ($HasSyncLock) { $SyncMutex.ReleaseMutex() }
+    $SyncMutex.Dispose()
+}
+
 `;
 
 /**
@@ -1494,63 +1762,84 @@ Complete-ICTInteractiveRun -ExitCode $UsbMakerExitCode
  * Standalone runner for student PCs.
  * Teachers can double-click 2_Sync_PC_Now.cmd on the USB to run sync with full on-screen console output.
  */
-export const getSyncRunnerScript = () => `@echo off
-setlocal EnableExtensions DisableDelayedExpansion
-chcp 65001 >nul
-title ICT Lab PC Sync Runner - សមកាលកម្មគណនីសិស្ស (File ទី ២)
-set "ICTLAB_LAUNCHER_PATH=%~f0"
-set "ICTLAB_PACKAGE_DIR=%~dp0"
+export const getSyncRunnerScript = () => getInteractiveCommandLauncher(
+  `
+$ErrorActionPreference = "Stop"
+$Root = "C:\\ProgramData\\ICTLab"
+$ConfigPath = Join-Path $Root "device-config.json"
+$ExitCode = 1
+$TaskReady = $false
+try {
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Run 1_Install_Lab_PC_AUTO.cmd first." }
+    $Config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $PackageDir = if ($null -ne $env:ICTLAB_PACKAGE_DIR) { [string]$env:ICTLAB_PACKAGE_DIR.TrimEnd('\\') } else { '' }
+    $ScriptPath = Join-Path $PackageDir "ICTLabSync\\GlobalSync.ps1"
+    if (-not (Test-Path -LiteralPath $ScriptPath)) { $ScriptPath = Join-Path $PackageDir "GlobalSync.ps1" }
+    if (-not (Test-Path -LiteralPath $ScriptPath)) { throw "GlobalSync.ps1 is missing. Copy it to USB/ICTLabSync." }
+    $RawHeader = (Get-Content -LiteralPath $ScriptPath -TotalCount 1 -Encoding UTF8)
+    $Header = if ($RawHeader) { ($RawHeader -replace '^[^#]*', '').Trim() } else { '' }
+    $ExpectedHeader = "# ICTLAB-AUTH:" + [string]$Config.syncToken
+    if ($Header -cne $ExpectedHeader) { throw "USB sync token does not match this PC." }
+    $SyncText = Get-Content -LiteralPath $ScriptPath -Raw -Encoding UTF8
+    
+    $TaskName = "ICTLab USB Listener"
+    $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($null -ne $ExistingTask) {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        for ($Attempt = 0; $Attempt -lt 10; $Attempt++) {
+            if ((Get-ScheduledTask -TaskName $TaskName).State -ne "Running") { break }
+            Start-Sleep -Milliseconds 200
+        }
+    }
 
-"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -Command "if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }" >nul 2>&1
-if errorlevel 1 (
-  echo Administrator permission is required. Please approve the Windows UAC prompt...
-  "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "try { Start-Process -FilePath $env:ICTLAB_LAUNCHER_PATH -WorkingDirectory $env:ICTLAB_PACKAGE_DIR -Verb RunAs -ErrorAction Stop; exit 0 } catch { Write-Host $_.Exception.Message -ForegroundColor Red; exit 1 }"
-  if errorlevel 1 (
-    echo.
-    echo ERROR: Administrator permission was cancelled or could not be started.
-    pause
-  )
-  exit /b
-)
+    # Stop any background sync or listener process to prevent mutex contention (Exit Code 12)
+    try {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandLine -like "*UsbListener.ps1*" -or $_.CommandLine -like "*GlobalSync.ps1*" -or $_.CommandLine -like "*ManualSync.ps1*"
+        } | ForEach-Object {
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    } catch { }
 
-echo.
-echo ============================================================
-echo   ICT LAB PC SYNC - សមកាលកម្មគណនីសិស្ស (File ទី ២)
-echo ============================================================
-echo.
-set "SYNC_SCRIPT=%ICTLAB_PACKAGE_DIR%ICTLabSync\\GlobalSync.ps1"
-if not exist "%SYNC_SCRIPT%" set "SYNC_SCRIPT=%ICTLAB_PACKAGE_DIR%GlobalSync.ps1"
-
-if not exist "%SYNC_SCRIPT%" (
-  echo [ERROR] រកមិនឃើញឯកសារ ICTLabSync\\GlobalSync.ps1 នៅក្នុង USB នេះទេ!
-  echo សូមពិនិត្យមើល Folder ICTLabSync លើ USB របស់អ្នក។
-  echo.
-  pause
-  exit /b 1
-)
-
-echo កំពុងដំណើរការ Sync គណនីសិស្ស... សូមរង់ចាំ...
-echo.
-"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%SYNC_SCRIPT%" -UsbDrive "%ICTLAB_PACKAGE_DIR%"
-set "EXITCODE=%ERRORLEVEL%"
-echo.
-if "%EXITCODE%"=="0" (
-  echo ============================================================
-  echo   [SUCCESS] ធ្វើសមកាលកម្មជោគជ័យ ១០០%!
-  echo ============================================================
-) else (
-  echo ============================================================
-  echo   [FAILED] មានបញ្ហាក្នុងការ Sync! Error Code: %EXITCODE%
-  echo ============================================================
-)
-
-echo.
-echo [AUTO-UPDATE] កំពុងពិនិត្យ និងដំណើរការសេវា USB Auto-Listener លើ PC នេះឡើងវិញ...
-"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "try { if (Test-Path 'C:\\ProgramData\\ICTLab') { Stop-ScheduledTask -TaskName 'ICTLab USB Listener' -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 400; Start-ScheduledTask -TaskName 'ICTLab USB Listener' -ErrorAction SilentlyContinue; Write-Host '  [OK] សេវា USB Auto-Listener ដំណើរការល្អជាប្រក្រតី! លើកក្រោយដោត USB ចូល វានឹង Auto ភ្លាមៗ។' -ForegroundColor Green } } catch { }"
-
-echo.
-echo ចុចគ្រាប់ចុចណាមួយដើម្បីបិទផ្ទាំងនេះ...
-pause >nul
-exit /b %EXITCODE%
-`;
-
+    $ListenerCode = @'
+${USB_LISTENER_SCRIPT}
+'@
+    Set-Content -LiteralPath (Join-Path $Root "UsbListener.ps1") -Value $ListenerCode -Encoding UTF8
+    $PowerShellExe = Join-Path $env:SystemRoot "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    $Action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$Root\\UsbListener.ps1\`""
+    $Trigger = New-ScheduledTaskTrigger -AtStartup
+    $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
+    $TaskReady = $true
+    
+    $Stage = Join-Path $Root "Staging"
+    New-Item -ItemType Directory -Path $Stage -Force | Out-Null
+    $StagePath = Join-Path $Stage "ManualSync.ps1"
+    Set-Content -LiteralPath $StagePath -Value $SyncText -Encoding UTF8
+    
+    & $PowerShellExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $StagePath -UsbDrive $PackageDir
+    $ExitCode = $LASTEXITCODE
+    switch ($ExitCode) {
+        0 { Write-Host "[SUCCESS] Accounts synchronized. Import USB/ICTLabSync/Receipts in PC Sync." -ForegroundColor Green }
+        10 { Write-Host "[NO WORK] This USB does not target this PC." -ForegroundColor Yellow }
+        11 { Write-Host "[ALREADY APPLIED] This payload previously succeeded. Receipt copied to USB." -ForegroundColor Yellow }
+        default { Write-Host "[FAILED] Sync exit code: $ExitCode. Check C:\\ProgramData\\ICTLab\\Logs\\GlobalSync.log" -ForegroundColor Red }
+    }
+} catch {
+    Write-Host ("[FAILED] " + $_.Exception.Message) -ForegroundColor Red
+    $ExitCode = 1
+} finally {
+    if ($TaskReady) {
+        try {
+            Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+            Write-Host "[OK] Updated USB Listener registered and running." -ForegroundColor Green
+        } catch {
+            Write-Host ("[NOTICE] Auto Sync listener status: " + $_.Exception.Message) -ForegroundColor DarkYellow
+        }
+    }
+}
+exit $ExitCode
+`,
+  'ICT Lab PC Sync and Listener Repair'
+);

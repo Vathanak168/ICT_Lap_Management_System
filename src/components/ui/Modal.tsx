@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -29,7 +30,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
 
   if (!isOpen) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div 
         ref={modalRef}
@@ -41,7 +42,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
           <h2 className="text-lg font-semibold text-primary">{title}</h2>
           <button 
             onClick={onClose}
-            className="p-1 rounded-md text-secondary-text hover:bg-background-selected hover:text-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+            className="p-1 rounded-md text-secondary-text hover:bg-background-selected hover:text-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer"
             aria-label="Close"
           >
             <X size={20} />
@@ -51,6 +52,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

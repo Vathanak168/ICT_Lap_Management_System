@@ -1,9 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Monitor, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle, Grid, RotateCw } from 'lucide-react';
-import { initDB } from '../store/db';
-import type { Student, ClassRecord, PCIssue, PcSyncTask, SeatingPlan as SeatingPlanType } from '../store/db';
+import { Monitor, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle, Grid, RotateCw, RotateCcw, HelpCircle } from 'lucide-react';
+import { initDB, isPcIssueActive, queuePcSyncTask } from '../store/db';
+import type { Student, ClassRecord, PCIssue, SeatingPlan as SeatingPlanType } from '../store/db';
 
 type ExtendedSeatingPlan = SeatingPlanType & { deskRotations?: Record<string, number> };
+
+interface ConfirmDialogState {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  variant?: 'danger' | 'primary' | 'warning';
+  onConfirm: () => void;
+}
 import { supabase } from '../lib/supabase';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
@@ -12,7 +22,6 @@ import { Input } from '../components/ui/Input';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { useAuth } from '../contexts/AuthContext';
-import { findSeatConflict } from '../utils/studentPlacement';
 import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 interface Desk {
@@ -22,30 +31,9 @@ interface Desk {
   status: 'Good' | 'Issue';
 }
 
-const queuePcSyncTask = async (
-  db: any,
-  student: Student,
-  pcNumber: string,
-  action: PcSyncTask['action'],
-  academicYear: string,
-  password?: string | null,
-) => {
-  const task: PcSyncTask = {
-    id: crypto.randomUUID(),
-    pcNumber,
-    studentId: student.studentId,
-    studentName: student.name,
-    action,
-    password: password || null,
-    status: 'PENDING',
-    createdAt: new Date().toISOString(),
-    academicYear,
-  };
-  try {
-    await db.put('pcSyncTasks', task);
-  } catch (error) {
-    console.warn('Failed to queue PC Sync task:', error);
-  }
+const isValidUUID = (str?: string): boolean => {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
 };
 
 
@@ -97,6 +85,38 @@ const SeatingPlan = () => {
   const [builderRows, setBuilderRows] = useState<number>(6);
   const [builderCols, setBuilderCols] = useState<number>(9);
 
+  // For Universal Confirmation Dialog (Provides explicit OK and Cancel buttons)
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+
+  const openConfirm = ({
+    title,
+    message,
+    confirmText = 'យល់ព្រម',
+    cancelText = 'បោះបង់',
+    variant = 'primary',
+    onConfirm,
+  }: {
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    variant?: 'danger' | 'primary' | 'warning';
+    onConfirm: () => void;
+  }) => {
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      confirmText,
+      cancelText,
+      variant,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        onConfirm();
+      },
+    });
+  };
+
 
   const { language } = useLanguage();
   const { activeYear } = useAcademicYear();
@@ -145,39 +165,29 @@ const SeatingPlan = () => {
     try {
       const db = await initDB();
 
-      const [studentRows, issueRows, planRows] = await Promise.all([
-        db.getAllFromIndex('students', 'class', targetClass, targetYear),
+      const [allYearStudents, issueRows, planRows] = await Promise.all([
+        db.getAll('students', targetYear),
         db.getAll('pcIssues', targetYear),
         db.getAllFromIndex('seatingPlans', 'class_id', targetClass, targetYear)
       ]);
 
       if (requestId !== loadDataRequestRef.current) return;
 
-      const activeStudents = studentRows.filter(student => student.status === 'Active');
-      activeStudents.sort(compareStudentsByKhmerName);
-      setStudents(activeStudents);
-      setPcIssues(issueRows);
-      
-      const issuePcNumbers = new Set(
-        issueRows
-          .filter(issue => issue.status !== 'Good')
-          .map(issue => issue.pcNumber)
+      // Incoming shift-switching students attending this class
+      const incomingShiftStudents = allYearStudents.filter(
+        s => s.alternateClassId === targetClass && s.isShiftSwitching && s.class !== targetClass && s.status !== 'Inactive'
       );
-
-      // Support detecting multiple students on the same PC
-      const studentByPc = new Map<string, string[]>();
-      activeStudents.forEach(student => {
-        if (student.pcNumber) {
-          if (!studentByPc.has(student.pcNumber)) {
-            studentByPc.set(student.pcNumber, []);
-          }
-          studentByPc.get(student.pcNumber)!.push(student.id);
-        }
-      });
-
+      // Active class students (excluding those who switched out to another class)
+      const activeClassStudents = allYearStudents.filter(
+        s => s.class === targetClass && s.status !== 'Inactive' && !(s.isShiftSwitching && s.alternateClassId && s.alternateClassId !== targetClass)
+      );
+      const activeStudents = [...activeClassStudents, ...incomingShiftStudents];
       const shift = targetShift;
       
-      const plan = planRows.find(p => p.shift === shift && p.academicYear === targetYear);
+      let plan = planRows.find(p => p.shift === shift && p.academicYear === targetYear);
+      if (!plan && planRows.length > 0) {
+        plan = planRows.find(p => p.academicYear === targetYear);
+      }
       
       let deskRotations = {};
       if (plan) {
@@ -196,12 +206,12 @@ const SeatingPlan = () => {
       if (plan) {
         setCurrentLayout({ ...plan, deskRotations });
         if (plan.gridLayout) {
-          setBuilderRows(plan.gridLayout.length);
+          setBuilderRows(plan.gridLayout.length || 6);
           setBuilderCols(plan.gridLayout[0]?.length || 9);
         }
       } else {
         const layoutToUse: ExtendedSeatingPlan = { 
-          id: `layout_${targetClass}_${shift}_${Date.now()}`,
+          id: crypto.randomUUID(),
           classId: targetClass,
           shift: shift,
           academicYear: targetYear,
@@ -226,6 +236,58 @@ const SeatingPlan = () => {
           });
         });
       }
+
+      // Auto-heal any students assigned to desks that no longer exist in this room layout
+      const gridPcSet = new Set(pcNumbersList);
+      const orphanedStudents = activeStudents.filter(s => s.pcNumber && !gridPcSet.has(s.pcNumber));
+      if (orphanedStudents.length > 0) {
+        db.putMany('students', orphanedStudents.map(s => ({ ...s, pcNumber: null }))).catch(err => {
+          console.warn('Failed to auto-heal orphaned students:', err);
+        });
+        activeStudents.forEach(s => {
+          if (s.pcNumber && !gridPcSet.has(s.pcNumber)) {
+            s.pcNumber = undefined;
+          }
+        });
+      }
+
+      const issuePcNumbers = new Set(
+        issueRows
+          .filter(issue => isPcIssueActive(issue.status))
+          .map(issue => issue.pcNumber)
+      );
+
+      // Auto-heal / unassign any active student assigned to a broken PC in the ICT lab
+      const brokenAssignedStudents = activeStudents.filter(s => s.pcNumber && issuePcNumbers.has(s.pcNumber));
+      if (brokenAssignedStudents.length > 0) {
+        const studentUpdates: any[] = [];
+        const syncPromises: Promise<any>[] = [];
+        for (const s of brokenAssignedStudents) {
+          syncPromises.push(queuePcSyncTask(db, s, s.pcNumber!, 'REMOVE', targetYear));
+          studentUpdates.push({ ...s, pcNumber: null });
+        }
+        db.putMany('students', studentUpdates).catch(err => console.warn('Failed to unassign students on broken PCs:', err));
+        Promise.all(syncPromises).catch(err => console.warn('Failed sync task:', err));
+        activeStudents.forEach(s => {
+          if (s.pcNumber && issuePcNumbers.has(s.pcNumber)) {
+            s.pcNumber = undefined;
+          }
+        });
+      }
+
+      setStudents(activeStudents);
+      setPcIssues(issueRows);
+
+      // Support detecting multiple students on the same PC
+      const studentByPc = new Map<string, string[]>();
+      activeStudents.forEach(student => {
+        if (student.pcNumber) {
+          if (!studentByPc.has(student.pcNumber)) {
+            studentByPc.set(student.pcNumber, []);
+          }
+          studentByPc.get(student.pcNumber)!.push(student.id);
+        }
+      });
 
       const initialDesks = pcNumbersList.map((pcNumber, index) => {
         return {
@@ -274,66 +336,92 @@ const SeatingPlan = () => {
 
   const handleUpdateGridSize = (newRows: number, newCols: number) => {
     if (!currentLayout) return;
+    const clampedRows = Math.min(20, Math.max(1, newRows));
+    const clampedCols = Math.min(20, Math.max(1, newCols));
     let grid = [...currentLayout.gridLayout];
     
-    if (newRows > grid.length) {
-      for (let i = grid.length; i < newRows; i++) {
-        grid.push(Array(newCols).fill(null));
+    if (clampedRows > grid.length) {
+      for (let i = grid.length; i < clampedRows; i++) {
+        grid.push(Array(clampedCols).fill(null));
       }
-    } else if (newRows < grid.length) {
-      grid = grid.slice(0, newRows);
+    } else if (clampedRows < grid.length) {
+      grid = grid.slice(0, clampedRows);
     }
     
     grid = grid.map(row => {
       let newRow = [...row];
-      if (newCols > newRow.length) {
-        newRow = newRow.concat(Array(newCols - newRow.length).fill(null));
-      } else if (newCols < newRow.length) {
-        newRow = newRow.slice(0, newCols);
+      if (clampedCols > newRow.length) {
+        newRow = newRow.concat(Array(clampedCols - newRow.length).fill(null));
+      } else if (clampedCols < newRow.length) {
+        newRow = newRow.slice(0, clampedCols);
       }
       return newRow;
     });
 
     setCurrentLayout({ ...currentLayout, gridLayout: grid });
-    setBuilderRows(newRows);
-    setBuilderCols(newCols);
+    setBuilderRows(clampedRows);
+    setBuilderCols(clampedCols);
   };
 
   const handleCellClickInEditMode = (rIdx: number, cIdx: number) => {
     if (!currentLayout) return;
-    const newGrid = [...currentLayout.gridLayout];
-    const newRow = [...newGrid[rIdx]];
+    const newGrid = currentLayout.gridLayout.map(r => [...r]);
+    const newRow = newGrid[rIdx];
     
     if (newRow[cIdx] === null) {
-       const existingMax = Math.max(0, ...newGrid.flat().map(c => {
-         if (c && c.startsWith('PC-')) return parseInt(c.replace('PC-', '')) || 0;
-         return 0;
-       }));
-       const newPcNumber = `PC-${String(existingMax + 1).padStart(2, '0')}`;
-       newRow[cIdx] = newPcNumber;
-       
-       // Add to desks if not exists
-       if (!desks.find(d => d.pcNumber === newPcNumber)) {
-         setDesks(prev => [...prev, {
-           id: `desk-new-${Date.now()}`,
-           pcNumber: newPcNumber,
-           status: 'Good',
-           studentIds: []
-         }]);
-       }
-    } else if (newRow[cIdx] === 'Teacher PC') {
-       newRow[cIdx] = null;
-    } else {
-       if (newRow[cIdx]?.startsWith('PC-') && !newGrid.flat().includes('Teacher PC')) {
+       // If Teacher PC is not anywhere in the room, place Teacher PC first
+       if (!newGrid.flat().includes('Teacher PC')) {
          newRow[cIdx] = 'Teacher PC';
        } else {
-         newRow[cIdx] = null;
+         const existingMax = Math.max(0, ...newGrid.flat().map(c => {
+           if (c && c.startsWith('PC-')) return parseInt(c.replace('PC-', '')) || 0;
+           return 0;
+         }));
+         const newPcNumber = `PC-${String(existingMax + 1).padStart(2, '0')}`;
+         newRow[cIdx] = newPcNumber;
+         
+         // Add to desks if not exists
+         if (!desks.find(d => d.pcNumber === newPcNumber)) {
+           setDesks(prev => [...prev, {
+             id: `desk-new-${Date.now()}`,
+             pcNumber: newPcNumber,
+             status: 'Good',
+             studentIds: []
+           }]);
+         }
        }
+    } else {
+       newRow[cIdx] = null;
     }
     newGrid[rIdx] = newRow;
     setCurrentLayout({ ...currentLayout, gridLayout: newGrid });
   };
 
+  const handleRemoveDeskFromGrid = (pcNumber: string) => {
+    if (!currentLayout) return;
+    const desk = desks.find(d => d.pcNumber === pcNumber);
+
+    const doRemove = () => {
+      const newGrid = currentLayout.gridLayout.map(row =>
+        row.map(cell => (cell === pcNumber ? null : cell))
+      );
+      setCurrentLayout({ ...currentLayout, gridLayout: newGrid });
+      setDesks(prev => prev.filter(d => d.pcNumber !== pcNumber));
+    };
+
+    if (desk && desk.studentIds.length > 0) {
+      openConfirm({
+        title: 'បញ្ជាក់ការលុបតុចេញពីប្លង់',
+        message: `តុ ${pcNumber} មានសិស្សកំពុងអង្គុយ។ តើអ្នកពិតជាចង់លុបតុនេះចេញពីប្លង់មែនទេ?`,
+        confirmText: 'លុបតុ',
+        cancelText: 'បោះបង់',
+        variant: 'danger',
+        onConfirm: doRemove,
+      });
+    } else {
+      doRemove();
+    }
+  };
 
   const handleSaveLayout = async () => {
     if (saveInProgressRef.current) return;
@@ -355,8 +443,8 @@ const SeatingPlan = () => {
       let isMigratingUUID = false;
       let oldLayoutId: string | null = null;
       
-      // Upgrade old string-based layout IDs to UUID
-      if (layoutId.startsWith('layout_')) {
+      // Ensure layout ID is a valid UUID
+      if (!isValidUUID(layoutId)) {
         isMigratingUUID = true;
         oldLayoutId = layoutId;
         layoutId = crypto.randomUUID();
@@ -390,6 +478,37 @@ const SeatingPlan = () => {
           console.warn('Could not delete old layout format during migration:', e);
         }
       }
+
+      // Step 3: Prevent ghost students by unassigning students whose desks were removed from grid
+      const gridPcSet = new Set<string>();
+      currentLayout.gridLayout.forEach(row => {
+        row.forEach(cell => {
+          if (cell && cell !== 'Teacher PC') {
+            gridPcSet.add(cell);
+          }
+        });
+      });
+
+      const orphanedStudents = students.filter(s => s.pcNumber && !gridPcSet.has(s.pcNumber));
+      if (orphanedStudents.length > 0) {
+        const studentUpdates: any[] = [];
+        const syncPromises: Promise<any>[] = [];
+
+        for (const s of orphanedStudents) {
+          syncPromises.push(queuePcSyncTask(db, s, s.pcNumber!, 'REMOVE', activeYear));
+          studentUpdates.push({ ...s, pcNumber: null });
+        }
+
+        await Promise.all([
+          db.putMany('students', studentUpdates),
+          ...syncPromises
+        ]);
+
+        setStudents(prev => prev.map(s => {
+          const isOrphaned = orphanedStudents.some(o => o.id === s.id);
+          return isOrphaned ? { ...s, pcNumber: undefined } : s;
+        }));
+      }
       
       // Immediately update local UI reference
       setCurrentLayout(prev => prev ? { ...prev, id: layoutId } : null);
@@ -403,6 +522,105 @@ const SeatingPlan = () => {
       saveInProgressRef.current = false;
       setIsSaving(false);
     }
+  };
+
+  const handleResetLayoutToDefault = () => {
+    if (saveInProgressRef.current || isSaving) return;
+    if (!activeYear || !selectedClass) {
+      alert('សូមជ្រើសរើសថ្នាក់ជាមុនសិន');
+      return;
+    }
+
+    openConfirm({
+      title: 'បញ្ជាក់ការ Reset ប្លង់តុ',
+      message: 'តើអ្នកពិតជាចង់ Reset ប្លង់តុ និងរៀបចំឈ្មោះ PC តាមលំនាំដើមវិញមែនទេ? (ឈ្មោះ PC នឹងត្រឡប់ទៅជា PC-01 ដល់ PC-35 តាមលំដាប់លំដោយស្តង់ដារ)',
+      confirmText: 'Reset ប្លង់តុ',
+      cancelText: 'បោះបង់',
+      variant: 'danger',
+      onConfirm: async () => {
+        saveInProgressRef.current = true;
+        setIsSaving(true);
+
+        try {
+          const defaultGrid = generateDefaultGrid();
+          const currentClassObj = classes.find(c => c.id === selectedClass);
+          const shift = currentClassObj?.shift || 'Morning';
+
+          const db = await initDB();
+          let layoutId = currentLayout?.id || crypto.randomUUID();
+          if (!isValidUUID(layoutId)) {
+            layoutId = crypto.randomUUID();
+          }
+
+          const resetPlan: SeatingPlanType = {
+            id: layoutId,
+            classId: selectedClass,
+            shift,
+            academicYear: activeYear,
+            gridLayout: defaultGrid,
+            createdAt: new Date().toISOString(),
+          };
+
+          await db.put('seatingPlans', resetPlan);
+
+          try {
+            await db.delete('settings', `rotations_${layoutId}`);
+          } catch (err) {
+            // ignore
+          }
+
+          // Detect any students assigned to desks not in default grid
+          const gridPcSet = new Set<string>();
+          defaultGrid.forEach(row => {
+            row.forEach(cell => {
+              if (cell && cell !== 'Teacher PC') {
+                gridPcSet.add(cell);
+              }
+            });
+          });
+
+          const orphanedStudents = students.filter(s => s.pcNumber && !gridPcSet.has(s.pcNumber));
+          if (orphanedStudents.length > 0) {
+            const studentUpdates: any[] = [];
+            const syncPromises: Promise<any>[] = [];
+
+            for (const s of orphanedStudents) {
+              syncPromises.push(queuePcSyncTask(db, s, s.pcNumber!, 'REMOVE', activeYear));
+              studentUpdates.push({ ...s, pcNumber: null });
+            }
+
+            await Promise.all([
+              db.putMany('students', studentUpdates),
+              ...syncPromises
+            ]);
+
+            setStudents(prev => prev.map(s => {
+              const isOrphaned = orphanedStudents.some(o => o.id === s.id);
+              return isOrphaned ? { ...s, pcNumber: undefined } : s;
+            }));
+          }
+
+          setBuilderRows(6);
+          setBuilderCols(9);
+          setCurrentLayout({
+            ...resetPlan,
+            deskRotations: {},
+          });
+
+          await loadData(activeYear, selectedClass, shift, true);
+          setFeedbackMessage({
+            type: 'success',
+            text: 'បាន Reset ប្លង់តុ និងរៀបចំឈ្មោះ PC តាមលំនាំដើមជោគជ័យ!',
+          });
+        } catch (e) {
+          console.error('Failed to reset layout:', e);
+          alert('បរាជ័យក្នុងការ Reset ប្លង់តុ');
+        } finally {
+          saveInProgressRef.current = false;
+          setIsSaving(false);
+        }
+      },
+    });
   };
 
   useEffect(() => {
@@ -419,6 +637,22 @@ const SeatingPlan = () => {
       if (loadDataRequestRef.current === requestId) {
         loadDataRequestRef.current++;
       }
+    };
+  }, [selectedClass, activeYear, classes]);
+
+  // Real-time synchronization across pages and tabs when PC issues or assignments change
+  useEffect(() => {
+    const handleAppDataChanged = () => {
+      if (!activeYear || !selectedClass) return;
+      const currentClassObj = classes.find(c => c.id === selectedClass);
+      if (currentClassObj) {
+        void loadData(activeYear, selectedClass, currentClassObj.shift, true);
+      }
+    };
+
+    window.addEventListener('appDataChanged', handleAppDataChanged);
+    return () => {
+      window.removeEventListener('appDataChanged', handleAppDataChanged);
     };
   }, [selectedClass, activeYear, classes]);
 
@@ -678,16 +912,28 @@ const SeatingPlan = () => {
         const syncPromises: Promise<any>[] = [];
 
         if (sourcePc) {
+          let sourcePwd = sourceStudent.password;
+          if (!sourcePwd || !/^\d{3}$/.test(sourcePwd)) {
+            const existingPasswords = await fetchExistingPasswords(currentClass, currentYear);
+            sourcePwd = generateUniquePassword(existingPasswords);
+          }
+
           syncPromises.push(queuePcSyncTask(db, sourceStudent, sourcePc, 'REMOVE', currentYear));
-          syncPromises.push(queuePcSyncTask(db, sourceStudent, targetDesk.pcNumber, 'ADD', currentYear));
-          studentsToUpdate.push({ ...sourceStudent, pcNumber: targetDesk.pcNumber });
+          syncPromises.push(queuePcSyncTask(db, sourceStudent, targetDesk.pcNumber, 'ADD', currentYear, sourcePwd));
+          studentsToUpdate.push({ ...sourceStudent, pcNumber: targetDesk.pcNumber, password: sourcePwd });
 
           if (targetStudentId) {
             const targetStudent = students.find(s => s.id === targetStudentId);
             if (targetStudent) {
+              let targetPwd = targetStudent.password;
+              if (!targetPwd || !/^\d{3}$/.test(targetPwd)) {
+                const existingPasswords = await fetchExistingPasswords(currentClass, currentYear);
+                existingPasswords.add(sourcePwd);
+                targetPwd = generateUniquePassword(existingPasswords);
+              }
               syncPromises.push(queuePcSyncTask(db, targetStudent, targetDesk.pcNumber, 'REMOVE', currentYear));
-              syncPromises.push(queuePcSyncTask(db, targetStudent, sourcePc, 'ADD', currentYear));
-              studentsToUpdate.push({ ...targetStudent, pcNumber: sourcePc });
+              syncPromises.push(queuePcSyncTask(db, targetStudent, sourcePc, 'ADD', currentYear, targetPwd));
+              studentsToUpdate.push({ ...targetStudent, pcNumber: sourcePc, password: targetPwd });
             }
           }
         } else {
@@ -704,7 +950,7 @@ const SeatingPlan = () => {
             const targetStudent = students.find(s => s.id === targetStudentId);
             if (targetStudent) {
               syncPromises.push(queuePcSyncTask(db, targetStudent, targetDesk.pcNumber, 'REMOVE', currentYear));
-              studentsToUpdate.push({ ...targetStudent, pcNumber: undefined });
+              studentsToUpdate.push({ ...targetStudent, pcNumber: null as any });
             }
           }
         }
@@ -713,6 +959,11 @@ const SeatingPlan = () => {
           db.putMany('students', studentsToUpdate),
           ...syncPromises
         ]);
+
+        setStudents(prev => prev.map(s => {
+          const updated = studentsToUpdate.find(u => u.id === s.id);
+          return updated ? { ...s, ...updated } : s;
+        }));
       } catch (error) {
         console.error('Failed to persist drag drop changes:', error);
         const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
@@ -745,7 +996,7 @@ const SeatingPlan = () => {
     const sourcePc = student.pcNumber;
 
     // 1. INSTANT OPTIMISTIC UPDATE
-    setStudents(prev => prev.map(s => s.id === studentId ? { ...s, pcNumber: undefined, password: undefined } : s));
+    setStudents(prev => prev.map(s => s.id === studentId ? { ...s, pcNumber: undefined } : s));
     setDesks(prev => prev.map(d => d.pcNumber === sourcePc ? { ...d, studentIds: [] } : d));
     setFeedbackMessage({
       type: 'info',
@@ -763,7 +1014,7 @@ const SeatingPlan = () => {
         const db = await initDB();
         await Promise.all([
           queuePcSyncTask(db, student, sourcePc, 'REMOVE', activeYear),
-          db.update('students', student.id, { pcNumber: null, password: null })
+          db.update('students', student.id, { pcNumber: null })
         ]);
       } catch (err: any) {
         console.error('Failed to unassign student:', err);
@@ -866,62 +1117,98 @@ const SeatingPlan = () => {
       alert('Password ត្រូវតែជាលេខ ៣ ខ្ទង់គត់ (ឧ. 123 ឬ 888)!');
       return;
     }
-    const currentYear = activeYear;
-    const currentClass = selectedClass;
-    try {
-      setIsSaving(true);
-      const db = await initDB();
-      await db.update('students', studentId, { password: cleanPwd });
-      setStudents(prev => prev.map(s => s.id === studentId ? { ...s, password: cleanPwd } : s));
-      const student = getStudentForDesk(studentId);
-      if (student && student.pcNumber) {
-        await queuePcSyncTask(db, student, student.pcNumber, 'UPDATE_PASSWORD', currentYear, cleanPwd);
+
+    const applyPassword = async () => {
+      const currentYear = activeYear;
+      const currentClass = selectedClass;
+      try {
+        setIsSaving(true);
+        const db = await initDB();
+        await db.update('students', studentId, { password: cleanPwd });
+        setStudents(prev => prev.map(s => s.id === studentId ? { ...s, password: cleanPwd } : s));
+        const student = getStudentForDesk(studentId);
+        if (student && student.pcNumber) {
+          await queuePcSyncTask(db, student, student.pcNumber, 'UPDATE_PASSWORD', currentYear, cleanPwd);
+        }
+        const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+        await loadData(currentYear, currentClass, shift, true);
+        setFeedbackMessage({
+          type: 'success',
+          text: `បានកំណត់ Password "${cleanPwd}" ជោគជ័យ!`,
+        });
+      } catch (error: any) {
+        console.error(error);
+        alert('មានបញ្ហាក្នុងការកំណត់ Password: ' + error.message);
+      } finally {
+        setIsSaving(false);
       }
-      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
-      await loadData(currentYear, currentClass, shift, true);
-    } catch (error: any) {
-      console.error(error);
-      alert('មានបញ្ហាក្នុងការកំណត់ Password: ' + error.message);
-    } finally {
-      setIsSaving(false);
+    };
+
+    const duplicateStudent = students.find(s => s.id !== studentId && s.password === cleanPwd);
+    if (duplicateStudent) {
+      openConfirm({
+        title: 'លេខសម្ងាត់ជាន់គ្នា',
+        message: `លេខសម្ងាត់ "${cleanPwd}" ត្រូវបានប្រើប្រាស់ដោយសិស្ស ${duplicateStudent.name} រួចហើយ។ តើអ្នកពិតជាចង់កំណត់លេខជាន់គ្នានេះមែនទេ?`,
+        confirmText: 'កំណត់ជាន់គ្នា',
+        cancelText: 'បោះបង់',
+        variant: 'warning',
+        onConfirm: applyPassword,
+      });
+      return;
     }
+
+    await applyPassword();
   };
 
-  const generatePasswordsForClass = async () => {
+  const generatePasswordsForClass = () => {
     if (!selectedClass || students.length === 0 || !activeYear) return;
     
-    if (!window.confirm('តើអ្នកពិតជាចង់បង្កើត Password ថ្មីសម្រាប់សិស្សទាំងអស់ក្នុងថ្នាក់នេះមែនទេ? (Password ចាស់នឹងត្រូវបាត់បង់)')) return;
+    openConfirm({
+      title: 'បង្កើត Password រួមសម្រាប់ថ្នាក់',
+      message: 'តើអ្នកពិតជាចង់បង្កើត Password ថ្មីសម្រាប់សិស្សទាំងអស់ក្នុងថ្នាក់នេះមែនទេ? (Password ចាស់នឹងត្រូវបាត់បង់)',
+      confirmText: 'បង្កើតថ្មី',
+      cancelText: 'បោះបង់',
+      variant: 'primary',
+      onConfirm: async () => {
+        setIsSaving(true);
+        const currentYear = activeYear;
+        const currentClass = selectedClass;
 
-    setIsSaving(true);
-    const currentYear = activeYear;
-    const currentClass = selectedClass;
+        try {
+          const usedPasswords = new Set<string>();
+          const db = await initDB();
+          const studentsToUpdate = [];
+          const syncPromises: Promise<any>[] = [];
 
-    try {
-      const usedPasswords = new Set<string>();
-      const db = await initDB();
-      const studentsToUpdate = [];
-
-      for (let i = 0; i < students.length; i++) {
-        const newPassword = generateUniquePassword(usedPasswords);
-        usedPasswords.add(newPassword);
-        const updatedStudent = { ...students[i], password: newPassword };
-        studentsToUpdate.push(updatedStudent);
-        
-        if (students[i].pcNumber) {
-          await queuePcSyncTask(db, students[i], students[i].pcNumber!, 'UPDATE_PASSWORD', currentYear, newPassword);
+          for (let i = 0; i < students.length; i++) {
+            const newPassword = generateUniquePassword(usedPasswords);
+            usedPasswords.add(newPassword);
+            const updatedStudent = { ...students[i], password: newPassword };
+            studentsToUpdate.push(updatedStudent);
+            
+            if (students[i].pcNumber) {
+              syncPromises.push(queuePcSyncTask(db, students[i], students[i].pcNumber!, 'UPDATE_PASSWORD', currentYear, newPassword));
+            }
+          }
+          
+          await Promise.all([
+            db.putMany('students', studentsToUpdate),
+            ...syncPromises
+          ]);
+          setStudents(studentsToUpdate);
+          setFeedbackMessage({
+            type: 'success',
+            text: 'បង្កើត Password រួមបានជោគជ័យ!',
+          });
+          const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+          await loadData(currentYear, currentClass, shift, true);
+        } catch (error: any) {
+          alert('មានបញ្ហាក្នុងការបង្កើត Password: ' + error.message);
+        } finally {
+          setIsSaving(false);
         }
-      }
-      
-      await db.putMany('students', studentsToUpdate);
-      setStudents(studentsToUpdate);
-      alert('បង្កើត Password រួមបានជោគជ័យ!');
-      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
-      await loadData(currentYear, currentClass, shift, true);
-    } catch (error: any) {
-      alert('មានបញ្ហាក្នុងការបង្កើត Password: ' + error.message);
-    } finally {
-      setIsSaving(false);
-    }
+      },
+    });
   };
 
   const getStudentForDesk = (studentId?: string) => {
@@ -930,6 +1217,10 @@ const SeatingPlan = () => {
 
   const handleAssignStudent = async (studentId: string) => {
     if (!selectedDesk || !activeYear || !selectedClass) return;
+    if (selectedDesk.status === 'Issue' || selectedDesk.pcNumber === 'Teacher PC') {
+      alert(`មិនអាចកំណត់តុ ${selectedDesk.pcNumber} បានទេ ព្រោះកុំព្យូទ័រនេះខូច/មិនអាចប្រើប្រាស់បាន!`);
+      return;
+    }
     const currentYear = activeYear;
     const currentClass = selectedClass;
 
@@ -937,26 +1228,40 @@ const SeatingPlan = () => {
     try {
       const db = await initDB();
       const student = getStudentForDesk(studentId);
-      const latestClassStudents = await db.getAllFromIndex('students', 'class', currentClass, currentYear);
-      const conflict = findSeatConflict(
-        latestClassStudents,
-        currentClass,
-        selectedDesk.pcNumber,
-        studentId,
+      
+      // Check seat conflicts against all students attending this class (including shift switching)
+      const allStudents = await db.getAll('students', currentYear);
+      const attendingStudents = allStudents.filter(s =>
+        s.status !== 'Inactive' && (
+          (s.class === currentClass && !(s.isShiftSwitching && s.alternateClassId && s.alternateClassId !== currentClass)) ||
+          (s.alternateClassId === currentClass && s.isShiftSwitching && s.class !== currentClass)
+        )
       );
+      const conflict = attendingStudents.find(
+        s => s.id !== studentId && s.pcNumber === selectedDesk.pcNumber
+      );
+
       if (conflict) {
         alert(`មិនអាចកំណត់តុ ${selectedDesk.pcNumber} បានទេ ព្រោះ ${conflict.name} អង្គុយរួចហើយ។ ប្លង់នឹង Refresh ឥឡូវនេះ។`);
         const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
         await loadData(currentYear, currentClass, shift, true);
         return;
       }
+
       if (student) {
         if (student.pcNumber && student.pcNumber !== selectedDesk.pcNumber) {
           await queuePcSyncTask(db, student, student.pcNumber, 'REMOVE', currentYear);
         }
-        await queuePcSyncTask(db, student, selectedDesk.pcNumber, 'ADD', currentYear);
+        let pwd = student.password;
+        if (!pwd || !/^\d{3}$/.test(pwd)) {
+          const existingPasswords = await fetchExistingPasswords(currentClass, currentYear);
+          pwd = generateUniquePassword(existingPasswords);
+        }
+        await queuePcSyncTask(db, student, selectedDesk.pcNumber, 'ADD', currentYear, pwd);
+        await db.update('students', studentId, { pcNumber: selectedDesk.pcNumber, password: pwd });
+      } else {
+        await db.update('students', studentId, { pcNumber: selectedDesk.pcNumber });
       }
-      await db.update('students', studentId, { pcNumber: selectedDesk.pcNumber });
       
       const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
       await loadData(currentYear, currentClass, shift, true);
@@ -974,7 +1279,10 @@ const SeatingPlan = () => {
     const currentClass = selectedClass;
 
     const targetDesk = desks.find(d => d.pcNumber === toPc);
-    if (!targetDesk) return;
+    if (!targetDesk || targetDesk.status === 'Issue' || targetDesk.pcNumber === 'Teacher PC') {
+      alert(`មិនអាចប្តូរទៅតុ ${toPc} បានទេ ព្រោះកុំព្យូទ័រនេះខូច/មិនអាចប្រើប្រាស់បាន!`);
+      return;
+    }
 
     const sourceStudent = students.find(s => s.id === studentId);
     if (!sourceStudent) return;
@@ -988,16 +1296,28 @@ const SeatingPlan = () => {
       const db = await initDB();
       const studentsToUpdate: Student[] = [];
 
+      let sourcePwd = sourceStudent.password;
+      if (!sourcePwd || !/^\d{3}$/.test(sourcePwd)) {
+        const existingPasswords = await fetchExistingPasswords(currentClass, currentYear);
+        sourcePwd = generateUniquePassword(existingPasswords);
+      }
+
       // 1. Move source student to toPc
       await queuePcSyncTask(db, sourceStudent, fromPc, 'REMOVE', currentYear);
-      await queuePcSyncTask(db, sourceStudent, toPc, 'ADD', currentYear);
-      studentsToUpdate.push({ ...sourceStudent, pcNumber: toPc });
+      await queuePcSyncTask(db, sourceStudent, toPc, 'ADD', currentYear, sourcePwd);
+      studentsToUpdate.push({ ...sourceStudent, pcNumber: toPc, password: sourcePwd });
 
       // 2. If target had a student, move them to fromPc (swap)
       if (targetStudent) {
+        let targetPwd = targetStudent.password;
+        if (!targetPwd || !/^\d{3}$/.test(targetPwd)) {
+          const existingPasswords = await fetchExistingPasswords(currentClass, currentYear);
+          existingPasswords.add(sourcePwd);
+          targetPwd = generateUniquePassword(existingPasswords);
+        }
         await queuePcSyncTask(db, targetStudent, toPc, 'REMOVE', currentYear);
-        await queuePcSyncTask(db, targetStudent, fromPc, 'ADD', currentYear);
-        studentsToUpdate.push({ ...targetStudent, pcNumber: fromPc });
+        await queuePcSyncTask(db, targetStudent, fromPc, 'ADD', currentYear, targetPwd);
+        studentsToUpdate.push({ ...targetStudent, pcNumber: fromPc, password: targetPwd });
       }
 
       await db.putMany('students', studentsToUpdate);
@@ -1024,72 +1344,101 @@ const SeatingPlan = () => {
     }
   };
 
-  const handleUnassignStudent = async (studentId: string) => {
+  const handleUnassignStudent = (studentId: string) => {
     if (!selectedDesk || !activeYear || !selectedClass) return;
-    const currentYear = activeYear;
-    const currentClass = selectedClass;
+    const student = getStudentForDesk(studentId);
+    openConfirm({
+      title: 'បញ្ជាក់ការដកសិស្សចេញពីតុ',
+      message: `តើអ្នកពិតជាចង់ដកសិស្ស ${student?.name || ''} ចេញពីតុ ${selectedDesk.pcNumber} មែនទេ?`,
+      confirmText: 'ដកចេញ',
+      cancelText: 'បោះបង់',
+      variant: 'danger',
+      onConfirm: async () => {
+        const currentYear = activeYear;
+        const currentClass = selectedClass;
 
-    setIsSaving(true);
-    try {
-      const db = await initDB();
-      // Partial update to safely clear pcNumber and password
-      const student = getStudentForDesk(studentId);
-      if (student && student.pcNumber) {
-        await queuePcSyncTask(db, student, student.pcNumber, 'REMOVE', currentYear);
-      }
-      // Partial update to safely clear pcNumber and password
-      await db.update('students', studentId, { pcNumber: null, password: null });
-      
-      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
-      await loadData(currentYear, currentClass, shift, true);
-    } catch (error) {
-      console.error(error);
-      alert('បរាជ័យក្នុងការដកសិស្សចេញពីតុ');
-    } finally {
-      setIsSaving(false);
-    }
+        setIsSaving(true);
+        try {
+          const db = await initDB();
+          // Partial update to safely clear pcNumber and password
+          if (student && student.pcNumber) {
+            await queuePcSyncTask(db, student, student.pcNumber, 'REMOVE', currentYear);
+          }
+          // Partial update to safely clear pcNumber while preserving password
+          await db.update('students', studentId, { pcNumber: null });
+          
+          setFeedbackMessage({
+            type: 'success',
+            text: `បានដកសិស្ស ${student?.name || ''} ចេញពីតុ ${selectedDesk.pcNumber} ជោគជ័យ!`,
+          });
+          const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+          await loadData(currentYear, currentClass, shift, true);
+        } catch (error) {
+          console.error(error);
+          alert('បរាជ័យក្នុងការដកសិស្សចេញពីតុ');
+        } finally {
+          setIsSaving(false);
+        }
+      },
+    });
   };
 
-  const handleClearAllAssignments = async () => {
+  const handleClearAllAssignments = () => {
     if (!selectedClass || students.length === 0 || !activeYear) return;
     
-    if (!window.confirm('តើអ្នកពិតជាចង់ដកសិស្សទាំងអស់ចេញពីតុ និងលុប Password ចោលមែនទេ?')) return;
-    
-    setIsSaving(true);
-    const currentYear = activeYear;
-    const currentClass = selectedClass;
+    openConfirm({
+      title: 'បញ្ជាក់ការលុបទិន្នន័យតុទាំងអស់',
+      message: 'តើអ្នកពិតជាចង់ដកសិស្សទាំងអស់ចេញពីតុ និងលុប Password ចោលមែនទេ?',
+      confirmText: 'លុបទិន្នន័យ',
+      cancelText: 'បោះបង់',
+      variant: 'danger',
+      onConfirm: async () => {
+        setIsSaving(true);
+        const currentYear = activeYear;
+        const currentClass = selectedClass;
 
-    try {
-      const db = await initDB();
-      const studentsToUpdate = [];
+        try {
+          const db = await initDB();
+          const studentsToUpdate = [];
+          const syncPromises: Promise<any>[] = [];
 
-      for (let i = 0; i < students.length; i++) {
-        if (students[i].pcNumber || students[i].password) {
-          if (students[i].pcNumber) {
-            await queuePcSyncTask(db, students[i], students[i].pcNumber!, 'REMOVE', currentYear);
+          for (let i = 0; i < students.length; i++) {
+            if (students[i].pcNumber || students[i].password) {
+              if (students[i].pcNumber) {
+                syncPromises.push(queuePcSyncTask(db, students[i], students[i].pcNumber!, 'REMOVE', currentYear));
+              }
+              const updatedStudent = { ...students[i], pcNumber: null, password: null };
+              studentsToUpdate.push(updatedStudent);
+            }
           }
-          const updatedStudent = { ...students[i], pcNumber: null, password: null };
-          studentsToUpdate.push(updatedStudent);
+          
+          await Promise.all([
+            db.putMany('students', studentsToUpdate),
+            ...syncPromises
+          ]);
+          setFeedbackMessage({
+            type: 'success',
+            text: 'លុបទិន្នន័យតុបានជោគជ័យ!',
+          });
+          const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+          await loadData(currentYear, currentClass, shift, true);
+        } catch (error: any) {
+          alert('មានបញ្ហាក្នុងការលុបទិន្នន័យតុ: ' + error.message);
+        } finally {
+          setIsSaving(false);
         }
-      }
-      
-      await db.putMany('students', studentsToUpdate);
-      alert('លុបទិន្នន័យតុបានជោគជ័យ!');
-      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
-      await loadData(currentYear, currentClass, shift, true);
-    } catch (error: any) {
-      alert('មានបញ្ហាក្នុងការលុបទិន្នន័យតុ: ' + error.message);
-    } finally {
-      setIsSaving(false);
-    }
+      },
+    });
   };
 
   const handleAutoAssign = async () => {
     if (!selectedClass || !activeYear) return;
     
-    // Sort unassigned students by Khmer name
+    const gridPcSet = new Set(desks.map(d => d.pcNumber));
+
+    // Sort unassigned students by Khmer name (including any with invalid/stale desk numbers)
     const unassignedStudents = students
-      .filter(s => !s.pcNumber)
+      .filter(s => !s.pcNumber || !gridPcSet.has(s.pcNumber))
       .sort(compareStudentsByKhmerName);
 
     if (unassignedStudents.length === 0) {
@@ -1097,41 +1446,70 @@ const SeatingPlan = () => {
       return;
     }
 
-    // Get available desks
-    const availableDesks = desks.filter(d => d.pcNumber !== 'Teacher PC' && d.status === 'Good' && d.studentIds.length === 0);
+    // Get available desks sorted in natural numerical order (PC-01, PC-02, ..., PC-35)
+    const availableDesks = desks
+      .filter(d => d.pcNumber !== 'Teacher PC' && d.status === 'Good' && d.studentIds.length === 0)
+      .sort((a, b) => a.pcNumber.localeCompare(b.pcNumber, undefined, { numeric: true, sensitivity: 'base' }));
     
     if (availableDesks.length === 0) {
       alert('មិនមានកុំព្យូទ័រទំនេរ និងល្អគ្រប់គ្រាន់ទេ។');
       return;
     }
 
-    setIsSaving(true);
-    const currentYear = activeYear;
-    const currentClass = selectedClass;
+    const assignableCount = Math.min(unassignedStudents.length, availableDesks.length);
+    openConfirm({
+      title: 'បញ្ជាក់ការរៀបចំកន្លែងអង្គុយស្វ័យប្រវត្តិ',
+      message: `តើអ្នកពិតជាចង់រៀបចំកន្លែងអង្គុយដោយស្វ័យប្រវត្តិចំនួន ${assignableCount} នាក់មែនទេ?`,
+      confirmText: 'រៀបចំ',
+      cancelText: 'បោះបង់',
+      variant: 'primary',
+      onConfirm: async () => {
+        setIsSaving(true);
+        const currentYear = activeYear;
+        const currentClass = selectedClass;
 
-    try {
-      const db = await initDB();
-      const studentsToUpdate = [];
+        try {
+          const db = await initDB();
+          const studentsToUpdate: any[] = [];
+          const existingPasswords = await fetchExistingPasswords(currentClass, currentYear);
+          const usedPasswords = new Set<string>([
+            ...existingPasswords,
+            ...students.map(s => s.password).filter(Boolean) as string[]
+          ]);
 
-      let assignedCount = 0;
-      for (let i = 0; i < unassignedStudents.length; i++) {
-        if (i < availableDesks.length) {
-          const student = { ...unassignedStudents[i], pcNumber: availableDesks[i].pcNumber };
-          studentsToUpdate.push(student);
-          await queuePcSyncTask(db, student, availableDesks[i].pcNumber, 'ADD', currentYear);
-          assignedCount++;
+          const syncPromises: Promise<any>[] = [];
+          let assignedCount = 0;
+          for (let i = 0; i < unassignedStudents.length; i++) {
+            if (i < availableDesks.length) {
+              let pwd = unassignedStudents[i].password;
+              if (!pwd || !/^\d{3}$/.test(pwd)) {
+                pwd = generateUniquePassword(usedPasswords);
+                usedPasswords.add(pwd);
+              }
+              const student = { ...unassignedStudents[i], pcNumber: availableDesks[i].pcNumber, password: pwd };
+              studentsToUpdate.push(student);
+              syncPromises.push(queuePcSyncTask(db, student, availableDesks[i].pcNumber, 'ADD', currentYear, pwd));
+              assignedCount++;
+            }
+          }
+          
+          await Promise.all([
+            db.putMany('students', studentsToUpdate),
+            ...syncPromises
+          ]);
+          setFeedbackMessage({
+            type: 'success',
+            text: `បានរៀបចំកន្លែងអង្គុយដោយស្វ័យប្រវត្តិជូនសិស្សចំនួន ${assignedCount} នាក់ជោគជ័យ!`,
+          });
+          const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
+          await loadData(currentYear, currentClass, shift, true);
+        } catch (error: any) {
+          alert('មានបញ្ហាក្នុងការរៀបចំកន្លែងអង្គុយដោយស្វ័យប្រវត្តិ: ' + error.message);
+        } finally {
+          setIsSaving(false);
         }
-      }
-      
-      await db.putMany('students', studentsToUpdate);
-      alert(`បានរៀបចំកន្លែងអង្គុយដោយស្វ័យប្រវត្តិជូនសិស្សចំនួន ${assignedCount} នាក់ជោគជ័យ!`);
-      const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
-      await loadData(currentYear, currentClass, shift, true);
-    } catch (error: any) {
-      alert('មានបញ្ហាក្នុងការរៀបចំកន្លែងអង្គុយដោយស្វ័យប្រវត្តិ: ' + error.message);
-    } finally {
-      setIsSaving(false);
-    }
+      },
+    });
   };
 
   // -------------------------------------------------------------
@@ -1142,9 +1520,10 @@ const SeatingPlan = () => {
     
     const currentYear = activeYear;
     const currentClass = selectedClass;
+    const targetPc = selectedDesk.pcNumber;
 
     const alreadyActive = pcIssues.some(
-      issue => issue.pcNumber === selectedDesk.pcNumber && issue.academicYear === currentYear && issue.status !== 'Good'
+      issue => issue.pcNumber === targetPc && issue.academicYear === currentYear && isPcIssueActive(issue.status)
     );
     
     if (alreadyActive) {
@@ -1155,19 +1534,44 @@ const SeatingPlan = () => {
     setIsSaving(true);
     try {
       const db = await initDB();
+      const today = new Date().toISOString().split('T')[0];
+      const desc = issueDescription.trim();
       const newIssue: PCIssue = {
         id: crypto.randomUUID(),
-        pcNumber: selectedDesk.pcNumber,
-        seatNumber: selectedDesk.pcNumber,
+        pcNumber: targetPc,
+        seatNumber: targetPc,
         status: 'Issue',
-        currentIssue: issueDescription.trim(),
-        dateFound: new Date().toISOString(),
+        description: desc,
+        currentIssue: desc,
+        reportedBy: (user?.user_metadata?.full_name as string) || (user?.user_metadata?.name as string) || user?.email || 'គ្រូបង្រៀន',
+        reportedDate: today,
+        dateFound: today,
         academicYear: currentYear
       };
       
       await db.put('pcIssues', newIssue);
+
+      // Lab-wide auto-unassign: remove any student assigned to this PC across all classes in the ICT Lab
+      const allStudentsInYear = await db.getAll('students', currentYear);
+      const affectedStudents = allStudentsInYear.filter(s => s.pcNumber === targetPc);
+      if (affectedStudents.length > 0) {
+        const studentUpdates: any[] = [];
+        const syncPromises: Promise<any>[] = [];
+        for (const s of affectedStudents) {
+          syncPromises.push(queuePcSyncTask(db, s, targetPc, 'REMOVE', currentYear));
+          studentUpdates.push({ ...s, pcNumber: null });
+        }
+        await Promise.all([
+          db.putMany('students', studentUpdates),
+          ...syncPromises
+        ]);
+      }
+
       setIsReportingIssue(false);
       setIssueDescription('');
+      
+      window.dispatchEvent(new CustomEvent('appDataChanged'));
+
       const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
       await loadData(currentYear, currentClass, shift, true);
     } catch (error) {
@@ -1183,20 +1587,27 @@ const SeatingPlan = () => {
     
     const currentYear = activeYear;
     const currentClass = selectedClass;
+    const targetPc = selectedDesk.pcNumber;
 
     // Find all active issues for this PC in this year (in case duplicates were created concurrently)
-    const activeIssues = pcIssues.filter(issue => issue.pcNumber === selectedDesk.pcNumber && issue.academicYear === currentYear && issue.status !== 'Good');
+    const activeIssues = pcIssues.filter(issue => issue.pcNumber === targetPc && issue.academicYear === currentYear && isPcIssueActive(issue.status));
     
     if (activeIssues.length > 0) {
       setIsSaving(true);
       try {
         const db = await initDB();
+        const today = new Date().toISOString().split('T')[0];
         const issuesToUpdate = activeIssues.map(issue => ({
           ...issue,
           status: 'Good' as const,
-          dateResolved: new Date().toISOString()
+          resolvedDate: today,
+          dateResolved: today,
+          resolution: issue.resolution || 'ជួសជុលរួចរាល់'
         }));
         await db.putMany('pcIssues', issuesToUpdate);
+        
+        window.dispatchEvent(new CustomEvent('appDataChanged'));
+
         const shift = classes.find(c => c.id === currentClass)?.shift || 'Morning';
         await loadData(currentYear, currentClass, shift, true);
       } catch (error) {
@@ -1212,8 +1623,9 @@ const SeatingPlan = () => {
     window.print();
   };
 
+  const deskPcSet = new Set(desks.map(d => d.pcNumber));
   const unassignedStudentsList = students
-    .filter(s => !s.pcNumber)
+    .filter(s => !s.pcNumber || !deskPcSet.has(s.pcNumber))
     .sort(compareStudentsByKhmerName);
 
   const renderDesk = (desk: Desk) => {
@@ -1249,7 +1661,7 @@ const SeatingPlan = () => {
     return (
       <div 
         key={desk.id} 
-        draggable={isEditMode && !isTeacher && desk.status !== 'Issue' && !isConflict && !!student}
+        draggable={isEditMode && !isTeacher && desk.studentIds.length === 1 && !!student}
         onDragStart={(e) => isEditMode && handleDragStart(e, desk)}
         onDragOver={(e) => isEditMode && handleDragOver(e, desk.pcNumber)}
         onDragLeave={(e) => isEditMode && handleDragLeave(e, desk.pcNumber)}
@@ -1262,7 +1674,7 @@ const SeatingPlan = () => {
           ${!isTeacher && desk.status !== 'Issue' && !isEditMode ? 'active:scale-95' : ''}
           ${isEditMode && !!student ? 'cursor-grab active:cursor-grabbing hover:border-blue-400 hover:shadow-md' : ''}
         `}
-        onClick={() => !isEditMode && handleDeskClick(desk)}
+        onClick={() => handleDeskClick(desk)}
       >
         {/* Drop target overlay */}
         {isDropTarget && (
@@ -1278,13 +1690,27 @@ const SeatingPlan = () => {
         )}
 
         {isEditMode && (
-          <button 
-            className="absolute top-1 right-1 p-1 bg-white border border-gray-200 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 shadow-sm transition-colors z-10"
-            onClick={(e) => handleRotateDesk(e, desk.pcNumber)}
-            title="បង្វិលតុ"
-          >
-            <RotateCw size={14} />
-          </button>
+          <div className="absolute top-1 right-1 flex items-center gap-1 z-10">
+            <button 
+              type="button"
+              className="p-1 bg-white border border-gray-200 hover:border-rose-300 rounded text-gray-400 hover:text-rose-600 hover:bg-rose-50 shadow-2xs transition-colors cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRemoveDeskFromGrid(desk.pcNumber);
+              }}
+              title="លុបតុនេះចេញពីប្លង់"
+            >
+              <Trash2 size={13} />
+            </button>
+            <button 
+              type="button"
+              className="p-1 bg-white border border-gray-200 hover:border-blue-300 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 shadow-2xs transition-colors cursor-pointer"
+              onClick={(e) => handleRotateDesk(e, desk.pcNumber)}
+              title="បង្វិលតុ"
+            >
+              <RotateCw size={13} />
+            </button>
+          </div>
         )}
         <div className={`px-2.5 py-1.5 print:py-1 flex items-center justify-between border-b ${borderClass} bg-surface/70`}>
           <div className="flex items-center gap-1.5 pointer-events-none">
@@ -1294,7 +1720,10 @@ const SeatingPlan = () => {
             </span>
           </div>
           {!isTeacher && desk.status === 'Issue' && (
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+              ខូច
+            </span>
           )}
           {!isTeacher && isConflict && (
             <AlertCircle size={13} className="text-amber-500 animate-pulse" />
@@ -1307,6 +1736,16 @@ const SeatingPlan = () => {
             <div className="flex flex-col items-center justify-center text-amber-700 h-full">
               <AlertTriangle size={18} className="mb-1 text-amber-600" />
               <span className="text-xs font-bold uppercase tracking-wider text-center leading-tight">ជាន់គ្នា<br/>{desk.studentIds.length} នាក់</span>
+            </div>
+          ) : desk.status === 'Issue' ? (
+            <div className="flex flex-col items-center justify-center text-rose-600 h-full py-1">
+              <AlertTriangle size={22} className="mb-1 text-rose-500 animate-pulse" />
+              <span className="text-xs font-bold text-rose-700 uppercase tracking-wider text-center leading-tight">
+                កុំព្យូទ័រខូច
+              </span>
+              <span className="text-[10px] text-rose-500/80 font-medium mt-0.5">
+                (មិនអាចប្រើប្រាស់)
+              </span>
             </div>
           ) : student ? (
             (() => {
@@ -1324,6 +1763,11 @@ const SeatingPlan = () => {
                     <div className={`font-bold text-primary text-center transition-all duration-200 break-words overflow-visible ${fontStyleClass}`}>
                       {displayName}
                     </div>
+                    {student.isShiftSwitching && (
+                      <span className="inline-block text-[9px] font-bold text-amber-700 bg-amber-100/70 px-1 py-0.2 rounded mx-auto mt-0.5" title="សិស្សប្តូរវេន">
+                        ប្តូរវេន
+                      </span>
+                    )}
                   </div>
                   {showPasswords && student.password && (
                     <div className="mt-auto flex items-center justify-center gap-1 px-2 py-0.5 print:py-0.5 bg-surface rounded-md text-[11px] print:text-[10px] font-mono font-bold text-primary border border-border/70 mx-auto min-w-[55px] shadow-2xs">
@@ -1346,7 +1790,7 @@ const SeatingPlan = () => {
   };
 
   const activeStudentCount = desks.filter(d => d.pcNumber !== 'Teacher PC' && d.studentIds.length > 0).length;
-  const emptyDeskCount = desks.filter(d => d.pcNumber !== 'Teacher PC' && d.studentIds.length === 0).length;
+  const emptyDeskCount = desks.filter(d => d.pcNumber !== 'Teacher PC' && d.studentIds.length === 0 && d.status !== 'Issue').length;
   const issueDeskCount = desks.filter(d => d.pcNumber !== 'Teacher PC' && d.status === 'Issue').length;
   const conflictDeskCount = desks.filter(d => d.studentIds.length > 1).length;
 
@@ -1541,6 +1985,18 @@ const SeatingPlan = () => {
                   />
                 </div>
 
+                {/* Reset Layout Button */}
+                <button
+                  type="button"
+                  onClick={handleResetLayoutToDefault}
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3.5 py-2 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer"
+                  title="Reset ប្លង់តុ និងរៀបចំឈ្មោះ PC តាមលំនាំដើម (PC-01 ដល់ PC-35)"
+                >
+                  <RotateCcw size={14} />
+                  <span>Reset ប្លង់តុ</span>
+                </button>
+
                 <button 
                   type="button"
                   onClick={() => {
@@ -1657,6 +2113,30 @@ const SeatingPlan = () => {
             </div>
           )}
 
+          {/* Print-only Official Header */}
+          <div className="hidden print:flex flex-col items-center justify-center w-full mb-3 pb-2 border-b-2 border-gray-800 text-center">
+            <h2 className="text-base font-bold text-gray-900 tracking-wide mb-1">
+              ប្លង់តុសិក្សាកុំព្យូទ័រ (Computer Lab Seating Plan)
+            </h2>
+            <div className="flex items-center justify-center gap-6 text-xs font-semibold text-gray-700">
+              <span>
+                ថ្នាក់៖ <strong>{classes.find(c => c.id === selectedClass)?.name || selectedClass}</strong>
+              </span>
+              <span>
+                វេន៖ <strong>{(() => {
+                  const shift = classes.find(c => c.id === selectedClass)?.shift;
+                  return shift === 'Morning' ? 'ព្រឹក' : shift === 'Afternoon' ? 'រសៀល' : 'យប់';
+                })()}</strong>
+              </span>
+              <span>
+                ឆ្នាំសិក្សា៖ <strong>{activeYear}</strong>
+              </span>
+              <span>
+                សិស្សសរុប៖ <strong>{students.length} នាក់</strong>
+              </span>
+            </div>
+          </div>
+
           {currentLayout && (
              <div className="flex flex-col items-center justify-center bg-background rounded-xl p-8 border border-border/50 print:bg-white print:border-none print:p-0 print:w-full w-full overflow-x-auto print:overflow-visible">
                <div 
@@ -1687,13 +2167,13 @@ const SeatingPlan = () => {
                       const cols = currentLayout.gridLayout[0]?.length || 1;
                       
                       const prevCell = cIdx > 0 ? row[cIdx - 1] : null;
-                      // If this cell is empty and the previous cell was Teacher PC, skip it so Teacher PC can span 2 columns
-                      if (prevCell === 'Teacher PC' && !cell) {
+                      // In view mode, if this cell is empty and previous was Teacher PC, skip so Teacher PC spans 2 columns
+                      if (prevCell === 'Teacher PC' && !cell && !isEditMode) {
                         return null;
                       }
                       
-                      // Teacher PC spans 2 columns if it's not the last column and the next cell is empty
-                      const shouldSpanTwo = isTeacher && cIdx < cols - 1 && !row[cIdx + 1];
+                      // Teacher PC spans 2 columns only in view mode if next cell is empty
+                      const shouldSpanTwo = !isEditMode && isTeacher && cIdx < cols - 1 && !row[cIdx + 1];
 
                       return (
                         <div 
@@ -1719,6 +2199,12 @@ const SeatingPlan = () => {
                </div>
              </div>
           )}
+
+          {/* Print-only Official Footer */}
+          <div className="hidden print:flex items-center justify-between w-full mt-4 pt-2 border-t border-gray-300 text-[11px] text-gray-600">
+            <span>កាលបរិច្ឆេទបោះពុម្ព៖ {new Date().toLocaleDateString('km-KH')}</span>
+            <span className="font-bold">ហត្ថលេខាគ្រូបង្រៀន</span>
+          </div>
         </div>
         )}
       </div>
@@ -1739,7 +2225,7 @@ const SeatingPlan = () => {
                 <div>
                   <p className="text-xs font-semibold text-secondary-text mb-0.5">ស្ថានភាពកុំព្យូទ័រ</p>
                   <p className={`font-bold text-sm ${selectedDesk.status === 'Issue' ? 'text-rose-600' : 'text-emerald-600'}`}>
-                    {selectedDesk.status === 'Issue' ? 'មានបញ្ហា' : 'ដំណើរការល្អ'}
+                    {selectedDesk.status === 'Issue' ? 'កុំព្យូទ័រខូច (មានបញ្ហា)' : 'ដំណើរការល្អ'}
                   </p>
                 </div>
               </div>
@@ -1757,6 +2243,24 @@ const SeatingPlan = () => {
                 </div>
               )}
             </div>
+
+            {selectedDesk.status === 'Issue' && (
+              (() => {
+                const activeIssue = pcIssues.find(i => i.pcNumber === selectedDesk.pcNumber && i.academicYear === activeYear && isPcIssueActive(i.status));
+                return activeIssue ? (
+                  <div className="p-3.5 bg-rose-50 border border-rose-200/80 rounded-2xl text-xs flex items-start gap-2.5 text-rose-900 animate-in fade-in">
+                    <AlertTriangle size={18} className="text-rose-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-rose-800">បញ្ហាដែលបានរាយការណ៍៖</p>
+                      <p className="text-rose-700 mt-0.5 font-medium">{activeIssue.description || activeIssue.currentIssue || 'មានបញ្ហាមិនអាចប្រើប្រាស់បាន'}</p>
+                      {activeIssue.reportedBy && (
+                        <p className="text-[10px] text-rose-500/90 mt-1">រាយការណ៍ដោយ៖ {activeIssue.reportedBy} {activeIssue.reportedDate ? `(${activeIssue.reportedDate})` : ''}</p>
+                      )}
+                    </div>
+                  </div>
+                ) : null;
+              })()
+            )}
 
             {isReportingIssue && (
               <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl animate-in fade-in slide-in-from-top-4">
@@ -1809,7 +2313,7 @@ const SeatingPlan = () => {
                         <div className="bg-surface border border-border/80 p-3.5 rounded-2xl shadow-2xs">
                           <div className="flex items-center justify-between gap-3">
                             <label className="text-xs font-bold text-secondary-text whitespace-nowrap">
-                              ផ្លាស់ប្តូរទៅតុផ្សេង៖
+                              {selectedDesk.studentIds.length > 1 ? 'រំកិលទៅតុទំនេរ៖' : 'ផ្លាស់ប្តូរទៅតុផ្សេង៖'}
                             </label>
                             <select
                               className="text-xs border rounded-xl px-3 py-1.5 bg-background border-border focus:ring-primary focus:border-primary font-bold max-w-[200px]"
@@ -1822,7 +2326,11 @@ const SeatingPlan = () => {
                             >
                               <option value="" disabled>ជ្រើសរើសតុដើម្បីប្តូរ...</option>
                               {desks
-                                .filter(d => d.pcNumber !== 'Teacher PC' && d.pcNumber !== selectedDesk.pcNumber && d.status !== 'Issue')
+                                .filter(d => {
+                                  if (d.pcNumber === 'Teacher PC' || d.pcNumber === selectedDesk.pcNumber || d.status === 'Issue') return false;
+                                  if (selectedDesk.studentIds.length > 1) return d.studentIds.length === 0;
+                                  return true;
+                                })
                                 .sort((a, b) => a.pcNumber.localeCompare(b.pcNumber, undefined, { numeric: true }))
                                 .map(d => {
                                   const occupant = d.studentIds.length > 0 ? getStudentForDesk(d.studentIds[0]) : null;
@@ -1887,6 +2395,55 @@ const SeatingPlan = () => {
           </div>
         )}
       </Modal>
+
+      {/* Universal Confirmation Modal with explicit Cancel and OK buttons */}
+      {confirmDialog && (
+        <Modal
+          isOpen={confirmDialog.isOpen}
+          onClose={() => setConfirmDialog(null)}
+          title={confirmDialog.title}
+        >
+          <div className="flex flex-col gap-4">
+            <div className="flex items-start gap-3">
+              <div className={`p-2.5 rounded-full shrink-0 ${
+                confirmDialog.variant === 'danger' 
+                  ? 'bg-rose-100 text-rose-600' 
+                  : confirmDialog.variant === 'warning'
+                    ? 'bg-amber-100 text-amber-600'
+                    : 'bg-indigo-100 text-indigo-600'
+              }`}>
+                {confirmDialog.variant === 'danger' ? (
+                  <Trash2 size={22} />
+                ) : confirmDialog.variant === 'warning' ? (
+                  <AlertTriangle size={22} />
+                ) : (
+                  <HelpCircle size={22} />
+                )}
+              </div>
+              <p className="text-sm font-medium text-main-text leading-relaxed mt-1">
+                {confirmDialog.message}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 mt-4 pt-4 border-t border-border">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setConfirmDialog(null)}
+              >
+                {confirmDialog.cancelText || 'បោះបង់'}
+              </Button>
+              <Button
+                type="button"
+                variant={confirmDialog.variant === 'danger' ? 'danger' : 'primary'}
+                onClick={confirmDialog.onConfirm}
+              >
+                {confirmDialog.confirmText || 'យល់ព្រម'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
     </div>
   );

@@ -183,15 +183,27 @@ const ShiftSwitching = () => {
         const db = await initDB();
         
         const oldClass = student.class;
-        
-        // Partial update
-        await db.update('students', student.id, {
+        const targetStudents = students.filter(s => s.class === student.alternateClassId && s.status === 'Active');
+        const hasPcConflict = Boolean(student.pcNumber && targetStudents.some(s => s.pcNumber === student.pcNumber && s.id !== student.id));
+
+        const updates: Partial<Student> = {
           class: student.alternateClassId,
           alternateClassId: oldClass,
-          shift: targetClass.shift // Update shift to match new class
-        });
+          shift: targetClass.shift
+        };
+
+        if (hasPcConflict) {
+          updates.pcNumber = null as any;
+        }
+
+        // Partial update
+        await db.update('students', student.id, updates);
         
-        showToast('success', `បានផ្លាស់ប្តូរសិស្ស "${student.name}" ទៅថ្នាក់ "${targetClass.name}" (${getShiftName(targetClass.shift)}) ជោគជ័យ!`);
+        if (hasPcConflict) {
+          showToast('success', `បានផ្លាស់ប្តូរសិស្ស "${student.name}" ទៅថ្នាក់ "${targetClass.name}" ជោគជ័យ! (ដោះលេខ PC ចាស់ "${student.pcNumber}" ចេញដោយសារជាន់គ្នាជាមួយសិស្សថ្នាក់ថ្មី)`);
+        } else {
+          showToast('success', `បានផ្លាស់ប្តូរសិស្ស "${student.name}" ទៅថ្នាក់ "${targetClass.name}" (${getShiftName(targetClass.shift)}) ជោគជ័យ!`);
+        }
         await loadData(targetYear);
       } catch (error: any) {
          showToast('error', 'មានបញ្ហាក្នុងការរក្សាទុកទិន្នន័យ៖ ' + (error.message || ''));
@@ -213,7 +225,7 @@ const ShiftSwitching = () => {
         // Partial update
         await db.update('students', student.id, {
           isShiftSwitching: false,
-          alternateClassId: '' // clear it
+          alternateClassId: null as any
         });
         
         showToast('success', `បានដកសិស្ស "${student.name}" ចេញពីបញ្ជីប្តូរវេនជោគជ័យ!`);

@@ -22,7 +22,7 @@ export const attendanceToolDeclarations = [
         classId: { type: Type.STRING, description: 'The class ID' },
         studentId: { type: Type.STRING, description: 'The student ID' },
         date: { type: Type.STRING, description: 'The date (YYYY-MM-DD)' },
-        status: { type: Type.STRING, description: 'Attendance status: "P" (Present), "A" (Absent), "L" (Leave), "P_LATE" (Late)' }
+        status: { type: Type.STRING, description: 'Attendance status: "P" (Present / វត្តមាន), "A" (Absent / អវត្តមាន), "E" (Excused / Leave / សុំច្បាប់), "L" (Late / មកយឺត)' }
       },
       required: ['classId', 'studentId', 'date', 'status']
     }

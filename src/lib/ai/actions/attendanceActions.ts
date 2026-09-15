@@ -36,11 +36,20 @@ export const handleAttendanceAction = async (action: string, data: any, activeYe
       };
     }
     
+    // Resolve student document ID in case studentId was given as school code or UUID
+    const students = await db.getAllFromIndex('students', 'class', data.classId, activeYear);
+    const matchedStudent = students.find(s => s.id === data.studentId || s.studentId === data.studentId || s.name === data.studentId);
+    const targetStudentDocId = matchedStudent ? matchedStudent.id : data.studentId;
+
     // Update the specific student's attendance
-    record.records[data.studentId] = normalizedStatus;
+    record.records[targetStudentDocId] = normalizedStatus;
     
     await db.put('attendance', record);
     
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('appDataChanged'));
+    }
+
     return true;
   }
   

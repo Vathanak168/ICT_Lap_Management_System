@@ -151,6 +151,38 @@ export interface PcSyncTask {
   academicYear: string;
 }
 
+export const isPcIssueActive = (status?: string | null): boolean => {
+  if (!status) return false;
+  const s = status.trim().toLowerCase();
+  return s !== 'good' && s !== 'resolved' && s !== 'closed';
+};
+
+export const queuePcSyncTask = async (
+  db: any,
+  student: Student,
+  pcNumber: string,
+  action: PcSyncTask['action'],
+  academicYear: string,
+  password?: string | null,
+) => {
+  const task: PcSyncTask = {
+    id: crypto.randomUUID(),
+    pcNumber,
+    studentId: student.studentId,
+    studentName: student.name,
+    action,
+    password: password !== undefined ? password : (student.password || null),
+    status: 'PENDING',
+    createdAt: new Date().toISOString(),
+    academicYear,
+  };
+  try {
+    await db.put('pcSyncTasks', task);
+  } catch (error) {
+    console.warn('Failed to queue PC Sync task:', error);
+  }
+};
+
 export interface SubjectRecord {
   id: string;
   name: string;
@@ -382,7 +414,7 @@ const storeSchemas: Record<StoreName, StoreSchema> = {
       id: field('id', 'string', { requiredRead: true, requiredWrite: true }),
       pcNumber: field('pc_number', 'string', { requiredRead: true, requiredWrite: true }),
       seatNumber: field('seat_number', 'string', { nullable: true }),
-      description: field('description', 'string', { nullable: true }),
+      description: field('description', 'string', { defaultValue: 'បញ្ហាម៉ាស៊ីន' }),
       status: field('status', 'string', { requiredRead: true, requiredWrite: true }),
       reportedBy: field('reported_by', 'string', { nullable: true }),
       reportedDate: field('reported_date', 'string', { nullable: true }),
@@ -1475,11 +1507,24 @@ export class SupabaseDBAdapter {
     const input = { ...asRecord(value, `${storeName} ${mode} value`, storeName) };
 
     const applyAlias = (canonical: string, legacy: string): void => {
-      const hasCanonical = hasOwn(input, canonical);
-      const hasLegacy = hasOwn(input, legacy);
-      if (!hasLegacy) return;
+      if (!hasOwn(input, legacy)) return;
 
-      if (hasCanonical && JSON.stringify(input[canonical]) !== JSON.stringify(input[legacy])) {
+      const canonicalVal = input[canonical];
+      const legacyVal = input[legacy];
+      const isEmpty = (v: unknown) => v === undefined || v === null || v === '';
+
+      if (isEmpty(canonicalVal)) {
+        input[canonical] = legacyVal;
+        delete input[legacy];
+        return;
+      }
+
+      if (isEmpty(legacyVal)) {
+        delete input[legacy];
+        return;
+      }
+
+      if (JSON.stringify(canonicalVal) !== JSON.stringify(legacyVal)) {
         return failValidation(
           `Conflicting values were provided for "${canonical}" and legacy alias "${legacy}".`,
           `map-${mode}`,
@@ -1487,7 +1532,6 @@ export class SupabaseDBAdapter {
         );
       }
 
-      if (!hasCanonical) input[canonical] = input[legacy];
       delete input[legacy];
     };
 
@@ -1495,6 +1539,7 @@ export class SupabaseDBAdapter {
     if (storeName === 'pcIssues') {
       applyAlias('reportedDate', 'dateFound');
       applyAlias('resolvedDate', 'dateResolved');
+      applyAlias('description', 'currentIssue');
     }
 
     return input;
@@ -1527,6 +1572,7 @@ export class SupabaseDBAdapter {
     if (storeName === 'pcIssues') {
       result.dateFound = result.reportedDate;
       result.dateResolved = result.resolvedDate;
+      result.currentIssue = result.description;
     }
 
     return result as unknown as StoreRecord<K>;
@@ -1547,6 +1593,7 @@ export class SupabaseDBAdapter {
     if (storeName === 'pcIssues') {
       legacyAliases.add('dateFound');
       legacyAliases.add('dateResolved');
+      legacyAliases.add('currentIssue');
     }
 
     for (const key of Object.keys(input)) {

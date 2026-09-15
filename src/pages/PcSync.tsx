@@ -9,24 +9,13 @@ import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { getSetupScript, getResetScript, getGlobalSyncScript, getInteractiveCommandLauncher, getSyncRunnerScript } from '../lib/scripts/labScripts';
 import { supabase } from '../lib/supabase';
 import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
+import { buildSyncPlan, matchesSyncScope, normalizePcNumber, receiptTaskIds } from '../lib/pcSyncPlan';
+export { normalizePcNumber } from '../lib/pcSyncPlan';
 
 // Helper to encode string to Base64 using UTF-8
 function utf8ToBase64(str: string): string {
   return btoa(unescape(encodeURIComponent(str)));
 }
-
-export const normalizePcNumber = (value?: string | null): string => {
-  if (!value) return '';
-  const trimmed = value.trim().toUpperCase();
-  const match = trimmed.match(/^PC[-_ ]?(\d+)$/i);
-  if (match) {
-    return `PC-${match[1].padStart(2, '0')}`;
-  }
-  if (/^\d+$/.test(trimmed)) {
-    return `PC-${trimmed.padStart(2, '0')}`;
-  }
-  return trimmed;
-};
 
 interface LabSyncSettings {
   labId: string;
@@ -38,12 +27,6 @@ interface LabSyncSettings {
 }
 
 type SyncPreparationMode = 'FULL' | 'SELECTED' | 'PENDING';
-
-interface SyncTarget {
-  pcNumber: string;
-  accounts: Array<{ studentId: string; password: string; studentName: string }>;
-  removeStudentIds: string[];
-}
 
 const SETTINGS_KEY = 'ictlab_pc_sync_settings_v2';
 export const DEFAULT_SYNC_TOKEN = 'ICT-SECURE-TOKEN-2026';
@@ -90,6 +73,7 @@ const PcSync = () => {
   const [selectedDesk, setSelectedDesk] = useState<string>('ALL');
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
   const [allStudents, setAllStudents] = useState<Student[]>([]);
+  const [rosterStudents, setRosterStudents] = useState<Student[]>([]);
   const [classes, setClasses] = useState<ClassRecord[]>([]);
   const [pendingTasks, setPendingTasks] = useState<PcSyncTask[]>([]);
   const [pcIssues, setPcIssues] = useState<PCIssue[]>([]);
@@ -154,6 +138,7 @@ const PcSync = () => {
         }),
       ]);
 
+      setRosterStudents(studentsData);
       const activeStudents = studentsData.filter(student => student.status === 'Active');
       const passwordById = new Map<string, string>();
       activeStudents.forEach(student => {
@@ -216,22 +201,13 @@ const PcSync = () => {
   );
 
   const filteredStudents = useMemo(() => {
-    return allStudents.filter(s => {
-      const normDesk = normalizePcNumber(s.pcNumber);
-      const matchClass = selectedClass === 'ALL' || s.class === selectedClass;
-      const matchDesk = selectedDesk === 'ALL'
-        || (selectedDesk === 'UNASSIGNED' ? !normDesk : normDesk === selectedDesk);
-      if (!matchClass || !matchDesk) return false;
-
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
-      return (
-        (s.name && s.name.toLowerCase().includes(q)) ||
-        (s.englishName && s.englishName.toLowerCase().includes(q)) ||
-        (s.studentId && s.studentId.toLowerCase().includes(q))
-      );
-    }).sort(compareStudentsByKhmerName);
+    return allStudents.filter(student => matchesSyncScope(student, { selectedClass, selectedDesk, searchQuery }))
+      .sort(compareStudentsByKhmerName);
   }, [allStudents, searchQuery, selectedClass, selectedDesk]);
+
+  const scopedMissingPasswords = filteredStudents.filter(student => !student.password);
+  const scopedAssignedCount = filteredStudents.filter(student => normalizePcNumber(student.pcNumber)).length;
+  useEffect(() => { setSelectedStudentIds(new Set()); }, [selectedClass, selectedDesk, searchQuery, activeYear]);
 
   const missingPasswordStudents = useMemo(
     () => allStudents.filter(student => !student.password),
@@ -261,8 +237,8 @@ const PcSync = () => {
   );
 
   const selectedStudents = useMemo(
-    () => allStudents.filter(student => selectedStudentIds.has(student.id)),
-    [allStudents, selectedStudentIds]
+    () => filteredStudents.filter(student => selectedStudentIds.has(student.id)),
+    [filteredStudents, selectedStudentIds]
   );
 
   const selectableVisibleStudents = filteredStudents.filter(student => !notReadyStudentIds.has(student.id));
@@ -313,7 +289,7 @@ const PcSync = () => {
     let fileName = '';
 
     if (type === 'SETUP') {
-      if (!syncSettings.labName.trim() || !syncSettings.usbLabel.trim()) {
+      if (!syncSettings.labName.trim() || !syncSettings.usbLabel.trim() || !syncSettings.syncToken.trim() || /[\r\n]/.test(syncSettings.syncToken)) {
         alert('សូមកំណត់ឈ្មោះ Lab និងឈ្មោះ USB មុនទាញយក Installer។');
         return;
       }
@@ -367,104 +343,19 @@ const PcSync = () => {
         return;
       }
 
-      // Always sync all students with an assigned PC to ensure every lab PC has full roster
-      const assignedStudents = allStudents.filter(student => !!normalizePcNumber(student.pcNumber));
-      const accountStudents = mode === 'SELECTED' ? selectedStudents : assignedStudents;
-      const isTargetedSync = mode === 'SELECTED';
-
-      const scopedTasks = mode === 'PENDING'
-        ? pendingTasks
-        : mode === 'FULL'
-          ? pendingTasks.filter(task => task.action === 'REMOVE')
-          : [];
-      scopedTasks.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-
-      if (accountStudents.length === 0 && scopedTasks.length === 0) {
-        alert('មិនមានទិន្នន័យសិស្សដែលមានលេខតុ/កុំព្យូទ័រសម្រាប់ Sync ទេ។');
-        return;
-      }
-
-      const targetMap = new Map<string, { accounts: Map<string, SyncTarget['accounts'][number]>; removeIds: Set<string> }>();
-      const getTarget = (pcNumber: string) => {
-        if (!targetMap.has(pcNumber)) {
-          targetMap.set(pcNumber, { accounts: new Map(), removeIds: new Set() });
-        }
-        return targetMap.get(pcNumber)!;
-      };
-
-      const addStudentAccount = (student: Student, overridePcNumber?: string, overridePassword?: string | null) => {
-        const rawPcNumber = (overridePcNumber || student.pcNumber || '').trim();
-        const pcNumber = normalizePcNumber(rawPcNumber);
-        const password = overridePassword || student.password || '';
-        const studentId = student.studentId.trim();
-        const englishName = (student.englishName || '').trim();
-        const khmerName = (student.name || '').trim();
-        const displayName = englishName || khmerName || studentId;
-
-        if (!pcNumber) throw new Error(`${displayName} មិនទាន់មានលេខតុ/PC។`);
-        if (!password) throw new Error(`${displayName} មិនទាន់មាន Password។`);
-        if (!studentId || studentId.length > 20 || /["/\\[\]:;|=,+*?<>@\s]/.test(studentId)) {
-          throw new Error(`Student ID "${studentId}" មិនអាចប្រើជា Windows Username បាន។ ហាមមានដកឃ្លា និងសញ្ញាពិសេស។`);
-        }
-        const target = getTarget(pcNumber);
-        target.removeIds.delete(studentId);
-        target.accounts.set(studentId, {
-          studentId,
-          password,
-          studentName: displayName,
-        });
-      };
-
-      scopedTasks.forEach(task => {
-        const normPcNumber = normalizePcNumber(task.pcNumber);
-        const target = getTarget(normPcNumber);
-        if (task.action === 'REMOVE') {
-          target.removeIds.add(task.studentId.trim());
-          target.accounts.delete(task.studentId.trim());
-          return;
-        }
-
-        const currentStudent = allStudents.find(student => student.studentId === task.studentId);
-        if (currentStudent) {
-          addStudentAccount(currentStudent, normPcNumber, task.password);
-        } else if (task.password) {
-          const studentId = task.studentId.trim();
-          if (!studentId || studentId.length > 20 || /["/\\[\]:;|=,+*?<>@\s]/.test(studentId)) {
-            throw new Error(`Student ID "${studentId}" មិនអាចប្រើជា Windows Username បានទេ។ ហាមមានដកឃ្លា និងសញ្ញាពិសេស។`);
-          }
-          target.accounts.set(studentId, {
-            studentId,
-            password: task.password,
-            studentName: (task.studentName || studentId).trim(),
-          });
-        }
-      });
-
-      accountStudents.forEach(student => addStudentAccount(student));
-
-      const targets: SyncTarget[] = [...targetMap.entries()]
-        .map(([pcNumber, target]) => ({
-          pcNumber,
-          accounts: [...target.accounts.values()],
-          removeStudentIds: [...target.removeIds],
-        }))
-        .filter(target => target.accounts.length > 0 || target.removeStudentIds.length > 0)
-        .sort((a, b) => a.pcNumber.localeCompare(b.pcNumber, undefined, { numeric: true }));
-
-      if (targets.length === 0) {
-        alert('មិនមានទិន្នន័យត្រឹមត្រូវសម្រាប់បង្កើត USB Sync ទេ។');
-        return;
-      }
-
+      if (isLoading || !activeYear) throw new Error('សូមរង់ចាំទិន្នន័យផ្ទុករួចសិន។');
+      if (!syncSettings.syncToken.trim() || /[\r\n]/.test(syncSettings.syncToken)) throw new Error('សូមកំណត់ Sync Token មិនទទេ និងមានតែមួយបន្ទាត់។');
+      const currentRoster = rosterStudents.map(student => allStudents.find(active => active.id === student.id) || student);
+      const plan = buildSyncPlan(currentRoster, pendingTasks, { selectedClass, selectedDesk, searchQuery }, mode, selectedStudentIds, syncSettings.autoDelete);
+      const { targets } = plan;
+      if (!targets.length) throw new Error('មិនមានទិន្នន័យក្នុង Filter នេះសម្រាប់ Sync ទេ។');
+      const accountCount = targets.reduce((total, target) => total + target.accounts.length, 0);
+      const removeCount = targets.reduce((total, target) => total + target.removeStudentIds.length, 0);
+      const summary = 'គណនី: ' + accountCount + ' | លុប: ' + removeCount + ' | PC: ' + targets.map(target => target.pcNumber).join(', ');
       const payload = {
-        version: 3,
-        payloadId: crypto.randomUUID(),
-        labId: syncSettings.labId,
-        academicYear: activeYear,
-        generatedAt: new Date().toISOString(),
-        mode: isTargetedSync ? 'DELTA' : 'FULL',
-        deleteMissingUsers: !isTargetedSync && syncSettings.autoDelete,
-        targets,
+        version: 3, payloadId: crypto.randomUUID(), labId: syncSettings.labId,
+        academicYear: activeYear, generatedAt: new Date().toISOString(),
+        mode: plan.mode, deleteMissingUsers: plan.deleteMissingUsers, targets,
       };
 
       const syncScript = getGlobalSyncScript(
@@ -476,61 +367,28 @@ const PcSync = () => {
       if (isDownloadOnly || !('showDirectoryPicker' in window)) {
         downloadTextFile(syncScript, 'GlobalSync.ps1');
         downloadTextFile(getSyncRunnerScript(), '2_Sync_PC_Now.cmd');
-        if (scopedTasks.length > 0) {
-          const db = await initDB();
-          for (const task of scopedTasks) {
-            await db.delete('pcSyncTasks', task.id);
-          }
-          setPendingTasks(prev => prev.filter(t => !scopedTasks.find(s => s.id === t.id)));
-        }
-        alert(
-          (isTargetedSync 
-            ? `ទាញយកឯកសារ Sync សម្រាប់សិស្ស ${accountStudents.length} នាក់ជោគជ័យ!\n\n` 
-            : `ទាញយកឯកសារ Sync គ្រប់ថ្នាក់ទាំងអស់ (${accountStudents.length} នាក់) ជោគជ័យ!\n\n`) +
-          '• សូមចម្លង GlobalSync.ps1 ដាក់ក្នុង Folder "ICTLabSync" លើ USB\n' +
-          '• សូមចម្លង 2_Sync_PC_Now.cmd ដាក់នៅខាងក្រៅ USB (Root) ដើម្បីងាយស្រួល Double-click មើលដំណើរការលើ PC!'
-        );
+        alert(summary + '\n\nសូមដាក់ GlobalSync.ps1 ក្នុង ICTLabSync និង 2_Sync_PC_Now.cmd នៅ USB Root។ Pending រក្សាទុករហូតអ្នកនាំចូលលទ្ធផលពី PC។');
         return;
       }
 
       // 1. Pick USB Root Directory
       const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+      if (dirHandle.name === 'ICTLabSync') throw new Error('សូមជ្រើស USB Root នៅខាងក្រៅ Folder ICTLabSync ដើម្បីសរសេរ File ទាំងពីរ។');
       
       // 2. Write File directly to ICTLabSync folder
-      let folderHandle = dirHandle;
-      if (dirHandle.name !== 'ICTLabSync') {
-        folderHandle = await dirHandle.getDirectoryHandle('ICTLabSync', { create: true });
-      }
+      const folderHandle = await dirHandle.getDirectoryHandle('ICTLabSync', { create: true });
       const fileHandle = await folderHandle.getFileHandle('GlobalSync.ps1', { create: true });
       const writable = await fileHandle.createWritable();
       await writable.write('\uFEFF' + syncScript);
       await writable.close();
 
       // 3. Write 2_Sync_PC_Now.cmd to USB root
-      if (dirHandle.name !== 'ICTLabSync') {
-        try {
-          const runnerHandle = await dirHandle.getFileHandle('2_Sync_PC_Now.cmd', { create: true });
-          const runnerWritable = await runnerHandle.createWritable();
-          await runnerWritable.write(getSyncRunnerScript());
-          await runnerWritable.close();
-        } catch (runnerErr) {
-          console.warn('Could not write 2_Sync_PC_Now.cmd to USB root:', runnerErr);
-        }
-      }
+      const runnerHandle = await dirHandle.getFileHandle('2_Sync_PC_Now.cmd', { create: true });
+      const runnerWritable = await runnerHandle.createWritable();
+      await runnerWritable.write(getSyncRunnerScript());
+      await runnerWritable.close();
 
-      // 4. Clear pending tasks
-      if (scopedTasks.length > 0) {
-        const db = await initDB();
-        for (const task of scopedTasks) {
-          await db.delete('pcSyncTasks', task.id);
-        }
-        setPendingTasks(prev => prev.filter(t => !scopedTasks.find(s => s.id === t.id)));
-      }
-
-      const summarySuccess = isTargetedSync
-        ? `បញ្ជូនទិន្នន័យចូល USB ដោយជោគជ័យ! (សិស្ស ${accountStudents.length} នាក់ លើកុំព្យូទ័រ ${targets.map(t => t.pcNumber).join(', ')})`
-        : `បញ្ជូនទិន្នន័យសិស្សគ្រប់ថ្នាក់ (${accountStudents.length} នាក់) ចូល USB ដោយជោគជ័យ!`;
-      alert(summarySuccess);
+      alert('បានសរសេរ USB រួច៖ ' + summary + '\nPending រក្សាទុករហូតអ្នកនាំចូលលទ្ធផលពី PC។');
     } catch (error: any) {
       if (error.name === 'AbortError') return;
       console.error('USB preparation failed:', error);
@@ -562,8 +420,8 @@ const PcSync = () => {
   };
 
   const handleGenerateMissingPasswords = async () => {
-    if (missingPasswordStudents.length === 0) return;
-    if (!window.confirm(`បង្កើត Password ស្វ័យប្រវត្តិសម្រាប់សិស្សទាំង ${missingPasswordStudents.length} នាក់?`)) return;
+    if (scopedMissingPasswords.length === 0) return;
+    if (!window.confirm(`បង្កើត Password ស្វ័យប្រវត្តិសម្រាប់សិស្សទាំង ${scopedMissingPasswords.length} នាក់?`)) return;
 
     try {
       setIsProcessing(true);
@@ -571,7 +429,7 @@ const PcSync = () => {
       const existing = new Set(allStudents.map(student => student.password).filter(Boolean));
       const updates: Student[] = [];
 
-      for (const student of missingPasswordStudents) {
+      for (const student of scopedMissingPasswords) {
         let password = '';
         let attempts = 0;
         do {
@@ -598,6 +456,26 @@ const PcSync = () => {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const importSyncReceipts = async (files: File[]) => {
+    setIsProcessing(true);
+    try {
+      if (!activeYear) return;
+      const db = await initDB();
+      const currentTasks = await db.getAll('pcSyncTasks', activeYear);
+      const completed = new Set<string>();
+      for (const file of files) {
+        const receipt = JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
+        receiptTaskIds(receipt, currentTasks, syncSettings.labId, activeYear).forEach(id => completed.add(id));
+      }
+      for (const id of completed) await db.delete('pcSyncTasks', id);
+      await fetchData();
+      alert('បានបញ្ជាក់ Pending ដែល Sync ជោគជ័យ៖ ' + completed.size);
+    } catch (error) {
+      await fetchData();
+      alert('មិនអាចនាំចូលលទ្ធផលបាន៖ ' + (error instanceof Error ? error.message : String(error)));
+    } finally { setIsProcessing(false); }
   };
 
   return (
@@ -755,11 +633,11 @@ const PcSync = () => {
                   Sync ទិន្នន័យចូល USB
                 </h2>
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold border border-emerald-200 font-khmer">
-                  <CheckCircle2 size={12} /> {allStudents.length - notReadyStudentIds.size} នាក់រួចរាល់
+                  <CheckCircle2 size={12} /> {selectableVisibleStudents.length} នាក់រួចរាល់ក្នុង Filter
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-khmer mt-0.5">
-                ទាញយកទិន្នន័យគណនីសិស្សទាំងអស់ដាក់ក្នុង USB សម្រាប់ធ្វើបច្ចុប្បន្នភាពលើកុំព្យូទ័រ
+                Sync តាម Filter ថ្នាក់ តុ និងការស្វែងរកខាងក្រោម។ ការជ្រើសថ្នាក់/សិស្សរក្សាគណនីផ្សេងលើ PC ដដែល។
               </p>
             </div>
           </div>
@@ -768,21 +646,21 @@ const PcSync = () => {
             <button
               type="button"
               onClick={() => handlePrepareSyncUsb('FULL', false)}
-              disabled={isProcessing}
+              disabled={isProcessing || isLoading}
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition active:scale-[0.98] disabled:opacity-50 cursor-pointer font-khmer"
             >
               <Usb size={16} />
               <span>
                 {isProcessing 
                   ? 'កំពុងដំណើរការ...' 
-                  : `ទាញយកដាក់ USB (${allStudents.filter(s => !!normalizePcNumber(s.pcNumber)).length} នាក់)`}
+                  : `ទាញយកដាក់ USB (${scopedAssignedCount} នាក់)`}
               </span>
             </button>
 
             <button
               type="button"
               onClick={() => handlePrepareSyncUsb('FULL', true)}
-              disabled={isProcessing}
+              disabled={isProcessing || isLoading}
               className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold text-xs shadow-xs transition active:scale-[0.98] disabled:opacity-50 cursor-pointer font-khmer"
               title="ទាញយក file GlobalSync.ps1 & 2_Sync_PC_Now.cmd សម្រាប់ចម្លងដោយដៃ"
             >
@@ -836,10 +714,10 @@ const PcSync = () => {
             <div>
               <div className="flex items-center gap-2 text-rose-700 font-bold text-sm mb-1 font-khmer">
                 <ShieldAlert size={18} />
-                <span>Factory Reset ម៉ាស៊ីន</span>
+                <span>Reset ប្រព័ន្ធម៉ាស៊ីន (Clean System)</span>
               </div>
               <p className="text-xs text-rose-700/80 font-khmer">
-                ដក Scheduled Tasks និងគណនីសិស្សទាំងអស់ចេញពី PC វិញ
+                សម្អាត Files, Services និងគណនីសិស្សចេញពី System ទាំងអស់ (រក្សាបម្រាមហ្គេមទុកជាអចិន្ត្រៃយ៍)
               </p>
             </div>
 
@@ -869,15 +747,15 @@ const PcSync = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            {missingPasswordStudents.length > 0 && (
+            {scopedMissingPasswords.length > 0 && (
               <button
                 type="button"
                 onClick={handleGenerateMissingPasswords}
-                disabled={isProcessing}
+                disabled={isProcessing || isLoading}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold transition cursor-pointer font-khmer disabled:opacity-50"
               >
                 <Key size={13} />
-                <span>បង្កើត Password ស្វ័យប្រវត្តិ ({missingPasswordStudents.length})</span>
+                <span>បង្កើត Password ស្វ័យប្រវត្តិ ({scopedMissingPasswords.length})</span>
               </button>
             )}
             <button
@@ -950,6 +828,16 @@ const PcSync = () => {
           </div>
         </div>
 
+        <div className="px-5 py-3 text-xs font-khmer text-slate-600 bg-blue-50 flex flex-wrap items-center gap-3">
+          <span>CRUD ក្នុង Filter៖ {scopedAssignedCount} នាក់។ Pending មិនត្រូវបានលុបនៅពេលទាញយកទេ។</span>
+          {selectedClass !== 'ALL' && <span>បញ្ជាលុបសិស្សដែលលុបចេញពីបញ្ជីរួច ហើយគ្មានព័ត៌មានថ្នាក់ ត្រូវប្រើ Filter តុ + គ្រប់ថ្នាក់។</span>}
+          <label className="cursor-pointer text-blue-700 font-bold">
+            នាំចូលលទ្ធផលពី USB / ICTLabSync / Receipts
+            <input type="file" accept=".json" multiple className="hidden" disabled={isProcessing || isLoading}
+              onChange={event => { const files = Array.from(event.target.files || []); event.target.value = ''; if (files.length) void importSyncReceipts(files); }} />
+          </label>
+        </div>
+
         {/* Multi-select Action Bar */}
         {selectedStudentIds.size > 0 && (
           <div className="px-5 py-2.5 bg-blue-50/90 border-b border-blue-100 flex items-center justify-between">
@@ -959,6 +847,7 @@ const PcSync = () => {
             <button
               type="button"
               onClick={() => handlePrepareSyncUsb('SELECTED')}
+              disabled={isProcessing || isLoading}
               className="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition shadow-xs cursor-pointer font-khmer"
             >
               Sync តែសិស្សដែលបានជ្រើស ({selectedStudentIds.size})
@@ -1186,7 +1075,7 @@ const PcSync = () => {
                       លុបគណនីសិស្សដែលឈប់ដោយស្វ័យប្រវត្តិ
                     </span>
                     <span className="block text-[11px] text-slate-500 font-khmer mt-0.5">
-                      លុបតែគណនីសិស្សដែលលែងមានឈ្មោះក្នុងប្រព័ន្ធប៉ុណ្ណោះ។
+                      អនុវត្តតែពេលជ្រើសគ្រប់ថ្នាក់ និងគ្មានការស្វែងរក លើតុដែលបានជ្រើស។ Filter ថ្នាក់/សិស្សមិនលុបគណនីផ្សេងនៅលើ PC ទេ។
                     </span>
                   </div>
                 </label>
@@ -1210,4 +1099,3 @@ const PcSync = () => {
 };
 
 export default PcSync;
-

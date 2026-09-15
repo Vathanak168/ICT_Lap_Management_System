@@ -14,8 +14,8 @@ import {
   AlertCircle,
   FileText
 } from 'lucide-react';
-import { initDB } from '../store/db';
-import type { PCIssue } from '../store/db';
+import { initDB, isPcIssueActive, queuePcSyncTask } from '../store/db';
+import type { PCIssue, Student } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import './PCIssues.css';
 
@@ -98,9 +98,9 @@ const PCIssues = () => {
 
   // Counts for Metric Cards & Filter Tabs
   const totalCount = issues.length;
-  const issueCount = useMemo(() => issues.filter(i => i.status === 'Issue' || i.status === 'Broken').length, [issues]);
+  const issueCount = useMemo(() => issues.filter(i => isPcIssueActive(i.status) && i.status !== 'Repairing').length, [issues]);
   const repairingCount = useMemo(() => issues.filter(i => i.status === 'Repairing').length, [issues]);
-  const resolvedCount = useMemo(() => issues.filter(i => i.status === 'Good' || i.status === 'Resolved').length, [issues]);
+  const resolvedCount = useMemo(() => issues.filter(i => !isPcIssueActive(i.status)).length, [issues]);
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
@@ -123,7 +123,7 @@ const PCIssues = () => {
       const db = await initDB();
       const formattedPcNumber = currentIssue.pcNumber!.trim().toUpperCase();
       const dateFoundStr = currentIssue.reportedDate || currentIssue.dateFound || getLocalDate();
-      const isResolved = currentIssue.status === 'Good';
+      const isResolved = currentIssue.status === 'Good' || currentIssue.status === 'Resolved';
       const resolvedDateStr = isResolved
         ? (currentIssue.resolvedDate || currentIssue.dateResolved || getLocalDate())
         : undefined;
@@ -145,6 +145,29 @@ const PCIssues = () => {
       };
 
       await db.put('pcIssues', issueToSave);
+
+      // Lab-wide auto-unassign: if PC has an active issue, unassign students sitting on this PC across all classes
+      if (isPcIssueActive(issueToSave.status)) {
+        try {
+          const allStudents = await db.getAll('students', targetYear);
+          const affectedStudents = allStudents.filter((s: Student) => s.pcNumber === formattedPcNumber);
+          if (affectedStudents.length > 0) {
+            const studentUpdates: Student[] = [];
+            const syncPromises: Promise<any>[] = [];
+            for (const s of affectedStudents) {
+              syncPromises.push(queuePcSyncTask(db, s, formattedPcNumber, 'REMOVE', targetYear));
+              studentUpdates.push({ ...s, pcNumber: null as any });
+            }
+            await Promise.all([
+              db.putMany('students', studentUpdates),
+              ...syncPromises
+            ]);
+          }
+        } catch (unassignErr) {
+          console.warn('Failed to auto-unassign students on broken PC:', unassignErr);
+        }
+      }
+
       window.dispatchEvent(new CustomEvent('appDataChanged'));
       
       setShowModal(false);
