@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Monitor, UserMinus, Key, Zap, RefreshCw, AlertTriangle, MonitorPlay, Eye, EyeOff, Printer, Trash2, CheckCircle2, Keyboard, AlertCircle, Grid, RotateCw, RotateCcw, HelpCircle } from 'lucide-react';
 import { initDB, isPcIssueActive, queuePcSyncTask } from '../store/db';
 import type { Student, ClassRecord, PCIssue, SeatingPlan as SeatingPlanType } from '../store/db';
@@ -121,6 +122,8 @@ const SeatingPlan = () => {
   const { language } = useLanguage();
   const { activeYear } = useAcademicYear();
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const urlClassId = searchParams.get('classId');
   
   const loadClassRequestRef = useRef(0);
   const loadDataRequestRef = useRef(0);
@@ -143,9 +146,12 @@ const SeatingPlan = () => {
         if (requestId !== loadClassRequestRef.current) return;
         result.sort((a, b) => compareKhmer(a.name, b.name));
         setClasses(result);
-        setSelectedClass(previous =>
-          result.some(item => item.id === previous) ? previous : result[0]?.id ?? ''
-        );
+        setSelectedClass(previous => {
+          if (urlClassId && result.some(item => item.id === urlClassId)) {
+            return urlClassId;
+          }
+          return result.some(item => item.id === previous) ? previous : result[0]?.id ?? '';
+        });
       } catch (error) {
         if (requestId === loadClassRequestRef.current) {
           console.error('Failed to load classes:', error);
@@ -154,7 +160,13 @@ const SeatingPlan = () => {
     };
 
     void loadClasses();
-  }, [activeYear]);
+  }, [activeYear, urlClassId]);
+
+  useEffect(() => {
+    if (urlClassId && classes.some(c => c.id === urlClassId)) {
+      setSelectedClass(urlClassId);
+    }
+  }, [urlClassId, classes]);
 
   const loadData = async (targetYear: string, targetClass: string, targetShift: string, isForceReload: boolean = false) => {
     if (!targetYear || !targetClass || !targetShift) return;
@@ -173,15 +185,10 @@ const SeatingPlan = () => {
 
       if (requestId !== loadDataRequestRef.current) return;
 
-      // Incoming shift-switching students attending this class
-      const incomingShiftStudents = allYearStudents.filter(
-        s => s.alternateClassId === targetClass && s.isShiftSwitching && s.class !== targetClass && s.status !== 'Inactive'
+      // Active class students currently attending this class
+      const activeStudents = allYearStudents.filter(
+        s => s.class === targetClass && s.status !== 'Inactive'
       );
-      // Active class students (excluding those who switched out to another class)
-      const activeClassStudents = allYearStudents.filter(
-        s => s.class === targetClass && s.status !== 'Inactive' && !(s.isShiftSwitching && s.alternateClassId && s.alternateClassId !== targetClass)
-      );
-      const activeStudents = [...activeClassStudents, ...incomingShiftStudents];
       const shift = targetShift;
       
       let plan = planRows.find(p => p.shift === shift && p.academicYear === targetYear);
@@ -1229,13 +1236,10 @@ const SeatingPlan = () => {
       const db = await initDB();
       const student = getStudentForDesk(studentId);
       
-      // Check seat conflicts against all students attending this class (including shift switching)
+      // Check seat conflicts against all active students attending this class
       const allStudents = await db.getAll('students', currentYear);
       const attendingStudents = allStudents.filter(s =>
-        s.status !== 'Inactive' && (
-          (s.class === currentClass && !(s.isShiftSwitching && s.alternateClassId && s.alternateClassId !== currentClass)) ||
-          (s.alternateClassId === currentClass && s.isShiftSwitching && s.class !== currentClass)
-        )
+        s.status !== 'Inactive' && s.class === currentClass
       );
       const conflict = attendingStudents.find(
         s => s.id !== studentId && s.pcNumber === selectedDesk.pcNumber

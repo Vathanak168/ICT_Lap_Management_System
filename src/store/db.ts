@@ -872,23 +872,35 @@ const parseScores = (
   value: unknown,
   label: string,
   storeName?: string,
-): Record<string, Record<string, number>> => {
+): Record<string, Record<string, number | string | null>> => {
   const students = asRecord(value, label, storeName);
-  const result: Record<string, Record<string, number>> = {};
+  const result: Record<string, Record<string, number | string | null>> = {};
 
   for (const [studentId, subjectValue] of Object.entries(students)) {
     const subjects = asRecord(subjectValue, `${label}.${studentId}`, storeName);
-    const parsedSubjects: Record<string, number> = {};
+    const parsedSubjects: Record<string, number | string | null> = {};
 
-    for (const [subject, score] of Object.entries(subjects)) {
-      if (typeof score !== 'number' || !Number.isFinite(score)) {
+    for (const [key, itemValue] of Object.entries(subjects)) {
+      if (itemValue === null || itemValue === undefined) {
+        parsedSubjects[key] = null;
+      } else if (typeof itemValue === 'number') {
+        if (!Number.isFinite(itemValue)) {
+          return failValidation(
+            `${label}.${studentId}.${key} must be a finite number.`,
+            'validate',
+            storeName,
+          );
+        }
+        parsedSubjects[key] = itemValue;
+      } else if (typeof itemValue === 'string') {
+        parsedSubjects[key] = itemValue.trim();
+      } else {
         return failValidation(
-          `${label}.${studentId}.${subject} must be a finite number.`,
+          `${label}.${studentId}.${key} must be a number, string, or null.`,
           'validate',
           storeName,
         );
       }
-      parsedSubjects[subject] = score;
     }
 
     result[studentId] = parsedSubjects;

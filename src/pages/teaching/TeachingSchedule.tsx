@@ -5,11 +5,11 @@ import {
   Building2,
   CalendarDays,
   CheckCircle2,
-  ChevronDown,
   Loader2,
   Printer,
   Trash2,
   Users,
+  Plus,
 } from 'lucide-react';
 import { initDB } from '../../store/db';
 import type {
@@ -49,18 +49,32 @@ const DAYS = [
 ];
 
 const SHIFT_OPTIONS: Array<{ value: Shift; label: string }> = [
-  { value: 'Morning', label: 'ព្រឹក' },
-  { value: 'Afternoon', label: 'រសៀល' },
-  { value: 'Evening', label: 'យប់' },
+  { value: 'Morning', label: 'វេនព្រឹក' },
+  { value: 'Afternoon', label: 'វេនរសៀល' },
+  { value: 'Evening', label: 'វេនយប់' },
 ];
 
-// These periods follow the timetable supplied by the user.
-const PERIODS: SchedulePeriod[] = [
-  { startTime: '07:30', endTime: '08:20', label: '7:30-8:20' },
-  { startTime: '08:20', endTime: '09:20', label: '8:20-9:20' },
-  { startTime: '09:30', endTime: '10:20', label: '9:30-10:20' },
-  { startTime: '10:20', endTime: '11:00', label: '10:20-11:00' },
-];
+// Dynamic timetable periods according to shift
+const SHIFT_PERIODS: Record<Shift, SchedulePeriod[]> = {
+  Morning: [
+    { startTime: '07:30', endTime: '08:20', label: '7:30-8:20' },
+    { startTime: '08:20', endTime: '09:20', label: '8:20-9:20' },
+    { startTime: '09:30', endTime: '10:20', label: '9:30-10:20' },
+    { startTime: '10:20', endTime: '11:00', label: '10:20-11:00' },
+  ],
+  Afternoon: [
+    { startTime: '13:00', endTime: '13:50', label: '1:00-1:50' },
+    { startTime: '13:50', endTime: '14:50', label: '1:50-2:50' },
+    { startTime: '15:00', endTime: '15:50', label: '3:00-3:50' },
+    { startTime: '15:50', endTime: '16:30', label: '3:50-4:30' },
+  ],
+  Evening: [
+    { startTime: '17:30', endTime: '18:20', label: '5:30-6:20' },
+    { startTime: '18:20', endTime: '19:10', label: '6:20-7:10' },
+    { startTime: '19:20', endTime: '20:10', label: '7:20-8:10' },
+    { startTime: '20:10', endTime: '21:00', label: '8:10-9:00' },
+  ],
+};
 
 const normalizeTime = (value: string) => value.slice(0, 5);
 
@@ -103,6 +117,8 @@ const TeachingSchedule = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const periods = useMemo(() => SHIFT_PERIODS[selectedShift] || SHIFT_PERIODS.Morning, [selectedShift]);
 
   const loadData = useCallback(async () => {
     if (!activeYear || !user?.id) return;
@@ -241,6 +257,23 @@ const TeachingSchedule = () => {
     setIsSaving(true);
     try {
       const db = await initDB();
+
+      // Check if this class is already linked to this subject in classCurriculums.
+      // If not, auto-link it seamlessly so the teacher is never blocked!
+      const isAssigned = assignments.some(
+        a => a.classId === editor.classId && a.subjectId === editor.subjectId
+      );
+      if (!isAssigned) {
+        const newAssign: ClassCurriculumRecord = {
+          id: crypto.randomUUID(),
+          classId: editor.classId,
+          subjectId: editor.subjectId,
+          startDate: new Date().toISOString(),
+          academicYear: activeYear,
+        };
+        await db.add('classCurriculums', newAssign);
+      }
+
       const record: TeachingScheduleRecord = {
         id: editor.existingId ?? crypto.randomUUID(),
         teacherId: user.id,
@@ -279,10 +312,25 @@ const TeachingSchedule = () => {
     }
   };
 
+  const handleQuickDelete = async (e: React.MouseEvent, scheduleId: string) => {
+    e.stopPropagation();
+    if (!window.confirm('តើអ្នកពិតជាចង់លុបម៉ោងនេះចេញពីកាលវិភាគមែនទេ?')) return;
+    setIsSaving(true);
+    try {
+      const db = await initDB();
+      await db.delete('teachingSchedules', scheduleId);
+      await loadData();
+    } catch (err) {
+      console.error('Failed to quick delete schedule slot:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   if (!activeYear) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-        <CalendarDays size={48} className="mb-4 opacity-50" />
+        <CalendarDays size={48} className="mb-4 opacity-50 text-blue-500" />
         <p className="text-lg font-medium text-gray-600">សូមជ្រើសរើសឆ្នាំសិក្សាជាមុនសិន</p>
       </div>
     );
@@ -290,64 +338,83 @@ const TeachingSchedule = () => {
 
   return (
     <div className="teaching-schedule-page">
+      {/* Page Header */}
       <div className="schedule-page-header">
         <div>
           <h1>
             <CalendarDays size={25} />
-            កាលវិភាគបង្រៀន
-            <span>(Teaching Schedule)</span>
+            <span>កាលវិភាគបង្រៀន</span>
+            <span className="subtitle-latin">(Teaching Schedule)</span>
           </h1>
-          <p>ជ្រើសប្រអប់ថ្ងៃ និងម៉ោង រួចជ្រើសថ្នាក់រៀន—មុខវិជ្ជានឹងទាញតាមថ្នាក់ដោយស្វ័យប្រវត្តិ។</p>
+          <p>ជ្រើសរើសវេនសិក្សា រួចចុចលើក្រឡាថ្ងៃ និងម៉ោង ដើម្បីកំណត់ ឬកែប្រែថ្នាក់បង្រៀន។</p>
         </div>
+
         <div className="schedule-header-actions">
-          <div className="schedule-shift-select-wrap">
-            <select
-              className="schedule-shift-select"
-              value={selectedShift}
-              aria-label="ជ្រើសវេនសិក្សា"
-              onChange={event => {
-                setSelectedShift(event.target.value as Shift);
-                setEditor(null);
-              }}
-            >
-              {SHIFT_OPTIONS.map(option => {
-                const classCount = classes.filter(classItem => classItem.shift === option.value).length;
-                return (
-                  <option key={option.value} value={option.value}>
-                    {option.label} ({classCount})
-                  </option>
-                );
-              })}
-            </select>
-            <ChevronDown size={16} aria-hidden="true" />
+          {/* Elegant Shift Switcher */}
+          <div className="schedule-shift-pills" role="tablist">
+            {SHIFT_OPTIONS.map(option => {
+              const classCount = classes.filter(classItem => classItem.shift === option.value).length;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedShift === option.value}
+                  className={`shift-pill-btn ${selectedShift === option.value ? 'active' : ''}`}
+                  onClick={() => {
+                    setSelectedShift(option.value);
+                    setEditor(null);
+                  }}
+                >
+                  <span>{option.label}</span>
+                  <span className="count-pill">{classCount}</span>
+                </button>
+              );
+            })}
           </div>
+
           <button type="button" className="schedule-print-button" onClick={() => window.print()}>
-            <Printer size={17} /> បោះពុម្ព
+            <Printer size={16} />
+            <span>បោះពុម្ព</span>
           </button>
         </div>
       </div>
 
+      {/* Summary KPI Cards */}
       <div className="schedule-summary-grid">
         <div className="schedule-summary-card">
-          <Building2 size={20} />
-          <div><span>សាខា</span><strong>{formatBranch(branch)}</strong></div>
+          <Building2 size={20} className="kpi-icon blue" />
+          <div>
+            <span>សាខា</span>
+            <strong>{formatBranch(branch)}</strong>
+          </div>
         </div>
         <div className="schedule-summary-card">
-          <Users size={20} />
-          <div><span>ថ្នាក់រៀន {shiftLabel(selectedShift)}</span><strong>{shiftClasses.length} ថ្នាក់</strong></div>
+          <Users size={20} className="kpi-icon indigo" />
+          <div>
+            <span>ថ្នាក់រៀន {shiftLabel(selectedShift)}</span>
+            <strong>{shiftClasses.length} ថ្នាក់</strong>
+          </div>
         </div>
         <div className="schedule-summary-card">
-          <BookOpen size={20} />
-          <div><span>មុខវិជ្ជាដែលបានភ្ជាប់</span><strong>{shiftAssignments.length} ការភ្ជាប់</strong></div>
+          <BookOpen size={20} className="kpi-icon amber" />
+          <div>
+            <span>មុខវិជ្ជាដែលបានភ្ជាប់</span>
+            <strong>{shiftAssignments.length} ការភ្ជាប់</strong>
+          </div>
         </div>
         <div className="schedule-summary-card">
-          <CheckCircle2 size={20} />
-          <div><span>ម៉ោងដែលបានរៀបចំ</span><strong>{shiftSchedule.length} ម៉ោង</strong></div>
+          <CheckCircle2 size={20} className="kpi-icon emerald" />
+          <div>
+            <span>ម៉ោងដែលបានរៀបចំ</span>
+            <strong>{shiftSchedule.length} ម៉ោង</strong>
+          </div>
         </div>
       </div>
 
       {loadError && <div className="schedule-alert">{loadError}</div>}
 
+      {/* Official Beltei Timetable Sheet */}
       <section className="schedule-sheet">
         <div className="schedule-school-brand">
           <img
@@ -364,7 +431,7 @@ const TeachingSchedule = () => {
 
         {isLoading ? (
           <div className="schedule-loading">
-            <Loader2 size={30} className="animate-spin" />
+            <Loader2 size={32} className="animate-spin text-blue-600" />
             <span>កំពុងទាញទិន្នន័យកាលវិភាគ...</span>
           </div>
         ) : (
@@ -377,31 +444,46 @@ const TeachingSchedule = () => {
                 </tr>
               </thead>
               <tbody>
-                {PERIODS.map(period => (
+                {periods.map(period => (
                   <tr key={period.label}>
-                    <th className="schedule-period-label">{period.label}</th>
+                    <th className="schedule-period-label">
+                      <span className="period-time-range">{period.label}</span>
+                    </th>
                     {DAYS.map(day => {
                       const item = scheduleBySlot.get(slotKey(day.value, period.startTime, period.endTime));
                       const classItem = item ? classById.get(item.classId) : null;
                       const subject = item ? subjectById.get(item.subjectId) : null;
+
                       return (
                         <td key={day.value}>
                           <button
                             type="button"
-                            className={`schedule-cell ${item ? 'has-entry' : ''}`}
+                            className={`schedule-cell ${item ? 'has-entry' : 'is-empty'}`}
                             onClick={() => openEditor(day.value, period)}
-                            disabled={Boolean(loadError)}
-                            aria-label={`${item ? 'កែ' : 'ជ្រើស'} ថ្ងៃ${day.label} ម៉ោង ${period.label}`}
+                            disabled={Boolean(loadError) || isSaving}
+                            aria-label={`${item ? 'កែ' : 'បន្ថែម'} ថ្ងៃ${day.label} ម៉ោង ${period.label}`}
                           >
-                            {item && (
-                              <>
+                            {item ? (
+                              <div className="cell-entry-box">
                                 <span className="schedule-cell-class" style={{ color: subject?.color || '#002a5c' }}>
                                   {classItem ? formatClassName(classItem.name) : 'ថ្នាក់មិនស្គាល់'}
                                 </span>
                                 <span className="schedule-cell-subject" style={{ color: subject?.color || '#2a5298' }}>
                                   {subject?.name || 'មុខវិជ្ជាមិនស្គាល់'}
                                 </span>
-                              </>
+                                <span
+                                  className="quick-cell-delete"
+                                  onClick={(e) => void handleQuickDelete(e, item.id)}
+                                  title="លុបម៉ោងនេះចេញ"
+                                >
+                                  ✕
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="cell-empty-placeholder">
+                                <Plus size={14} className="cell-plus-icon" />
+                                <span className="cell-add-text">បន្ថែម</span>
+                              </div>
                             )}
                           </button>
                         </td>
@@ -419,88 +501,119 @@ const TeachingSchedule = () => {
             {classes.length === 0
               ? 'មិនទាន់មានទិន្នន័យថ្នាក់សម្រាប់ឆ្នាំសិក្សានេះទេ។ '
               : `មិនទាន់មានទិន្នន័យថ្នាក់${shiftLabel(selectedShift)}សម្រាប់ឆ្នាំសិក្សានេះទេ។ `}
-            <Link to="/classes">បង្កើតថ្នាក់រៀន</Link>
+            <Link to="/classes">បង្កើតថ្នាក់រៀនថ្មី</Link>
           </div>
         )}
       </section>
 
+      {/* Streamlined Slot Editor Modal */}
       <Modal
         isOpen={Boolean(editor)}
         onClose={() => { if (!isSaving) setEditor(null); }}
-        title={editor?.existingId ? 'កែម៉ោងបង្រៀន' : 'បន្ថែមម៉ោងបង្រៀន'}
+        title={editor?.existingId ? 'កែសម្រួលម៉ោងបង្រៀន' : 'កំណត់ម៉ោងបង្រៀនថ្មី'}
       >
         {editor && (
-          <div className="schedule-editor">
+          <div className="schedule-editor-body">
+            {/* Context Header */}
             <div className="schedule-editor-context">
-              <div><span>ថ្ងៃ</span><strong>{DAYS.find(day => day.value === editor.dayOfWeek)?.label}</strong></div>
-              <div><span>ម៉ោង</span><strong>{editor.period.label}</strong></div>
-              <div><span>វេន</span><strong>{shiftLabel(selectedShift)}</strong></div>
-              <div><span>សាខា</span><strong>{formatBranch(branch)}</strong></div>
+              <div className="context-item">
+                <span>ថ្ងៃសិក្សា</span>
+                <strong>{DAYS.find(day => day.value === editor.dayOfWeek)?.label}</strong>
+              </div>
+              <div className="context-item">
+                <span>ម៉ោងសិក្សា</span>
+                <strong>{editor.period.label}</strong>
+              </div>
+              <div className="context-item">
+                <span>វេន</span>
+                <strong>{shiftLabel(selectedShift)}</strong>
+              </div>
+              <div className="context-item">
+                <span>សាខា</span>
+                <strong>{formatBranch(branch)}</strong>
+              </div>
             </div>
 
+            {/* Class Selector */}
             <label className="schedule-field">
-              <span>ថ្នាក់រៀន</span>
-              <select value={editor.classId} onChange={event => selectClass(event.target.value)} disabled={isSaving}>
-                <option value="">-- ជ្រើសថ្នាក់ --</option>
+              <span className="field-label">ជ្រើសរើសថ្នាក់រៀន <span className="required-star">*</span></span>
+              <select
+                value={editor.classId}
+                onChange={event => selectClass(event.target.value)}
+                disabled={isSaving}
+                className="schedule-select-control"
+              >
+                <option value="">-- ជ្រើសរើសថ្នាក់រៀន --</option>
                 {shiftClasses.map(classItem => (
                   <option key={classItem.id} value={classItem.id}>
                     {formatClassName(classItem.name)}
                   </option>
                 ))}
               </select>
-              <small>បញ្ជីនេះទាញ Auto តែថ្នាក់{shiftLabel(selectedShift)} ក្នុងឆ្នាំសិក្សាបច្ចុប្បន្ន។</small>
+              <small className="field-hint">បង្ហាញតែថ្នាក់ក្នុង{shiftLabel(selectedShift)} សម្រាប់ឆ្នាំសិក្សានេះ។</small>
             </label>
 
-            {editor.classId && selectedClassSubjects.length === 0 && (
-              <div className="schedule-subject-warning">
-                ថ្នាក់នេះមិនទាន់ភ្ជាប់មុខវិជ្ជាទេ។ សូមចូលទៅ <Link to="/teaching/curriculum">កម្មវិធីមេរៀន → Assign ថ្នាក់</Link> ជាមុនសិន។
-              </div>
-            )}
-
-            {editor.classId && selectedClassSubjects.length === 1 && (
-              <div className="schedule-auto-subject">
-                <span>មុខវិជ្ជា</span>
-                <strong style={{ color: selectedClassSubjects[0].color }}>
-                  {selectedClassSubjects[0].name}
-                </strong>
-              </div>
-            )}
-
-            {editor.classId && selectedClassSubjects.length > 1 && (
+            {/* Subject Selector (Non-blocking: auto-links if not yet linked!) */}
+            {editor.classId && (
               <label className="schedule-field">
-                <span>មុខវិជ្ជា</span>
+                <span className="field-label">
+                  ជ្រើសរើសមុខវិជ្ជា <span className="required-star">*</span>
+                </span>
                 <select
                   value={editor.subjectId}
                   onChange={event => setEditor({ ...editor, subjectId: event.target.value })}
                   disabled={isSaving}
+                  className="schedule-select-control"
                 >
-                  <option value="">-- ជ្រើសមុខវិជ្ជា --</option>
-                  {selectedClassSubjects.map(subject => (
-                    <option key={subject.id} value={subject.id}>{subject.name}</option>
+                  <option value="">-- ជ្រើសរើសមុខវិជ្ជា --</option>
+                  {(selectedClassSubjects.length > 0 ? selectedClassSubjects : subjects).map(subject => (
+                    <option key={subject.id} value={subject.id}>
+                      {subject.name}
+                    </option>
                   ))}
                 </select>
-                <small>បង្ហាញតែមុខវិជ្ជាដែលបាន Assign ទៅថ្នាក់នេះប៉ុណ្ណោះ។</small>
+
+                {selectedClassSubjects.length === 0 ? (
+                  <small className="field-hint text-blue-600 font-medium">
+                    ✨ ថ្នាក់នេះមិនទាន់ភ្ជាប់មុខវិជ្ជាទេ ប្រព័ន្ធនឹងភ្ជាប់មុខវិជ្ជានេះទៅថ្នាក់ដោយស្វ័យប្រវត្តិ។
+                  </small>
+                ) : (
+                  <small className="field-hint">មុខវិជ្ជាដែលបានកំណត់សម្រាប់ថ្នាក់នេះ។</small>
+                )}
               </label>
             )}
 
+            {/* Modal Actions */}
             <div className="schedule-editor-actions">
-              {editor.existingId && (
-                <button type="button" className="schedule-delete-button" onClick={() => void deleteSlot()} disabled={isSaving}>
-                  <Trash2 size={16} /> លុបម៉ោងនេះ
+              {editor.existingId ? (
+                <button
+                  type="button"
+                  className="schedule-delete-btn"
+                  onClick={() => void deleteSlot()}
+                  disabled={isSaving}
+                >
+                  <Trash2 size={16} />
+                  <span>លុបម៉ោងនេះ</span>
                 </button>
-              )}
-              <div className="schedule-editor-actions-right">
-                <button type="button" className="schedule-cancel-button" onClick={() => setEditor(null)} disabled={isSaving}>
+              ) : <div />}
+
+              <div className="actions-right-group">
+                <button
+                  type="button"
+                  className="schedule-cancel-btn"
+                  onClick={() => setEditor(null)}
+                  disabled={isSaving}
+                >
                   បោះបង់
                 </button>
                 <button
                   type="button"
-                  className="schedule-save-button"
+                  className="schedule-save-btn"
                   onClick={() => void saveSlot()}
                   disabled={isSaving || !editor.classId || !editor.subjectId}
                 >
                   {isSaving && <Loader2 size={16} className="animate-spin" />}
-                  {isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុក'}
+                  <span>{isSaving ? 'កំពុងរក្សាទុក...' : 'រក្សាទុកកាលវិភាគ'}</span>
                 </button>
               </div>
             </div>

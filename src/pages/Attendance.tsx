@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { 
   Save, 
   Calendar, 
@@ -98,6 +99,8 @@ const CAMBODIAN_MONTHS = [
 const Attendance = () => {
   const { language } = useLanguage();
   const { activeYear } = useAcademicYear();
+  const [searchParams] = useSearchParams();
+  const urlClassId = searchParams.get('classId');
 
   // Top navigation: DAILY or SUMMARY (Completely detached, static position)
   const [activeTab, setActiveTab] = useState<'DAILY' | 'SUMMARY'>('DAILY');
@@ -188,6 +191,9 @@ const Attendance = () => {
         setClasses(allClasses);
         if (allClasses.length > 0) {
           setSelectedClass(prev => {
+            if (urlClassId && allClasses.some(c => c.id === urlClassId)) {
+              return urlClassId;
+            }
             const currentClassExists = allClasses.some(c => c.id === prev);
             return currentClassExists ? prev : allClasses[0].id;
           });
@@ -200,7 +206,13 @@ const Attendance = () => {
     };
     
     void loadClasses();
-  }, [activeYear]);
+  }, [activeYear, urlClassId]);
+
+  useEffect(() => {
+    if (urlClassId && classes.some(c => c.id === urlClassId)) {
+      setSelectedClass(urlClassId);
+    }
+  }, [urlClassId, classes]);
 
   // Load students, daily attendance, and daily "no book" data
   useEffect(() => {
@@ -235,18 +247,13 @@ const Attendance = () => {
         // Keep all related students for Summary View
         setAllStudents(allYearStudents.filter(s => s.class === selectedClass || s.alternateClassId === selectedClass));
 
-        // Find incoming shift-switching students to this class
-        const incomingShiftStudents = allYearStudents.filter(
-          s => s.alternateClassId === selectedClass && s.isShiftSwitching && s.class !== selectedClass && s.status !== 'Inactive'
-        );
-
-        // Active students of this class
+        // Active students currently attending this class
         const activeClassStudents = classStudents.filter(s => s.status !== 'Inactive');
         
-        // Combined student list for attendance
-        const combinedStudents = [...activeClassStudents, ...incomingShiftStudents];
-        combinedStudents.sort(compareStudentsByKhmerName);
-        setStudents(combinedStudents);
+        // Student list for attendance
+        const classAttendanceStudents = [...activeClassStudents];
+        classAttendanceStudents.sort(compareStudentsByKhmerName);
+        setStudents(classAttendanceStudents);
         
         // Attendance records
         if (record) {
@@ -514,7 +521,7 @@ const Attendance = () => {
         'កាលបរិច្ឆេទ': formatDateDisplay(selectedDate),
         'ស្ថានភាពវត្តមាន': statusText,
         'ស្ថានភាពសៀវភៅ': hasNoBook ? 'គ្មានសៀវភៅ' : 'មានសៀវភៅ',
-        'ចំណាំប្តូរវេន': s.isShiftSwitching ? (s.alternateClassId === selectedClass ? 'សិស្សប្តូរវេនចូល' : 'សិស្សសុំប្តូរវេន') : ''
+        'ចំណាំប្តូរវេន': s.isShiftSwitching ? `សិស្សប្តូរវេន (ថ្នាក់បម្រុង៖ ${classes.find(c => c.id === s.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'})` : ''
       };
     });
 
@@ -1453,10 +1460,7 @@ const Attendance = () => {
                               </span>
                               {student.isShiftSwitching && (
                                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                  {student.class === selectedClass 
-                                    ? `ប្តូរវេនទៅ ${classes.find(c => c.id === student.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'}`
-                                    : `ប្តូរវេនពី ${classes.find(c => c.id === student.class)?.name || 'ថ្នាក់ដើម'}`
-                                  }
+                                  {`សិស្សប្តូរវេន (ថ្នាក់បម្រុង៖ ${classes.find(c => c.id === student.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'})`}
                                 </span>
                               )}
                             </div>

@@ -33,8 +33,23 @@ const Gradebook = () => {
   
   const { language, toggleLanguage } = useLanguage();
   const { activeYear } = useAcademicYear();
-  const { user } = useAuth();
+  const { user, branch, role } = useAuth();
   const [isTranslating, setIsTranslating] = useState(false);
+  
+  const branchDisplayName = branch 
+    ? (branch.startsWith('BELTEI') ? branch : `សាលាប៊ែលធីអន្តរជាតិទី ${branch}`)
+    : 'សាលាប៊ែលធីអន្តរជាតិ';
+
+  const confirmDiscardChanges = () => {
+    if (hasChanges) {
+      return window.confirm(
+        language === 'KH'
+          ? 'អ្នកមានទិន្នន័យពិន្ទុមិនទាន់រក្សាទុក! តើអ្នកពិតជាចង់ផ្លាស់ប្តូរដោយមិនរក្សាទុកមែនទេ?'
+          : 'You have unsaved grade changes! Are you sure you want to discard them?'
+      );
+    }
+    return true;
+  };
   
   const loadClassRequestRef = useRef(0);
   const loadDataRequestRef = useRef(0);
@@ -62,21 +77,43 @@ const Gradebook = () => {
   const [bankNote, setBankNote] = useState('');
 
   const calculateRanks = (rows: StudentRow[]): StudentRow[] => {
-    // Shallow clone to sort independently
-    const sorted = rows.map(r => ({ ...r })).sort((a, b) => {
-      if (b.total !== a.total) return b.total - a.total;
-      return (b.exam || 0) - (a.exam || 0);
-    });
-
-    for (let i = 0; i < sorted.length; i++) {
-      if (i > 0 && sorted[i].total === sorted[i-1].total && sorted[i].exam === sorted[i-1].exam) {
-        sorted[i].rank = sorted[i-1].rank;
-      } else {
-        sorted[i].rank = i + 1;
-      }
+    // Group rows by class so each class has its own isolated ranking 1, 2, 3...
+    const byClass: Record<string, StudentRow[]> = {};
+    for (const row of rows) {
+      if (!byClass[row.class]) byClass[row.class] = [];
+      byClass[row.class].push({ ...row });
     }
 
-    return sorted.sort(compareStudentsByKhmerName);
+    const allRanked: StudentRow[] = [];
+
+    for (const classRows of Object.values(byClass)) {
+      // Separate students who have at least one score entered from un-graded students
+      const graded = classRows.filter(r => r.practice !== null || r.book !== null || r.exam !== null);
+      const ungraded = classRows.filter(r => r.practice === null && r.book === null && r.exam === null);
+
+      // Sort graded students by total descending, then exam descending
+      graded.sort((a, b) => {
+        if (b.total !== a.total) return b.total - a.total;
+        return (b.exam || 0) - (a.exam || 0);
+      });
+
+      for (let i = 0; i < graded.length; i++) {
+        if (i > 0 && graded[i].total === graded[i - 1].total && graded[i].exam === graded[i - 1].exam) {
+          graded[i].rank = graded[i - 1].rank;
+        } else {
+          graded[i].rank = i + 1;
+        }
+      }
+
+      // Ungraded students have rank 0 (no rank badge)
+      for (const u of ungraded) {
+        u.rank = 0;
+      }
+
+      allRanked.push(...graded, ...ungraded);
+    }
+
+    return allRanked.sort(compareStudentsByKhmerName);
   };
 
   const recalculateRow = (s: StudentRow, config: { practice: number, book: number, exam: number }): StudentRow => {
@@ -103,15 +140,22 @@ const Gradebook = () => {
        }
     }
     
-    updated.adjustment = autoAdj === 0 ? null : autoAdj;
-    updated.pointsBalance = updated.effectiveBank - autoAdj;
-    if (autoAdj !== 0 && (!updated.adjustmentNote || updated.adjustmentNote === 'ទាញពីស្តុក')) {
-       // @ts-ignore - pointsNote exists on Student
-       updated.adjustmentNote = updated.pointsNote ? `ទាញពីស្តុក៖ ${updated.pointsNote}` : 'ទាញពីស្តុក';
-    } else if (autoAdj === 0 && updated.adjustmentNote.includes('ទាញពីស្តុក')) {
-       updated.adjustmentNote = '';
+    // If an effective bank balance exists, recalculate autoAdj and update pointsBalance
+    if (updated.effectiveBank !== 0 || autoAdj !== 0) {
+      updated.adjustment = autoAdj === 0 ? null : autoAdj;
+      updated.pointsBalance = updated.effectiveBank - autoAdj;
+      if (autoAdj !== 0 && (!updated.adjustmentNote || updated.adjustmentNote === 'ទាញពីស្តុក')) {
+         // @ts-ignore - pointsNote exists on Student
+         updated.adjustmentNote = updated.pointsNote ? `ទាញពីស្តុក៖ ${updated.pointsNote}` : 'ទាញពីស្តុក';
+      } else if (autoAdj === 0 && updated.adjustmentNote.includes('ទាញពីស្តុក')) {
+         updated.adjustmentNote = '';
+      }
+    } else {
+      // Preserve any existing manually saved adjustment if bank is 0
+      autoAdj = updated.adjustment || 0;
     }
-    updated.total = Math.min(currentMax, Math.max(0, rawBase + autoAdj));
+
+    updated.total = hasAnyScore ? Math.min(currentMax, Math.max(0, rawBase + autoAdj)) : 0;
     return updated;
   };
 
@@ -225,26 +269,30 @@ const Gradebook = () => {
           const adjustment = sScores.adjustment ?? null;
           const adjustmentNote = sScores.adjustmentNote ?? '';
           
-          
           const practice = sScores.practice ?? null;
           const book = sScores.book ?? null;
           const exam = sScores.exam ?? null;
           
-            const row: StudentRow = {
-              ...s,
-              practice,
-              book,
-              exam,
-              adjustment,
-              adjustmentNote,
-              pointsBalance: s.pointsBalance || 0,
-              originalPointsBalance: s.pointsBalance || 0,
-              effectiveBank: s.pointsBalance || 0,
-              total: 0,
-              rank: 0
-            };
-            return recalculateRow(row, gradeConfig);
-          });
+          const savedAdj = typeof adjustment === 'number' ? adjustment : 0;
+          const currentBank = s.pointsBalance || 0;
+          // Available bank for this month = current unallocated balance + previously applied adjustment
+          const effectiveBank = currentBank + savedAdj;
+
+          const row: StudentRow = {
+            ...s,
+            practice,
+            book,
+            exam,
+            adjustment,
+            adjustmentNote,
+            pointsBalance: currentBank,
+            originalPointsBalance: currentBank,
+            effectiveBank,
+            total: 0,
+            rank: 0
+          };
+          return recalculateRow(row, gradeConfig);
+        });
         
         setAllScopeStudents(calculateRanks(rows));
         setHasChanges(false);
@@ -333,15 +381,20 @@ const Gradebook = () => {
 
       const classIdsToSave = Object.keys(scoresByClass);
 
-      // Fetch the latest grades from the database to perform a client-side JSON merge
-      const latestGrades = await Promise.all(
-        classIdsToSave.map(cid => 
-          db.get('grades', `${targetYear}-${cid}-${currentMonth}-${currentGradeType}`)
-        )
+      // Fetch existing grade records for each class being saved using class_id index
+      const existingGrades = await Promise.all(
+        classIdsToSave.map(async cid => {
+          try {
+            const records = await db.getAllFromIndex('grades', 'class_id', cid, targetYear);
+            return records.find(g => g.month === currentMonth && g.type === currentGradeType) || null;
+          } catch {
+            return null;
+          }
+        })
       );
 
       const recordsToSave: GradeRecord[] = classIdsToSave.map((cid, index) => {
-        const existingRecord = latestGrades[index];
+        const existingRecord = existingGrades[index];
         const existingScores = existingRecord?.scores || {};
         const newScoresForClass = scoresByClass[cid];
         
@@ -349,12 +402,12 @@ const Gradebook = () => {
         const mergedScores = { ...existingScores, ...newScoresForClass };
         
         return {
-          id: `${targetYear}-${cid}-${currentMonth}-${currentGradeType}`, 
+          id: existingRecord?.id || crypto.randomUUID(), 
           classId: cid,
-          shift: classes.find(c => c.id === cid)?.shift || 'Morning',
+          shift: classes.find(c => c.id === cid)?.shift || existingRecord?.shift || 'Morning',
           academicYear: targetYear,
           month: currentMonth,
-          type: currentGradeType as 'Final',
+          type: 'Monthly',
           scores: mergedScores as any
         };
       });
@@ -387,18 +440,24 @@ const Gradebook = () => {
   };
 
   const handleSaveBank = async () => {
-    if (!bankStudentId || !bankPoints) return;
+    if (!bankStudentId || !bankPoints.trim()) return;
+    const addedPoints = Number(bankPoints.trim());
+    if (!Number.isFinite(addedPoints)) {
+      alert(language === 'KH' ? 'សូមបញ្ចូលចំនួនពិន្ទុជាលេខត្រឹមត្រូវ!' : 'Please enter a valid numeric points value!');
+      return;
+    }
+
     try {
       setIsSaving(true);
       const db = await initDB();
       const student = allScopeStudents.find(s => s.id === bankStudentId);
       if (!student) return;
       
-      const newBalance = (student.pointsBalance || 0) + Number(bankPoints);
+      const newBalance = Math.round(((student.pointsBalance || 0) + addedPoints) * 10) / 10;
       
       await db.update('students', student.id, { 
         pointsBalance: newBalance,
-        pointsNote: bankNote
+        pointsNote: bankNote.trim()
       });
       
       setShowBankModal(false);
@@ -433,6 +492,11 @@ const Gradebook = () => {
   };
 
   const handleSaveConfig = async () => {
+    if (role !== 'admin') {
+      alert(language === 'KH' ? 'មានតែគណនី Admin ប៉ុណ្ណោះដែលអាចកែប្រែការកំណត់ពិន្ទុរួមរបស់សាលាបាន!' : 'Only Admin accounts can modify school-wide grade configuration!');
+      return;
+    }
+
     const sum = (tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0);
     if (sum !== 50) {
       alert(language === 'KH' ? 'ពិន្ទុសរុបអតិបរមាត្រូវតែស្មើ ៥០ គត់!' : 'Total max score must be exactly 50!');
@@ -459,10 +523,17 @@ const Gradebook = () => {
   };
 
   const displayedStudents = allScopeStudents.filter(s => s.class === (selectedClass || classes[0]?.id));
-  const gradedStudentsCount = displayedStudents.filter(s => s.total > 0 || s.practice !== null || s.book !== null || s.exam !== null).length;
-  const averageScore = displayedStudents.length > 0 
-    ? (displayedStudents.reduce((acc, s) => acc + (s.total || 0), 0) / (displayedStudents.length || 1)).toFixed(1)
+  const gradedStudents = displayedStudents.filter(s => s.practice !== null || s.book !== null || s.exam !== null);
+  const gradedStudentsCount = gradedStudents.length;
+  const averageScore = gradedStudentsCount > 0 
+    ? (gradedStudents.reduce((acc, s) => acc + (s.total || 0), 0) / gradedStudentsCount).toFixed(1)
     : '0';
+
+  const visibleColumnCount = 3
+    + (showPractice && gradeConfig.practice > 0 ? 1 : 0)
+    + (showBook && gradeConfig.book > 0 ? 1 : 0)
+    + (showExam && gradeConfig.exam > 0 ? 1 : 0)
+    + 2;
 
   return (
     <>
@@ -562,7 +633,12 @@ const Gradebook = () => {
               <select 
                 className="w-full bg-background border border-border text-main-text text-sm rounded-xl px-3 py-2 font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all cursor-pointer shadow-2xs disabled:opacity-50"
                 value={selectedClass}
-                onChange={(e) => setSelectedClass(e.target.value)}
+                onChange={(e) => {
+                  if (confirmDiscardChanges()) {
+                    setSelectedClass(e.target.value);
+                    setHasChanges(false);
+                  }
+                }}
                 disabled={isLoading || isSaving}
               >
                 {classes.map(c => (
@@ -581,7 +657,12 @@ const Gradebook = () => {
               <select 
                 className="w-full bg-background border border-border text-main-text text-sm rounded-xl px-3 py-2 font-medium outline-hidden focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all cursor-pointer shadow-2xs disabled:opacity-50"
                 value={currentMonth}
-                onChange={(e) => setCurrentMonth(e.target.value)}
+                onChange={(e) => {
+                  if (confirmDiscardChanges()) {
+                    setCurrentMonth(e.target.value);
+                    setHasChanges(false);
+                  }
+                }}
                 disabled={isLoading || isSaving}
               >
                 {MONTHS.map(m => (
@@ -620,8 +701,20 @@ const Gradebook = () => {
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2 self-end xl:self-center">
-            {/* Language / Translate Button */}
-            {displayedStudents.some(s => !s.englishName) ? (
+            {/* Always available Language Toggle */}
+            <button 
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
+              onClick={toggleLanguage}
+              disabled={isLoading || displayedStudents.length === 0}
+              title={language === 'KH' ? 'បង្ហាញជាភាសាអង់គ្លេស' : 'Show in Khmer'}
+            >
+              <Languages size={14} />
+              <span>{language === 'KH' ? 'ប្តូរភាសា' : 'Language'}</span>
+            </button>
+
+            {/* Translate Button if any student lacks English name */}
+            {displayedStudents.some(s => !s.englishName) && (
               <button 
                 type="button"
                 className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
@@ -660,16 +753,6 @@ const Gradebook = () => {
               >
                 <Globe size={14} />
                 <span>{isTranslating ? 'កំពុងបកប្រែ...' : 'Translate'}</span>
-              </button>
-            ) : (
-              <button 
-                type="button"
-                className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
-                onClick={toggleLanguage}
-                disabled={isLoading || displayedStudents.length === 0}
-              >
-                <Languages size={14} />
-                <span>{language === 'KH' ? 'ប្តូរភាសា' : 'Language'}</span>
               </button>
             )}
 
@@ -742,7 +825,7 @@ const Gradebook = () => {
               
               <div className="flex justify-between items-start mb-4">
                 <div className="flex flex-col gap-1.5 font-bold italic text-[15px] w-[250px]" style={{ fontFamily: '"Khmer OS Battambang", "Noto Sans Khmer", sans-serif' }}>
-                  <div>សាលាប៊ែលធីអន្តរជាតិទី ២៥</div>
+                  <div>{branchDisplayName}</div>
                   <div>ថ្នាក់ទី៖ <span className="font-bold italic">{selectedClass ? classes.find(c => c.id === selectedClass)?.name : ''}</span></div>
                   <div>មុខវិជ្ជា៖ <span className="font-bold italic">កុំព្យូទ័រ</span></div>
                   <div>ឈ្មោះគ្រូ៖ <span className="font-bold italic">{user?.user_metadata?.full_name || 'គ្មានឈ្មោះ'}</span></div>
@@ -816,9 +899,11 @@ const Gradebook = () => {
                         min="0" max={gradeConfig.exam}
                       />
                     </td>}
-                    <td className="border-b border-r border-border print:border-black px-2 py-1.5 text-center font-khmer print:py-1 font-medium print:text-base text-xs sm:text-sm">{student.total}</td>
+                    <td className="border-b border-r border-border print:border-black px-2 py-1.5 text-center font-khmer print:py-1 font-medium print:text-base text-xs sm:text-sm">
+                      {student.rank > 0 ? student.total : ''}
+                    </td>
                     <td className="border-b border-r border-border print:border-black px-2 py-1.5 text-center font-khmer font-bold text-primary print:text-black print:py-1 print:text-base text-xs sm:text-sm">
-                      {student.total > 0 ? (
+                      {student.rank > 0 ? (
                         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/5 text-primary print:bg-transparent">
                           {student.rank}
                         </span>
@@ -828,11 +913,29 @@ const Gradebook = () => {
                 ))}
                 {displayedStudents.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="text-center py-10 text-secondary-text border-b border-border">មិនមានសិស្សទេ</td>
+                    <td colSpan={visibleColumnCount} className="text-center py-10 text-secondary-text border-b border-border">មិនមានសិស្សទេ</td>
                   </tr>
                 )}
               </tbody>
             </table>
+
+            {/* Official Print Signatures Block */}
+            <div className="hidden print:flex justify-between items-start mt-8 px-8 text-[14px] font-khmer text-black print:break-inside-avoid">
+              <div className="flex flex-col items-center gap-1 w-64 text-center">
+                <div className="font-bold">បានឃើញ និងឯកភាព</div>
+                <div className="font-semibold text-[13px]">ប្រធានសាខា / ការិយាល័យសិក្សា</div>
+                <div className="h-20"></div>
+                <div className="border-b border-dotted border-black w-44"></div>
+              </div>
+              <div className="flex flex-col items-center gap-1 w-64 text-center">
+                <div className="italic text-[13px]">
+                  ថ្ងៃ................ទី........ខែ............ឆ្នាំ.............
+                </div>
+                <div className="font-bold">ហត្ថលេខាគ្រូបង្រៀន</div>
+                <div className="h-20"></div>
+                <div className="font-bold">{user?.user_metadata?.full_name || '...........................................'}</div>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1000,6 +1103,11 @@ const Gradebook = () => {
               <div className="text-xs text-secondary-text leading-relaxed font-khmer bg-background p-3 rounded-xl border border-border/60">
                 កំណត់ពិន្ទុអតិបរមា សម្រាប់មុខវិជ្ជានីមួយៗ។ ប្រសិនបើដាក់ ០ ជួរឈរនោះនឹងត្រូវលាក់។
               </div>
+              {role !== 'admin' && (
+                <div className="text-[11px] text-amber-700 bg-amber-50 p-2.5 rounded-xl border border-amber-200/80 font-khmer">
+                  ចំណាំ៖ ការកំណត់នេះជាទិន្នន័យរួមរបស់សាលា។ មានតែគណនី Admin ទើបអាចរក្សាទុកបាន។
+                </div>
+              )}
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-bold text-secondary-text">ពិន្ទុលំហាត់អតិបរមា</label>
                 <input 

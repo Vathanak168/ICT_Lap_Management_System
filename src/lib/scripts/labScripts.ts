@@ -141,9 +141,6 @@ function Invoke-ICTAdminUsb {
 
         # Check for GlobalSync.ps1 in ICTLabSync folder or USB root
         $GlobalScriptName = "GlobalSync.ps1"
-        $UsbScriptPath = Join-Path "$DriveRoot\\" ("$SyncFolderName\\" + $GlobalScriptName)
-        if (-not (Test-Path -LiteralPath $UsbScriptPath -PathType Leaf)) {
-            $UsbScriptPath = Join-Path "$DriveRoot\\" $GlobalScriptName
         $UsbScriptPath = Join-Path "$DriveRoot\" ("$SyncFolderName\" + $GlobalScriptName)
         if (-not (Test-Path -LiteralPath $UsbScriptPath -PathType Leaf)) {
             $UsbScriptPath = Join-Path "$DriveRoot\" $GlobalScriptName
@@ -243,7 +240,7 @@ try {
 
     try {
         Register-CimIndicationEvent -Namespace "root/cimv2" \`
-            -Query "SELECT * FROM Win32_VolumeChangeEvent WHERE EventType = 2" \`
+            -Query "SELECT * FROM Win32_VolumeChangeEvent WHERE EventType = 2 OR EventType = 3" \`
             -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue | Out-Null
     } catch { }
 
@@ -253,9 +250,17 @@ try {
             $Event = Wait-Event -SourceIdentifier $SourceIdentifier -Timeout 2 -ErrorAction SilentlyContinue
             if ($null -ne $Event) {
                 try {
+                    $EvType = [int]$Event.SourceEventArgs.NewEvent.EventType
                     $DriveName = [string]$Event.SourceEventArgs.NewEvent.DriveName
                     if (-not ([string]::IsNullOrWhiteSpace($DriveName))) {
-                        Invoke-ICTAdminUsb -DriveName $DriveName
+                        $DriveClean = $DriveName.TrimEnd("\\")
+                        if ($EvType -eq 3) {
+                            $CompletedScripts.Remove($DriveClean)
+                            $LastExecution.Remove($DriveClean)
+                            Write-ICTLog "USB $DriveClean disconnect event detected. Ready for next insertion."
+                        } elseif ($EvType -eq 2) {
+                            Invoke-ICTAdminUsb -DriveName $DriveName
+                        }
                     }
                 } finally {
                     Remove-Event -EventIdentifier $Event.EventIdentifier -ErrorAction SilentlyContinue
@@ -269,6 +274,18 @@ try {
                 Get-CimInstance -ClassName Win32_LogicalDisk -ErrorAction SilentlyContinue |
                     Where-Object { Test-ICTUsbVolume -Volume $_ }
             )
+
+            # Clean up tracking for any drives that have been unplugged/removed
+            $ActiveDriveLetters = @($MountedUsbDrives | ForEach-Object { [string]$_.DeviceID })
+            $TrackedDrives = @($CompletedScripts.Keys) + @($LastExecution.Keys) | Select-Object -Unique
+            foreach ($Td in $TrackedDrives) {
+                if ($ActiveDriveLetters -notcontains $Td) {
+                    $CompletedScripts.Remove($Td)
+                    $LastExecution.Remove($Td)
+                    Write-ICTLog "USB $Td disconnected. Cache cleared for next insertion."
+                }
+            }
+
             foreach ($MountedUsb in $MountedUsbDrives) {
                 if (-not [string]::IsNullOrWhiteSpace([string]$MountedUsb.DeviceID)) {
                     Invoke-ICTAdminUsb -DriveName ([string]$MountedUsb.DeviceID)
@@ -464,7 +481,7 @@ if ([string]::IsNullOrWhiteSpace($PcNumber)) {
         # Fallback 1: Check if installer is running directly from a drive containing ICTLabSync
         $LauncherPkgDir = if ($null -ne $env:ICTLAB_PACKAGE_DIR) { [string]$env:ICTLAB_PACKAGE_DIR.TrimEnd('\\') } else { '' }
         if (-not [string]::IsNullOrWhiteSpace($LauncherPkgDir)) {
-            $CandidateFromLauncher = Join-Path $LauncherPkgDir "ICTLabSync"
+            $CandidateFromLauncher = if ((Split-Path -Leaf $LauncherPkgDir) -ieq "ICTLabSync") { $LauncherPkgDir } else { Join-Path $LauncherPkgDir "ICTLabSync" }
             if (Test-Path -LiteralPath $CandidateFromLauncher -PathType Container) {
                 $LauncherDriveLetter = if ($LauncherPkgDir.Length -ge 2 -and $LauncherPkgDir[1] -eq ':') { $LauncherPkgDir.Substring(0, 2) } else { $LauncherPkgDir }
                 $LauncherLogical = $LogicalDrives | Where-Object { [string]::Equals([string]$_.DeviceID, $LauncherDriveLetter, [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
@@ -484,10 +501,10 @@ if ([string]::IsNullOrWhiteSpace($PcNumber)) {
     }
 
     if ($UsbCandidates.Count -eq 0) {
-        # Fallback 2: Check any logical/removable drive containing ICTLabSync folder regardless of volume label
+        # Fallback 2: Check any logical/removable drive containing ICTLabSync folder regardless of volume label (excluding system OS drive)
         foreach ($LogicalDrive in $LogicalDrives) {
             $DeviceId = ([string]$LogicalDrive.DeviceID).Trim()
-            if ($DeviceId -notmatch '^[A-Za-z]:$') { continue }
+            if ($DeviceId -notmatch '^[A-Za-z]:$' -or [string]::Equals($DeviceId, [string]$env:SystemDrive, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
             $CandidateDirectory = Join-Path $DeviceId "ICTLabSync"
             if (Test-Path -LiteralPath $CandidateDirectory -PathType Container) {
                 $UsbCandidates += [pscustomobject]@{
@@ -874,10 +891,11 @@ try {
 
 try {
     $LogonTaskName = "ICTLab Student Policy Logon"
-    Unregister-ScheduledTask -TaskName $LogonTaskName -ErrorAction SilentlyContinue | Out-Null
-    $LogonAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File \`"$LogonScriptPath\`""
+    Unregister-ScheduledTask -TaskName $LogonTaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    $LogonPowerShellExe = Join-Path $env:SystemRoot "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    $LogonAction = New-ScheduledTaskAction -Execute $LogonPowerShellExe -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \`"$LogonScriptPath\`""
     $LogonTrigger = New-ScheduledTaskTrigger -AtLogOn
-    $LogonPrincipal = New-ScheduledTaskPrincipal -GroupId "Builtin\\Users" -RunLevel Limited
+    $LogonPrincipal = New-ScheduledTaskPrincipal -GroupId "S-1-5-32-545" -RunLevel Limited
     Register-ScheduledTask -TaskName $LogonTaskName -Action $LogonAction -Trigger $LogonTrigger -Principal $LogonPrincipal -Force | Out-Null
 } catch {
     Write-Host "       Note: Scheduled task setup for student policy returned: $($_.Exception.Message)" -ForegroundColor DarkGray
@@ -1056,6 +1074,21 @@ try {
     Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*CandyCrush*" } | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
 } catch { }
 
+function Set-ICTRegistryDword {
+    param([string]$Path, [string]$Name, [int]$Value)
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            New-Item -Path $Path -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+        Set-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -Type DWord -Force -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        try {
+            $RegKey = $Path -replace '^HKLM:\\', 'HKLM\'
+            & reg.exe add $RegKey /v $Name /t REG_DWORD /d $Value /f *>$null
+        } catch { }
+    }
+}
+
 # 3. Restore Windows Sign-in Policy (from backup)
 Write-Host "[3/5] Restoring Windows Sign-in Policy..." -ForegroundColor Yellow
 $LoginPolicyBackupPath = "$ICTRoot\\Backup\\login-screen-policy.json"
@@ -1067,12 +1100,16 @@ if (Test-Path -LiteralPath $LoginPolicyBackupPath -PathType Leaf) {
             $Path = [string]$State.path
             $Name = [string]$State.name
             if ([bool]$State.exists) {
-                if (-not (Test-Path -LiteralPath $Path)) {
-                    New-Item -Path $Path -Force -ErrorAction SilentlyContinue | Out-Null
-                }
-                New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType DWord -Value ([int]$State.value) -Force -ErrorAction SilentlyContinue | Out-Null
+                Set-ICTRegistryDword -Path $Path -Name $Name -Value ([int]$State.value)
             } else {
-                Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction SilentlyContinue
+                try {
+                    Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction SilentlyContinue
+                } catch {
+                    try {
+                        $RegKey = $Path -replace '^HKLM:\\', 'HKLM\'
+                        & reg.exe delete $RegKey /v $Name /f *>$null
+                    } catch { }
+                }
             }
         }
         Write-Host "       Restored pre-install sign-in policy." -ForegroundColor Green
@@ -1080,6 +1117,14 @@ if (Test-Path -LiteralPath $LoginPolicyBackupPath -PathType Leaf) {
         Write-Host "       Note: Could not restore previous login policy: $($_.Exception.Message)" -ForegroundColor DarkYellow
     }
 }
+
+# Clear any leftover RemovableStorage restrictions from current admin session
+try {
+    $RemovableStoragePath = "HKCU:\\SOFTWARE\\Policies\\Microsoft\\Windows\\RemovableStorageDevices"
+    if (Test-Path -LiteralPath $RemovableStoragePath) {
+        Remove-ItemProperty -LiteralPath $RemovableStoragePath -Name "Deny_All" -Force -ErrorAction SilentlyContinue
+    }
+} catch { }
 
 $UserListRegistry = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList"
 
@@ -1269,10 +1314,11 @@ function Show-ICTSyncNotification {
                 "Warning" { 48 }
                 default { 64 }
             }
-            $EscTitle = $Title -replace '"', ''
-            $EscMsg = $Message -replace '"', ''
+            $EscTitle = ($Title -replace "['\`"\$]", " ").Trim()
+            $EscMsg = ($Message -replace "['\`"\$]", " ").Trim()
             $Code = 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show(\"' + $EscMsg + '\", \"' + $EscTitle + '\", 0, ' + $IconVal + ') | Out-Null'
-            $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -Command \`"$Code\`""
+            $NotifyPowerShellExe = Join-Path $env:SystemRoot "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+            $Action = New-ScheduledTaskAction -Execute $NotifyPowerShellExe -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -Command \`"$Code\`""
             $Principal = New-ScheduledTaskPrincipal -UserId $ActiveUser -LogonType Interactive
             Register-ScheduledTask -TaskName $NotifyTask -Action $Action -Principal $Principal -Force | Out-Null
             Start-ScheduledTask -TaskName $NotifyTask
@@ -1290,6 +1336,9 @@ if ([string]::IsNullOrWhiteSpace($UsbDrive)) {
             Select-Object -First 1
         if ($null -ne $Candidate) { $UsbDrive = [string]$Candidate.DeviceID }
     } catch { }
+}
+if (-not [string]::IsNullOrWhiteSpace($UsbDrive) -and $UsbDrive -match '^([A-Za-z]:)') {
+    $UsbDrive = $Matches[1]
 }
 
 function Normalize-ICTPcNumber {
@@ -1508,7 +1557,7 @@ foreach ($StudentIdToRemove in $RemoveStudentIds) {
             Write-SyncLog "Remove skipped because account does not exist: $RemoveId"
             $SkippedCount++
         } elseif (Test-ManagedUser -User $LocalUser) {
-            $UserSid = [string]$LocalUser.SID.Value
+            $UserSid = if ($null -ne $LocalUser.SID) { if ($LocalUser.SID -is [System.Security.Principal.SecurityIdentifier]) { $LocalUser.SID.Value } else { [string]$LocalUser.SID } } else { '' }
             Set-ICTLoginScreenUserVisibility -Username $RemoveId -Visible $false
             Remove-LocalUser -Name $RemoveId -ErrorAction Stop
             Remove-ICTUserProfile -Username $RemoveId -Sid $UserSid
@@ -1536,7 +1585,7 @@ if ($DeleteMissingUsers) {
             try {
                 $LocalUser = Get-LocalUser -Name $LocalUsername -ErrorAction SilentlyContinue
                 if (Test-ManagedUser -User $LocalUser) {
-                    $UserSid = [string]$LocalUser.SID.Value
+                    $UserSid = if ($null -ne $LocalUser.SID) { if ($LocalUser.SID -is [System.Security.Principal.SecurityIdentifier]) { $LocalUser.SID.Value } else { [string]$LocalUser.SID } } else { '' }
                     Set-ICTLoginScreenUserVisibility -Username $LocalUsername -Visible $false
                     Remove-LocalUser -Name $LocalUsername -ErrorAction Stop
                     Remove-ICTUserProfile -Username $LocalUsername -Sid $UserSid
@@ -1563,12 +1612,16 @@ function Ensure-ICTGroupMember {
     param($Group, [string]$Username)
     try {
         $LocalAccount = Get-LocalUser -Name $Username -ErrorAction Stop
-        Add-LocalGroupMember -Group $Group -Member $LocalAccount -ErrorAction SilentlyContinue
+        Add-LocalGroupMember -Group $Group -Member $LocalAccount -ErrorAction Stop
     } catch {
-        try {
-            $GroupNameStr = if ($Group -is [string]) { $Group } else { [string]$Group.Name }
-            & net.exe localgroup "$GroupNameStr" "$Username" /add *>$null
-        } catch { }
+        if ($_.CategoryInfo.Reason -eq 'MemberExists' -or $_.Exception.Message -like "*already a member*") {
+            return
+        }
+        $GroupNameStr = if ($Group -is [string]) { $Group } else { [string]$Group.Name }
+        $NetOutput = (& net.exe localgroup "$GroupNameStr" "$Username" /add 2>&1)
+        if ($LASTEXITCODE -ne 0 -and $NetOutput -notlike "*already a member*" -and $NetOutput -notlike "*ជាសមាជិករួចហើយ*") {
+            throw "Failed to add $Username to group $GroupNameStr : $NetOutput"
+        }
     }
 }
 
@@ -1818,7 +1871,8 @@ ${USB_LISTENER_SCRIPT}
     $StagePath = Join-Path $Stage "ManualSync.ps1"
     Set-Content -LiteralPath $StagePath -Value $SyncText -Encoding UTF8
     
-    & $PowerShellExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $StagePath -UsbDrive $PackageDir
+    $DriveRoot = if ($PackageDir -match '^([A-Za-z]:)') { $Matches[1] } else { $PackageDir }
+    & $PowerShellExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $StagePath -UsbDrive $DriveRoot
     $ExitCode = $LASTEXITCODE
     switch ($ExitCode) {
         0 { Write-Host "[SUCCESS] Accounts synchronized. Import USB/ICTLabSync/Receipts in PC Sync." -ForegroundColor Green }
