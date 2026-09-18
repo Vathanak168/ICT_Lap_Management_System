@@ -141,6 +141,7 @@ export const handleStudentAction = async (action: string, data: any, activeYear:
     if (!studentsToDelete || studentsToDelete.length === 0) throw new Error('រកមិនឃើញសិស្សនេះទេ');
     
     const studentToDelete = studentsToDelete[0];
+    const id = studentToDelete.id;
     
     // Add PC sync task if assigned
     if (studentToDelete.pcNumber) {
@@ -161,6 +162,50 @@ export const handleStudentAction = async (action: string, data: any, activeYear:
       } catch (err) {
         console.error('Failed to create pc sync task', err);
       }
+    }
+
+    // Cascade: clean attendance records
+    try {
+      const allAttendance = await db.getAll('attendance', targetYear);
+      for (const att of allAttendance) {
+        if (att.records && att.records[id] !== undefined) {
+          const { [id]: _, ...cleanRecords } = att.records;
+          await db.update('attendance', att.id, { records: cleanRecords });
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to clean attendance for deleted student:', err);
+    }
+
+    // Cascade: clean book tracking in settings
+    try {
+      const candidateClasses = [
+        studentToDelete.class,
+        studentToDelete.alternateClassId
+      ].filter(Boolean) as string[];
+
+      for (const cId of candidateClasses) {
+        const bookDocId = `attendance_books_${targetYear}_${cId}`;
+        const bookSetting = await db.get('settings', bookDocId);
+        if (bookSetting && bookSetting.config && typeof bookSetting.config === 'object') {
+          let modified = false;
+          const cleanConfig = { ...(bookSetting.config as Record<string, Record<string, boolean>>) };
+          for (const d of Object.keys(cleanConfig)) {
+            if (cleanConfig[d] && cleanConfig[d][id] !== undefined) {
+              delete cleanConfig[d][id];
+              modified = true;
+              if (Object.keys(cleanConfig[d]).length === 0) {
+                delete cleanConfig[d];
+              }
+            }
+          }
+          if (modified) {
+            await db.put('settings', { id: bookDocId, config: cleanConfig });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to clean book tracking for deleted student:', err);
     }
     
     await db.delete('students', studentToDelete.id);

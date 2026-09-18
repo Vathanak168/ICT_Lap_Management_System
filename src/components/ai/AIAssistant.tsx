@@ -54,7 +54,7 @@ const approvalMeta = (action: string) => {
     RECORD_TEACHING: 'កត់ត្រាការបង្រៀន', SET_TEACHING_SCHEDULE: 'រៀបចំកាលវិភាគ', DELETE_TEACHING_SCHEDULE: 'លុបម៉ោងក្នុងកាលវិភាគ',
     ADD_CLASS: 'បង្កើតថ្នាក់ថ្មី', UPDATE_CLASS: 'កែប្រែថ្នាក់', DELETE_CLASS: 'លុបថ្នាក់',
     ADD_STUDENT: 'បន្ថែមសិស្ស', UPDATE_STUDENT: 'កែប្រែសិស្ស', DELETE_STUDENT: 'លុបសិស្ស',
-    UPDATE_ATTENDANCE: 'កត់ត្រាវត្តមាន', UPDATE_GRADES: 'កែប្រែពិន្ទុ',
+    UPDATE_ATTENDANCE: 'កត់ត្រាវត្តមាន', UPDATE_BOOK_TRACKING: 'កត់ត្រាសៀវភៅ', UPDATE_GRADES: 'កែប្រែពិន្ទុ',
     ADD_PC_ISSUE: 'រាយការណ៍បញ្ហាកុំព្យូទ័រ', RESOLVE_PC_ISSUE: 'កត់ត្រាដំណោះស្រាយ',
     ADD_LESSON_PLAN: 'បន្ថែមផែនការបង្រៀន', UPDATE_LESSON_PLAN: 'កែផែនការបង្រៀន', DELETE_LESSON_PLAN: 'លុបផែនការបង្រៀន',
     ADD_LESSON_LOG: 'បន្ថែមកំណត់ត្រាបង្រៀន',
@@ -62,6 +62,7 @@ const approvalMeta = (action: string) => {
   if (action.includes('DELETE') || action.includes('UNASSIGN')) return { title: titles[action] || 'លុបចេញពីប្រព័ន្ធ', icon: Trash2, tone: 'red' };
   if (action === 'RECORD_TEACHING') return { title: titles[action], icon: Clock3, tone: 'indigo' };
   if (action.includes('SCHEDULE')) return { title: titles[action] || 'កែប្រែកាលវិភាគ', icon: CalendarDays, tone: 'purple' };
+  if (action.includes('BOOK')) return { title: titles[action] || 'កត់ត្រាសៀវភៅ', icon: BookOpen, tone: 'amber' };
   if (action.includes('LESSON') || action.includes('SUBJECT')) return { title: titles[action] || 'រៀបចំមេរៀន', icon: BookOpen, tone: 'blue' };
   if (action.includes('STUDENT')) return { title: titles[action] || 'ព័ត៌មានសិស្ស', icon: UserPlus, tone: 'blue' };
   if (action.includes('CLASS')) return { title: titles[action] || 'ព័ត៌មានថ្នាក់', icon: FileText, tone: 'green' };
@@ -678,12 +679,30 @@ ${successCount === actions.length ? '✅' : '⚠️'} បានយល់ព្�
         return (
           <div className="bg-white border border-teal-200 rounded-md overflow-hidden mb-3 shadow-sm">
             <div className="bg-teal-50 px-3 py-2 border-b border-teal-100 text-teal-700 font-bold flex items-center gap-2 text-sm">
-              <Check size={16} /> កត់ត្រាអវត្តមាន
+              <Check size={16} /> កត់ត្រាវត្តមាន
             </div>
             <div className="p-3 flex flex-col gap-1.5 text-sm">
               <div className="flex justify-between"><span className="text-gray-500">សិស្ស៖</span> <span className="font-bold text-teal-700">{d.studentId}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">ថ្ងៃទី៖</span> <span className="font-medium">{d.date}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">ស្ថានភាព៖</span> <span className="font-medium">{d.status === 'P' ? 'វត្តមាន' : d.status === 'A' ? 'អវត្តមាន' : d.status === 'L' ? 'ច្បាប់' : 'យឺត'}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ស្ថានភាព៖</span> <span className="font-medium">{d.status === 'P' ? 'វត្តមាន' : d.status === 'A' ? 'អវត្តមាន' : d.status === 'E' ? 'សុំច្បាប់' : 'មកយឺត'}</span></div>
+              {d.noBook !== undefined && (
+                <div className="flex justify-between"><span className="text-gray-500">សៀវភៅ៖</span> <span className="font-medium text-amber-600">{d.noBook ? 'គ្មានសៀវភៅ' : 'មានសៀវភៅ'}</span></div>
+              )}
+            </div>
+          </div>
+        );
+
+      case 'UPDATE_BOOK_TRACKING':
+        return (
+          <div className="bg-white border border-amber-200 rounded-md overflow-hidden mb-3 shadow-sm">
+            <div className="bg-amber-50 px-3 py-2 border-b border-amber-100 text-amber-700 font-bold flex items-center gap-2 text-sm">
+              <BookOpen size={16} /> កត់ត្រាសៀវភៅសិក្សា
+            </div>
+            <div className="p-3 flex flex-col gap-1.5 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">សិស្ស៖</span> <span className="font-bold text-amber-700">{d.studentId}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ថ្នាក់៖</span> <span className="font-medium">{d.classId}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ថ្ងៃទី៖</span> <span className="font-medium">{d.date}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">ស្ថានភាពសៀវភៅ៖</span> <span className="font-bold text-amber-600">{d.noBook ? 'គ្មានសៀវភៅ' : 'មានសៀវភៅ'}</span></div>
             </div>
           </div>
         );

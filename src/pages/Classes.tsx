@@ -258,6 +258,10 @@ const Classes = () => {
         if (planIds.length > 0) deletePromises.push(db.deleteMany('lessonPlans', planIds));
         if (scheduleIds.length > 0) deletePromises.push(db.deleteMany('teachingSchedules', scheduleIds));
         
+        // Clean up class attendance books tracking document in settings
+        const bookDocId = `attendance_books_${targetYear}_${classId}`;
+        deletePromises.push(db.delete('settings', bookDocId).catch(() => {}));
+        
         // Clean up linkedClassIds in other classes that reference this deleted class
         allClasses.forEach(c => {
           if (c.id !== classId && c.linkedClassIds?.includes(classId)) {

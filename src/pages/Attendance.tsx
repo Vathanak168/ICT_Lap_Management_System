@@ -81,6 +81,19 @@ const getWeekRange = (dateStr: string) => {
   };
 };
 
+const areRecordsEqual = (
+  a: Record<string, any>,
+  b: Record<string, any>
+): boolean => {
+  const keysA = Object.keys(a).filter(k => a[k] !== null && a[k] !== undefined && a[k] !== false);
+  const keysB = Object.keys(b).filter(k => b[k] !== null && b[k] !== undefined && b[k] !== false);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+};
+
 const CAMBODIAN_MONTHS = [
   { id: '10', name: 'តុលា (Oct)', short: 'តុលា', sem: 'SEM_1' },
   { id: '11', name: 'វិច្ឆិកា (Nov)', short: 'វិច្ឆិកា', sem: 'SEM_1' },
@@ -147,9 +160,10 @@ const Attendance = () => {
   const loadStudentsRequestRef = useRef(0);
   const loadSummaryRequestRef = useRef(0);
   
-  const hasChanges = 
-    JSON.stringify(attendanceData) !== JSON.stringify(initialAttendanceData) ||
-    JSON.stringify(noBookData) !== JSON.stringify(initialNoBookData);
+  const hasChanges = useMemo(() => {
+    return !areRecordsEqual(attendanceData, initialAttendanceData) ||
+           !areRecordsEqual(noBookData, initialNoBookData);
+  }, [attendanceData, initialAttendanceData, noBookData, initialNoBookData]);
 
   // Warn before leaving page or refreshing if there are unsaved changes
   useEffect(() => {
@@ -234,18 +248,22 @@ const Attendance = () => {
         const db = await initDB();
         const bookDocId = `attendance_books_${activeYear}_${selectedClass}`;
         
-        const [allYearStudents, record, bookSetting] = await Promise.all([
+        const [allYearStudents, classAttendance, bookSetting] = await Promise.all([
           db.getAll('students', activeYear),
-          db.get('attendance', `${activeYear}_${selectedClass}_${selectedDate}`),
+          db.getAllFromIndex('attendance', 'class_id', selectedClass, activeYear).catch(() => []),
           db.get('settings', bookDocId)
         ]);
 
         if (requestId !== loadStudentsRequestRef.current) return;
 
-        const classStudents = allYearStudents.filter(s => s.class === selectedClass);
+        // Include students registered in this class OR students who have switched shifts into this class
+        const classStudents = allYearStudents.filter(s => 
+          s.class === selectedClass || 
+          (s.alternateClassId === selectedClass && s.isShiftSwitching)
+        );
 
-        // Keep all related students for Summary View
-        setAllStudents(allYearStudents.filter(s => s.class === selectedClass || s.alternateClassId === selectedClass));
+        // Keep all students in the year for historical summary view lookup
+        setAllStudents(allYearStudents);
 
         // Active students currently attending this class
         const activeClassStudents = classStudents.filter(s => s.status !== 'Inactive');
@@ -255,7 +273,12 @@ const Attendance = () => {
         classAttendanceStudents.sort(compareStudentsByKhmerName);
         setStudents(classAttendanceStudents);
         
-        // Attendance records
+        // Attendance records: find matching date in class attendance, or fallback to direct ID lookup
+        let record = classAttendance.find(a => a.date === selectedDate && (a.classId === selectedClass || a.class === selectedClass)) || null;
+        if (!record && classAttendance.length === 0) {
+          record = await db.get('attendance', `${activeYear}_${selectedClass}_${selectedDate}`).catch(() => null);
+        }
+
         if (record) {
           const loadedRecords = { ...(record.records as Record<string, AttendanceStatus>) };
           setAttendanceData(loadedRecords);
@@ -302,14 +325,13 @@ const Attendance = () => {
         const db = await initDB();
         const bookDocId = `attendance_books_${activeYear}_${selectedClass}`;
 
-        const [allAtt, bookSetting] = await Promise.all([
-          db.getAll('attendance', activeYear),
+        const [classAtt, bookSetting] = await Promise.all([
+          db.getAllFromIndex('attendance', 'class_id', selectedClass, activeYear).catch(() => []),
           db.get('settings', bookDocId)
         ]);
 
         if (requestId !== loadSummaryRequestRef.current) return;
 
-        const classAtt = allAtt.filter(a => a.classId === selectedClass);
         setAllClassAttendance(classAtt);
 
         const classBooks = (bookSetting?.config as Record<string, Record<string, boolean>>) || {};
@@ -421,13 +443,21 @@ const Attendance = () => {
       const id = recordId || `${activeYear}_${selectedClass}_${selectedDate}`;
       const shiftVal = classes.find(c => c.id === selectedClass)?.shift || 'Morning';
       
+      // Clean attendanceData so only valid non-null statuses are stored
+      const cleanedAttendance: Record<string, 'P' | 'A' | 'L' | 'E'> = {};
+      Object.entries(attendanceData).forEach(([stId, status]) => {
+        if (status && ['P', 'A', 'L', 'E'].includes(status)) {
+          cleanedAttendance[stId] = status as 'P' | 'A' | 'L' | 'E';
+        }
+      });
+
       const record: AttendanceRecord = {
         id,
         date: selectedDate,
         classId: selectedClass,
         shift: shiftVal,
         academicYear: activeYear,
-        records: attendanceData as any
+        records: cleanedAttendance
       };
       
       // 1. Save Attendance Record to attendance store
@@ -453,7 +483,10 @@ const Attendance = () => {
 
       await db.put('settings', { id: bookDocId, config: updatedClassBooks });
       
-      setInitialAttendanceData({ ...attendanceData });
+      // Synchronize both active and initial states with cleaned data so hasChanges resets
+      setAttendanceData(cleanedAttendance);
+      setInitialAttendanceData({ ...cleanedAttendance });
+      setNoBookData(cleanedDateBooks);
       setInitialNoBookData({ ...cleanedDateBooks });
       setRecordId(id);
       
@@ -509,6 +542,14 @@ const Attendance = () => {
       else if (status === 'L') statusText = 'មកយឺត';
 
       const hasNoBook = noBookData[s.id] === true;
+      let bookStatusText = '—';
+      if (status === 'A' || status === 'E') {
+        bookStatusText = '— (អវត្តមាន)';
+      } else if (!status) {
+        bookStatusText = hasNoBook ? 'គ្មានសៀវភៅ' : '— (មិនទាន់កត់)';
+      } else {
+        bookStatusText = hasNoBook ? 'គ្មានសៀវភៅ' : 'មានសៀវភៅ';
+      }
 
       return {
         'ល.រ': index + 1,
@@ -520,12 +561,17 @@ const Attendance = () => {
         'វេន': currentClassObj?.shift === 'Morning' ? 'ព្រឹក' : currentClassObj?.shift === 'Afternoon' ? 'រសៀល' : 'យប់',
         'កាលបរិច្ឆេទ': formatDateDisplay(selectedDate),
         'ស្ថានភាពវត្តមាន': statusText,
-        'ស្ថានភាពសៀវភៅ': hasNoBook ? 'គ្មានសៀវភៅ' : 'មានសៀវភៅ',
-        'ចំណាំប្តូរវេន': s.isShiftSwitching ? `សិស្សប្តូរវេន (ថ្នាក់បម្រុង៖ ${classes.find(c => c.id === s.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'})` : ''
+        'ស្ថានភាពសៀវភៅ': bookStatusText,
+        'ចំណាំប្តូរវេន': s.isShiftSwitching 
+          ? (s.alternateClassId === selectedClass 
+              ? `សិស្សប្តូរវេនមកពី៖ ${classes.find(c => c.id === s.class)?.name || 'ថ្នាក់ដើម'}`
+              : `សិស្សប្តូរវេនទៅ៖ ${classes.find(c => c.id === s.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'}`)
+          : ''
       };
     });
 
-    const success = exportToExcel(dataToExport, `វត្តមាន_ថ្នាក់_${className}_${selectedDate}`);
+    const filterSuffix = statusFilter !== 'ALL' ? `_${statusFilter}` : '';
+    const success = exportToExcel(dataToExport, `វត្តមាន_ថ្នាក់_${className}_${selectedDate}${filterSuffix}`);
     if (success) {
       showToast('success', 'បានទាញយកឯកសារ Excel ជោគជ័យ!');
     } else {
@@ -596,44 +642,72 @@ const Attendance = () => {
     setSummaryWeekDate(getLocalDate());
   };
 
+  // Helper to check if a date string falls within the selected period
+  const isDateInPeriod = (
+    dateStr: string,
+    period: 'WEEK' | 'MONTH' | 'SEMESTER' | 'YEAR',
+    wRange: { start: string; end: string },
+    month: string,
+    semester: 'SEM_1' | 'SEM_2'
+  ): boolean => {
+    if (!dateStr) return false;
+    const cleanDate = dateStr.split('T')[0];
+    const parts = cleanDate.split('-');
+    const m = parts[1] || '';
+
+    if (period === 'WEEK') {
+      return cleanDate >= wRange.start && cleanDate <= wRange.end;
+    }
+    if (period === 'MONTH') {
+      return m === month;
+    }
+    if (period === 'SEMESTER') {
+      if (semester === 'SEM_1') {
+        return ['10', '11', '12', '01'].includes(m);
+      } else {
+        return ['02', '03', '04', '05', '06', '07', '08', '09'].includes(m);
+      }
+    }
+    return true; // YEAR
+  };
+
   // Filter attendance records by selected period (ignoring cleared/empty sessions)
   const filteredPeriodRecords = useMemo(() => {
     return allClassAttendance.filter(r => {
       // Exclude empty cleared sessions
-      const hasRecords = r.records && Object.values(r.records).some(v => v !== null && v !== undefined);
+      const hasRecords = r.records && Object.values(r.records).some(v => Boolean(v));
       if (!hasRecords) return false;
 
-      if (!r.date) return false;
-      const parts = r.date.split('-');
-      const m = parts[1] || '';
-
-      if (periodType === 'WEEK') {
-        return r.date >= weekRange.start && r.date <= weekRange.end;
-      }
-      if (periodType === 'MONTH') {
-        return m === summaryMonth;
-      }
-      if (periodType === 'SEMESTER') {
-        if (summarySemester === 'SEM_1') {
-          return ['10', '11', '12', '01'].includes(m);
-        } else {
-          // Semester 2 spans from February through September
-          return ['02', '03', '04', '05', '06', '07', '08', '09'].includes(m);
-        }
-      }
-      // YEAR
-      return true;
+      return isDateInPeriod(r.date, periodType, weekRange, summaryMonth, summarySemester);
     }).sort((a, b) => a.date.localeCompare(b.date));
   }, [allClassAttendance, periodType, weekRange, summaryMonth, summarySemester]);
 
   // Compute student summary statistics across the selected period
   const studentSummaries: StudentAttendanceSummary[] = useMemo(() => {
+    // Collect all session dates that had either attendance or book records in this period
+    const periodAttDates = filteredPeriodRecords.map(r => r.date.split('T')[0]);
+    const periodBookDates = Object.keys(allClassBooks).filter(d => 
+      isDateInPeriod(d, periodType, weekRange, summaryMonth, summarySemester) &&
+      Object.values(allClassBooks[d] || {}).some(v => v === true)
+    );
+    const allSessionDates = Array.from(new Set([...periodAttDates, ...periodBookDates])).sort();
+
+    const attRecordMap = new Map<string, AttendanceRecord>();
+    filteredPeriodRecords.forEach(r => {
+      attRecordMap.set(r.date.split('T')[0], r);
+    });
+
     // For summary, combine current active students with any students who have historical records in this period
     const studentMap = new Map<string, Student>();
     students.forEach(s => studentMap.set(s.id, s));
     allStudents.forEach(s => {
       if (!studentMap.has(s.id)) {
-        const hasHistory = filteredPeriodRecords.some(r => r.records && r.records[s.id] !== undefined && r.records[s.id] !== null);
+        const hasHistory = allSessionDates.some(d => {
+          const r = attRecordMap.get(d);
+          const hasAtt = r?.records && r.records[s.id] !== undefined && r.records[s.id] !== null;
+          const hasBk = allClassBooks[d]?.[s.id] === true;
+          return hasAtt || hasBk;
+        });
         if (hasHistory) {
           studentMap.set(s.id, s);
         }
@@ -648,9 +722,10 @@ const Attendance = () => {
       let noBCount = 0;
       const history: StudentAttendanceSummary['history'] = [];
 
-      filteredPeriodRecords.forEach(attRecord => {
-        const status = (attRecord.records as Record<string, AttendanceStatus>)?.[student.id] || null;
-        const dateBooks = allClassBooks[attRecord.date];
+      allSessionDates.forEach(date => {
+        const attRecord = attRecordMap.get(date);
+        const status = (attRecord?.records as Record<string, AttendanceStatus>)?.[student.id] || null;
+        const dateBooks = allClassBooks[date];
         const isNoBook = dateBooks?.[student.id] === true;
 
         if (status === 'P') pCount++;
@@ -662,7 +737,7 @@ const Attendance = () => {
 
         if (status || isNoBook) {
           history.push({
-            date: attRecord.date,
+            date,
             attendance: status,
             noBook: isNoBook,
           });
@@ -685,7 +760,7 @@ const Attendance = () => {
         history,
       };
     });
-  }, [students, allStudents, filteredPeriodRecords, allClassBooks]);
+  }, [students, allStudents, filteredPeriodRecords, allClassBooks, periodType, weekRange, summaryMonth, summarySemester]);
 
   // Period class-wide metrics
   const periodTotalSessions = filteredPeriodRecords.length;
@@ -765,11 +840,17 @@ const Attendance = () => {
         'មកយឺត (L)': item.lateCount,
         'គ្មានសៀវភៅ': item.noBookCount,
         'អត្រាវត្តមាន (%)': `${item.attendanceRate}%`,
-        'ស្ថានភាពសិស្ស': item.student.status === 'Inactive' ? 'ផ្អាក/ឈប់រៀន' : 'កំពុងរៀន'
+        'ស្ថានភាពសិស្ស': item.student.status === 'Inactive' ? 'ផ្អាក/ឈប់រៀន' : 'កំពុងរៀន',
+        'ចំណាំប្តូរវេន': item.student.isShiftSwitching 
+          ? (item.student.alternateClassId === selectedClass 
+              ? `សិស្សប្តូរវេនមកពី៖ ${classes.find(c => c.id === item.student.class)?.name || 'ថ្នាក់ដើម'}`
+              : `សិស្សប្តូរវេនទៅ៖ ${classes.find(c => c.id === item.student.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'}`)
+          : ''
       };
     });
 
-    const success = exportToExcel(dataToExport, `ស្ថិតិវត្តមាន_${className}_${periodLabel}`);
+    const filterSuffix = summaryFilter === 'ABSENT_HIGH' ? '_ឈប់ច្រើន' : summaryFilter === 'NO_BOOK' ? '_គ្មានសៀវភៅ' : '';
+    const success = exportToExcel(dataToExport, `ស្ថិតិវត្តមាន_${className}_${periodLabel}${filterSuffix}`);
     if (success) {
       showToast('success', 'បានទាញយកឯកសារ Excel ជោគជ័យ!');
     } else {
@@ -832,7 +913,7 @@ const Attendance = () => {
           </span>
           {activeTab === 'DAILY' && markedCount > 0 && (
             <span className="hidden md:inline-block px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold text-[11px]">
-              អត្រាវត្តមានថ្ងៃនេះ៖ {attendanceRate}%
+              អត្រាវត្តមានថ្ងៃនេះ៖ {attendanceRate}% {markedCount < students.length ? `(កត់បាន ${markedCount}/${students.length} នាក់)` : ''}
             </span>
           )}
         </div>
@@ -1288,7 +1369,7 @@ const Attendance = () => {
                   <TrendingUp size={13} className="text-indigo-600" /> ស្ថិតិសិស្ស
                 </span>
                 <div className="flex items-baseline justify-between mt-1">
-                  <span className="text-2xl font-bold text-indigo-700">{students.length}</span>
+                  <span className="text-2xl font-bold text-indigo-700">{studentSummaries.length}</span>
                   <span className="text-xs text-indigo-700/80">នាក់សរុប</span>
                 </div>
               </div>
@@ -1459,9 +1540,15 @@ const Attendance = () => {
                                 {language === 'KH' ? student.name : (student.englishName || student.name)}
                               </span>
                               {student.isShiftSwitching && (
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                  {`សិស្សប្តូរវេន (ថ្នាក់បម្រុង៖ ${classes.find(c => c.id === student.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'})`}
-                                </span>
+                                student.alternateClassId === selectedClass ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-300">
+                                    {`សិស្សប្តូរវេនមកពី៖ ${classes.find(c => c.id === student.class)?.name || 'ថ្នាក់ដើម'}`}
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                    {`សិស្សប្តូរវេនទៅ៖ ${classes.find(c => c.id === student.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'}`}
+                                  </span>
+                                )
                               )}
                             </div>
                             {student.englishName && language === 'KH' && (
@@ -1742,9 +1829,15 @@ const Attendance = () => {
                                 </span>
                               )}
                               {item.student.isShiftSwitching && (
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                  ប្តូរវេន
-                                </span>
+                                item.student.alternateClassId === selectedClass ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-300">
+                                    {`ប្តូរវេនមកពី៖ ${classes.find(c => c.id === item.student.class)?.name || 'ថ្នាក់ដើម'}`}
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                    {`ប្តូរវេនទៅ៖ ${classes.find(c => c.id === item.student.alternateClassId)?.name || 'ថ្នាក់ផ្សេង'}`}
+                                  </span>
+                                )
                               )}
                             </div>
                             {item.student.englishName && (

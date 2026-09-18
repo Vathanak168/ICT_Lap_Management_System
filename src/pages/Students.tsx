@@ -222,6 +222,39 @@ const Students = () => {
           }
         }
 
+        const studentToDelete = students.find(s => s.id === id);
+
+        // Cascade: clean student references from book tracking in settings
+        const candidateClasses = [
+          studentToDelete?.class,
+          studentToDelete?.alternateClassId
+        ].filter(Boolean) as string[];
+
+        for (const cId of candidateClasses) {
+          const bookDocId = `attendance_books_${targetYear}_${cId}`;
+          try {
+            const bookSetting = await db.get('settings', bookDocId);
+            if (bookSetting && bookSetting.config && typeof bookSetting.config === 'object') {
+              let modified = false;
+              const cleanConfig = { ...(bookSetting.config as Record<string, Record<string, boolean>>) };
+              for (const d of Object.keys(cleanConfig)) {
+                if (cleanConfig[d] && cleanConfig[d][id] !== undefined) {
+                  delete cleanConfig[d][id];
+                  modified = true;
+                  if (Object.keys(cleanConfig[d]).length === 0) {
+                    delete cleanConfig[d];
+                  }
+                }
+              }
+              if (modified) {
+                await db.put('settings', { id: bookDocId, config: cleanConfig });
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to clean book tracking for deleted student:', e);
+          }
+        }
+
         // Cascade: clean student references from seating plans
         const allSeating = await db.getAll('seatingPlans', targetYear);
         for (const seat of allSeating) {
@@ -242,7 +275,6 @@ const Students = () => {
           }
         }
         
-        const studentToDelete = students.find(s => s.id === id);
         if (studentToDelete && studentToDelete.pcNumber) {
           await addPcSyncTask(db, studentToDelete.pcNumber, studentToDelete.studentId, studentToDelete.name, 'REMOVE', null, targetYear);
         }

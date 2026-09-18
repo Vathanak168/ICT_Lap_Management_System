@@ -828,6 +828,9 @@ const parseAttendanceRecords = (
   const result: Record<string, AttendanceStatus> = {};
 
   for (const [studentId, status] of Object.entries(source)) {
+    if (status === null || status === undefined || status === '') {
+      continue;
+    }
     if (typeof status !== 'string' || !allowed.includes(status as AttendanceStatus)) {
       return failValidation(
         `${label}.${studentId} must be one of: ${allowed.join(', ')}.`,
