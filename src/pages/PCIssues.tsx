@@ -17,14 +17,8 @@ import {
 import { initDB, isPcIssueActive, queuePcSyncTask } from '../store/db';
 import type { PCIssue, Student } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { getLocalDate } from '../utils/date';
 import './PCIssues.css';
-
-const getLocalDate = (dateObj: Date = new Date()) => {
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const day = String(dateObj.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
 
 const PCIssues = () => {
   const [issues, setIssues] = useState<PCIssue[]>([]);
@@ -49,13 +43,21 @@ const PCIssues = () => {
   
   // Toast Notification State
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (type: 'success' | 'error', text: string) => {
     setToastMessage({ type, text });
-    setTimeout(() => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => {
       setToastMessage(prev => (prev?.text === text ? null : prev));
     }, 3000);
   };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   const loadIssues = async (targetYear: string) => {
     if (!targetYear) return;

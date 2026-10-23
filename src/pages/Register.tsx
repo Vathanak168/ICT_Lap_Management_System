@@ -147,10 +147,10 @@ const Register: React.FC = () => {
       return;
     }
 
-    // Validate Gmail
-    const gmailRegex = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i;
-    if (!gmailRegex.test(gmail)) {
-      setError('សូមបញ្ចូលគណនី Gmail ឲ្យបានត្រឹមត្រូវ (ត្រូវបញ្ជប់ដោយ @gmail.com)');
+    // Validate Email (allows institutional @beltei.edu.kh, @gmail.com, etc.)
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(gmail.trim())) {
+      setError('សូមបញ្ចូលអ៊ីមែលឲ្យបានត្រឹមត្រូវ (ឧទាហរណ៍៖ teacher@beltei.edu.kh ឬ user@gmail.com)');
       setLoading(false);
       return;
     }
@@ -427,7 +427,7 @@ const Register: React.FC = () => {
                   value={gmail}
                   onChange={(e) => setGmail(e.target.value)}
                   className="w-full h-12 pl-11 pr-4 rounded-xl bg-[#E6EBF5] outline-none text-[15px] font-medium text-slate-700 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-400/30 transition-all"
-                  placeholder="example@gmail.com"
+                  placeholder="teacher@beltei.edu.kh ឬ user@gmail.com"
                   style={{ boxShadow: 'inset 4px 4px 8px #cbcfd8, inset -4px -4px 8px #ffffff' }}
                 />
               </div>

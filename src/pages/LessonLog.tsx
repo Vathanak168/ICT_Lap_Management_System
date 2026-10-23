@@ -7,6 +7,7 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
 import { compareKhmer } from '../utils/khmerSort';
+import { getLocalDate } from '../utils/date';
 import './LessonLog.css';
 
 const LessonLog = () => {
@@ -102,7 +103,7 @@ const LessonLog = () => {
       
       const logToSave: LogType = {
         id: currentLog.id || crypto.randomUUID(),
-        date: currentLog.date || new Date().toISOString().split('T')[0],
+        date: currentLog.date || getLocalDate(),
         classId: currentLog.classId!,
         class: selectedClassObj?.name || '', // Keep for backwards compatibility
         shift: selectedClassObj?.shift || '',
@@ -135,7 +136,7 @@ const LessonLog = () => {
   const openAddModal = () => {
     setErrors({});
     setCurrentLog({
-      date: new Date().toISOString().split('T')[0],
+      date: getLocalDate(),
       academicYear: activeYear || '',
       classId: filterClass !== 'All' ? filterClass : ''
     });

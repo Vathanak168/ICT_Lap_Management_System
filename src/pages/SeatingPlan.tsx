@@ -23,6 +23,7 @@ import { Input } from '../components/ui/Input';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { useAuth } from '../contexts/AuthContext';
+import { getLocalDate } from '../utils/date';
 import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 
 interface Desk {
@@ -1538,7 +1539,7 @@ const SeatingPlan = () => {
     setIsSaving(true);
     try {
       const db = await initDB();
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDate();
       const desc = issueDescription.trim();
       const newIssue: PCIssue = {
         id: crypto.randomUUID(),
@@ -1600,7 +1601,7 @@ const SeatingPlan = () => {
       setIsSaving(true);
       try {
         const db = await initDB();
-        const today = new Date().toISOString().split('T')[0];
+        const today = getLocalDate();
         const issuesToUpdate = activeIssues.map(issue => ({
           ...issue,
           status: 'Good' as const,

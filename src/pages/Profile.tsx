@@ -46,9 +46,18 @@ const Profile = () => {
     }
   };
 
+  const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
+    };
+  }, []);
+
   const showMessage = (text: string, type: 'success' | 'error') => {
     setMessage({ text, type });
-    setTimeout(() => setMessage(null), 3000);
+    if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
+    messageTimerRef.current = setTimeout(() => setMessage(null), 3000);
   };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {

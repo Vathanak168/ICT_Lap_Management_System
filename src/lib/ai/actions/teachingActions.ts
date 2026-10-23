@@ -1,4 +1,5 @@
 import { initDB } from '../../../store/db';
+import { getLocalDate } from '../../../utils/date';
 import type {
   ClassRecord,
   CurriculumLessonRecord,
@@ -169,7 +170,7 @@ export const handleTeachingAction = async (
           id: crypto.randomUUID(),
           classId: classItem.id,
           subjectId: subject.id,
-          startDate: new Date().toISOString().slice(0, 10),
+          startDate: getLocalDate(),
           academicYear: activeYear,
         });
       }

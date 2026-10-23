@@ -1,13 +1,15 @@
 import { initDB } from '../store/db';
+import { getLocalDate } from './date';
 
 export const exportDatabase = async (academicYear?: string) => {
   try {
     const db = await initDB();
     const data: any = {};
     
-    // Get all data from all object stores, scoped to academic year if provided
+    // Get all data from all object stores, scoped to academic year only if supported
     for (const storeName of db.objectStoreNames) {
-      data[storeName] = await db.getAll(storeName, academicYear);
+      const yearFilter = (academicYear && db.supportsAcademicYear(storeName)) ? academicYear : undefined;
+      data[storeName] = await db.getAll(storeName, yearFilter);
     }
     
     // Convert to JSON string
@@ -19,7 +21,7 @@ export const exportDatabase = async (academicYear?: string) => {
     
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ict_lab_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `ict_lab_backup_${getLocalDate()}.json`;
     document.body.appendChild(a);
     a.click();
     
@@ -45,19 +47,10 @@ export const importDatabase = async (file: File): Promise<boolean> => {
         
         const db = await initDB();
         
-        // Loop through keys and store data
+        // Loop through keys and store data using chunked putMany
         for (const key of Object.keys(data)) {
-          const storeName = key as "classes" | "students" | "attendance" | "pcIssues" | "grades" | "lessonLogs";
-          if (db.objectStoreNames.contains(storeName)) {
-            const tx = db.transaction(storeName, 'readwrite');
-            
-            // Optional: Clear existing data before import, or just merge
-            // await tx.store.clear();
-            
-            for (const item of data[storeName]) {
-              await tx.store.put(item);
-            }
-            await tx.done;
+          if (db.objectStoreNames.contains(key) && Array.isArray(data[key]) && data[key].length > 0) {
+            await db.putMany(key, data[key]);
           }
         }
         
@@ -73,13 +66,21 @@ export const importDatabase = async (file: File): Promise<boolean> => {
   });
 };
 
-export const clearDatabase = async () => {
+export const clearDatabase = async (academicYear?: string): Promise<boolean> => {
   try {
     const db = await initDB();
-    for (const storeName of db.objectStoreNames) {
-      const tx = db.transaction(storeName, 'readwrite');
-      await tx.store.clear();
-      await tx.done;
+    // Safely clear user data stores, preserving configuration stores like settings and aiHistory
+    const userStores = db.objectStoreNames.filter(
+      (name) => name !== 'settings' && name !== 'aiHistory'
+    );
+
+    for (const storeName of userStores) {
+      const yearFilter = (academicYear && db.supportsAcademicYear(storeName)) ? academicYear : undefined;
+      const records = await db.getAll(storeName, yearFilter);
+      const ids = records.map((item: any) => item?.id).filter(Boolean);
+      if (ids.length > 0) {
+        await db.deleteMany(storeName, ids);
+      }
     }
     return true;
   } catch (error) {

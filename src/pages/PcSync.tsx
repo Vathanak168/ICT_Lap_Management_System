@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Download, RefreshCw, ShieldAlert, Cpu, Search, Key, Filter, Usb, 
-  Settings2, CheckCircle2, AlertTriangle, X, Eye, EyeOff, Laptop
+  Settings2, CheckCircle2, AlertTriangle, X, Eye, EyeOff, Laptop,
+  Edit2, Trash2, Plus, ListTodo, UserX, Check, Clock
 } from 'lucide-react';
-import { initDB } from '../store/db';
+import { initDB, queuePcSyncTask } from '../store/db';
 import type { Student, ClassRecord, PcSyncTask, PCIssue } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { getSetupScript, getResetScript, getGlobalSyncScript, getInteractiveCommandLauncher, getSyncRunnerScript } from '../lib/scripts/labScripts';
@@ -62,7 +63,7 @@ const createSyncSettings = (): LabSyncSettings => {
 };
 
 const PcSync = () => {
-  const [activeTab, setActiveTab] = useState<'SYNC' | 'SETUP'>('SYNC');
+  const [activeTab, setActiveTab] = useState<'SYNC' | 'TASKS' | 'SETUP'>('SYNC');
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [showPasswords, setShowPasswords] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -75,10 +76,57 @@ const PcSync = () => {
   const [allStudents, setAllStudents] = useState<Student[]>([]);
   const [rosterStudents, setRosterStudents] = useState<Student[]>([]);
   const [classes, setClasses] = useState<ClassRecord[]>([]);
+  const [allTasks, setAllTasks] = useState<PcSyncTask[]>([]);
   const [pendingTasks, setPendingTasks] = useState<PcSyncTask[]>([]);
   const [pcIssues, setPcIssues] = useState<PCIssue[]>([]);
   const [syncSettings, setSyncSettings] = useState<LabSyncSettings>(createSyncSettings);
   const { activeYear } = useAcademicYear();
+
+  // Modern Toast Notification State
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = (type: 'success' | 'error' | 'info', text: string) => {
+    setToastMessage({ type, text });
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 4500);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  // Tasks CRUD Filter, Multi-select Batch & Modal States
+  const [taskStatusFilter, setTaskStatusFilter] = useState<'ALL' | 'PENDING' | 'COMPLETED'>('ALL');
+  const [taskActionFilter, setTaskActionFilter] = useState<'ALL' | 'ADD' | 'REMOVE' | 'UPDATE_PASSWORD'>('ALL');
+  const [taskSearchQuery, setTaskSearchQuery] = useState('');
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<PcSyncTask | null>(null);
+  const [taskForm, setTaskForm] = useState<{
+    pcNumber: string;
+    studentId: string;
+    studentName: string;
+    action: 'ADD' | 'REMOVE' | 'UPDATE_PASSWORD';
+    password: string;
+    status: 'PENDING' | 'COMPLETED';
+  }>({
+    pcNumber: 'PC-01',
+    studentId: '',
+    studentName: '',
+    action: 'ADD',
+    password: '',
+    status: 'PENDING',
+  });
+
+  // Student PC Assignment & Password Modal State (CRUD)
+  const [studentToEdit, setStudentToEdit] = useState<Student | null>(null);
+  const [editPcNumber, setEditPcNumber] = useState('');
+  const [editPassword, setEditPassword] = useState('');
 
   useEffect(() => {
     const loadSettingsFromDb = async () => {
@@ -168,7 +216,8 @@ const PcSync = () => {
         password: passwordById.get(student.id),
       })));
       setClasses([...classesData].sort((a, b) => compareKhmer(a.name, b.name) || compareKhmer(a.shift, b.shift)));
-      setPendingTasks(taskData.filter(task => task.status === 'PENDING'));
+      setAllTasks(taskData || []);
+      setPendingTasks((taskData || []).filter(task => task.status === 'PENDING'));
       setPcIssues(issuesData || []);
       setSelectedStudentIds(previous => new Set(
         [...previous].filter(id => activeStudents.some(student => student.id === id))
@@ -184,12 +233,317 @@ const PcSync = () => {
     fetchData();
   }, [activeYear]);
 
+  const standardPcs = useMemo(() => {
+    return Array.from({ length: 60 }, (_, i) => `PC-${String(i + 1).padStart(2, '0')}`);
+  }, []);
+
   const deskOptions = useMemo(() => Array.from(new Set(
     [
       ...allStudents.map(student => normalizePcNumber(student.pcNumber)),
-      ...pendingTasks.map(task => normalizePcNumber(task.pcNumber)),
+      ...allTasks.map(task => normalizePcNumber(task.pcNumber)),
     ].filter(Boolean) as string[]
-  )).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [allStudents, pendingTasks]);
+  )).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [allStudents, allTasks]);
+
+  const filteredTasks = useMemo(() => {
+    return allTasks.filter(task => {
+      if (taskStatusFilter !== 'ALL' && task.status !== taskStatusFilter) return false;
+      if (taskActionFilter !== 'ALL' && task.action !== taskActionFilter) return false;
+      if (taskSearchQuery.trim()) {
+        const q = taskSearchQuery.trim().toLowerCase();
+        const matchPc = (task.pcNumber || '').toLowerCase().includes(q);
+        const matchStudent = (task.studentId || '').toLowerCase().includes(q) || (task.studentName || '').toLowerCase().includes(q);
+        if (!matchPc && !matchStudent) return false;
+      }
+      return true;
+    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [allTasks, taskStatusFilter, taskActionFilter, taskSearchQuery]);
+
+  const handleOpenCreateTask = () => {
+    setEditingTask(null);
+    setTaskForm({
+      pcNumber: deskOptions[0] || 'PC-01',
+      studentId: '',
+      studentName: '',
+      action: 'ADD',
+      password: '',
+      status: 'PENDING',
+    });
+    setIsTaskModalOpen(true);
+  };
+
+  const handleOpenEditTask = (task: PcSyncTask) => {
+    setEditingTask(task);
+    setTaskForm({
+      pcNumber: task.pcNumber,
+      studentId: task.studentId,
+      studentName: task.studentName,
+      action: task.action,
+      password: task.password || '',
+      status: task.status,
+    });
+    setIsTaskModalOpen(true);
+  };
+
+  const handleSaveTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeYear) return;
+    if (!taskForm.pcNumber.trim() || !taskForm.studentId.trim() || !taskForm.studentName.trim()) {
+      showToast('error', 'សូមបំពេញលេខ PC, អត្តលេខសិស្ស និងឈ្មោះសិស្សឱ្យបានពេញលេញ។');
+      return;
+    }
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const normPc = normalizePcNumber(taskForm.pcNumber.trim());
+      const studentIdTrimmed = taskForm.studentId.trim();
+      const studentNameTrimmed = taskForm.studentName.trim();
+      const passwordTrimmed = taskForm.password.trim();
+
+      const taskRecord: PcSyncTask = {
+        id: editingTask ? editingTask.id : crypto.randomUUID(),
+        pcNumber: normPc,
+        studentId: studentIdTrimmed,
+        studentName: studentNameTrimmed,
+        action: taskForm.action,
+        password: passwordTrimmed || null,
+        status: taskForm.status,
+        createdAt: editingTask ? editingTask.createdAt : new Date().toISOString(),
+        academicYear: activeYear,
+      };
+      await db.put('pcSyncTasks', taskRecord);
+
+      // Auto-sync with Student record if studentId matches
+      const matchedStudent = allStudents.find(
+        s => s.studentId.trim().toLowerCase() === studentIdTrimmed.toLowerCase()
+      );
+      if (matchedStudent) {
+        let studentChanged = false;
+        const updatedStudent = { ...matchedStudent };
+        if (taskForm.action === 'ADD' && updatedStudent.pcNumber !== normPc) {
+          updatedStudent.pcNumber = normPc;
+          if (passwordTrimmed) updatedStudent.password = passwordTrimmed;
+          studentChanged = true;
+        } else if (taskForm.action === 'UPDATE_PASSWORD' && passwordTrimmed && updatedStudent.password !== passwordTrimmed) {
+          updatedStudent.password = passwordTrimmed;
+          studentChanged = true;
+        } else if (taskForm.action === 'REMOVE' && updatedStudent.pcNumber === normPc) {
+          updatedStudent.pcNumber = undefined;
+          studentChanged = true;
+        }
+
+        if (studentChanged) {
+          await db.put('students', updatedStudent);
+        }
+      }
+
+      setIsTaskModalOpen(false);
+      setEditingTask(null);
+      await fetchData();
+      showToast('success', editingTask ? 'បានកែសម្រួលភារកិច្ច Sync ជោគជ័យ' : 'បានបង្កើតភារកិច្ច Sync ថ្មីជោគជ័យ');
+    } catch (err: any) {
+      console.error('Failed to save task:', err);
+      showToast('error', 'បរាជ័យក្នុងការរក្សាទុក Task: ' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!window.confirm('តើអ្នកប្រាកដជាចង់លុបភារកិច្ច Sync នេះមែនទេ?')) return;
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      await db.delete('pcSyncTasks', taskId);
+      setSelectedTaskIds(prev => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+      await fetchData();
+      showToast('success', 'បានលុបភារកិច្ច Sync ដោយជោគជ័យ');
+    } catch (err: any) {
+      console.error('Failed to delete task:', err);
+      showToast('error', 'បរាជ័យក្នុងការលុប Task: ' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleToggleTaskStatus = async (task: PcSyncTask) => {
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const nextStatus = task.status === 'PENDING' ? 'COMPLETED' : 'PENDING';
+      await db.put('pcSyncTasks', { ...task, status: nextStatus });
+      await fetchData();
+      showToast('success', nextStatus === 'COMPLETED' ? 'បានប្តូរស្ថានភាពជា "បានជោគជ័យ"' : 'បានប្តូរស្ថានភាពជា "រង់ចាំ Sync"');
+    } catch (err: any) {
+      console.error('Failed to update task status:', err);
+      showToast('error', 'បរាជ័យក្នុងការកែប្រែស្ថានភាព Task');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleClearCompletedTasks = async () => {
+    const completed = allTasks.filter(t => t.status === 'COMPLETED');
+    if (completed.length === 0) {
+      showToast('info', 'មិនមាន Task ដែលរួចរាល់ (Completed) សម្រាប់សម្អាតទេ។');
+      return;
+    }
+    if (!window.confirm(`តើអ្នកចង់សម្អាត Task ដែលបានរួចរាល់ទាំង ${completed.length} នេះចេញពីប្រព័ន្ធមែនទេ?`)) return;
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      await db.deleteMany('pcSyncTasks', completed.map(t => t.id));
+      setSelectedTaskIds(new Set());
+      await fetchData();
+      showToast('success', `បានសម្អាត Tasks រួចរាល់ចំនួន ${completed.length} ជោគជ័យ`);
+    } catch (err: any) {
+      console.error('Failed to clear completed tasks:', err);
+      showToast('error', 'បរាជ័យក្នុងការសម្អាត Tasks');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Batch Task Actions
+  const toggleTaskSelection = (taskId: string) => {
+    setSelectedTaskIds(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+
+  const toggleAllFilteredTasks = () => {
+    if (selectedTaskIds.size === filteredTasks.length && filteredTasks.length > 0) {
+      setSelectedTaskIds(new Set());
+    } else {
+      setSelectedTaskIds(new Set(filteredTasks.map(t => t.id)));
+    }
+  };
+
+  const handleBatchSetStatus = async (status: 'PENDING' | 'COMPLETED') => {
+    if (selectedTaskIds.size === 0) return;
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const tasksToUpdate = allTasks.filter(t => selectedTaskIds.has(t.id));
+      const updated = tasksToUpdate.map(t => ({ ...t, status }));
+      await db.putMany('pcSyncTasks', updated);
+      setSelectedTaskIds(new Set());
+      await fetchData();
+      showToast('success', `បានកែប្រែស្ថានភាព ${updated.length} Tasks ទៅជា ${status === 'COMPLETED' ? 'បានជោគជ័យ' : 'រង់ចាំ Sync'}`);
+    } catch (err: any) {
+      console.error('Batch status update failed:', err);
+      showToast('error', 'បរាជ័យក្នុងការកែប្រែស្ថានភាព Tasks');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleBatchDeleteTasks = async () => {
+    if (selectedTaskIds.size === 0) return;
+    if (!window.confirm(`តើអ្នកប្រាកដជាចង់លុប Tasks ទាំង ${selectedTaskIds.size} ដែលបានជ្រើសរើសមែនទេ?`)) return;
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      await db.deleteMany('pcSyncTasks', Array.from(selectedTaskIds));
+      setSelectedTaskIds(new Set());
+      await fetchData();
+      showToast('success', `បានលុប Tasks ចំនួន ${selectedTaskIds.size} ជោគជ័យ`);
+    } catch (err: any) {
+      console.error('Batch delete failed:', err);
+      showToast('error', 'បរាជ័យក្នុងការលុប Tasks');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleOpenEditStudent = (student: Student) => {
+    setStudentToEdit(student);
+    setEditPcNumber(normalizePcNumber(student.pcNumber) || '');
+    setEditPassword(student.password || '');
+  };
+
+  const handleSaveStudentPcAndPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!studentToEdit || !activeYear) return;
+    const oldPc = normalizePcNumber(studentToEdit.pcNumber);
+    const newPc = editPcNumber.trim() ? normalizePcNumber(editPcNumber.trim()) : '';
+    const newPass = editPassword.trim();
+
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const updatedStudent: Student = {
+        ...studentToEdit,
+        pcNumber: newPc || undefined,
+        password: newPass || undefined,
+      };
+
+      await db.put('students', updatedStudent);
+
+      // Automated Sync Queueing
+      if (oldPc !== newPc) {
+        if (oldPc) {
+          await queuePcSyncTask(db, studentToEdit, oldPc, 'REMOVE', activeYear, null);
+        }
+        if (newPc) {
+          await queuePcSyncTask(db, updatedStudent, newPc, 'ADD', activeYear, newPass || null);
+        }
+      } else if (newPc && newPass && newPass !== studentToEdit.password) {
+        await queuePcSyncTask(db, updatedStudent, newPc, 'UPDATE_PASSWORD', activeYear, newPass);
+      }
+
+      setStudentToEdit(null);
+      await fetchData();
+      showToast('success', 'បានរក្សាទុកតុ PC និងលេខសម្ងាត់សិស្សជោគជ័យ');
+    } catch (err: any) {
+      console.error('Failed to update student PC/password:', err);
+      showToast('error', 'បរាជ័យក្នុងការរក្សាទុកទិន្នន័យ៖ ' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleUnassignStudent = async (student: Student) => {
+    const normPc = normalizePcNumber(student.pcNumber);
+    if (!normPc || !activeYear) return;
+    if (!window.confirm(`តើអ្នកប្រាកដជាចង់ដកសិស្ស "${student.name}" ចេញពី ${normPc} មែនទេ?\n(ប្រព័ន្ធនឹងបង្កើត Task ដើម្បីលុបគណនីចេញពី ${normPc} ដោយស្វ័យប្រវត្តិ)`)) {
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const updatedStudent: Student = {
+        ...student,
+        pcNumber: undefined,
+      };
+      await db.put('students', updatedStudent);
+      await queuePcSyncTask(db, student, normPc, 'REMOVE', activeYear, null);
+      await fetchData();
+      showToast('success', `បានដកសិស្ស ${student.name} ចេញពី ${normPc} ជោគជ័យ`);
+    } catch (err: any) {
+      console.error('Failed to unassign student:', err);
+      showToast('error', 'បរាជ័យក្នុងការដកតុសិស្ស៖ ' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const formatTaskDate = (isoStr?: string) => {
+    if (!isoStr) return '';
+    try {
+      const d = new Date(isoStr);
+      return `${d.toLocaleDateString('km-KH')} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    } catch {
+      return isoStr;
+    }
+  };
 
   const sortedClasses = useMemo(() => {
     return [...classes].sort((a, b) => compareKhmer(a.name, b.name) || compareKhmer(a.shift, b.shift));
@@ -290,7 +644,7 @@ const PcSync = () => {
 
     if (type === 'SETUP') {
       if (!syncSettings.labName.trim() || !syncSettings.usbLabel.trim() || !syncSettings.syncToken.trim() || /[\r\n]/.test(syncSettings.syncToken)) {
-        alert('សូមកំណត់ឈ្មោះ Lab និងឈ្មោះ USB មុនទាញយក Installer។');
+        showToast('error', 'សូមកំណត់ឈ្មោះ Lab និងឈ្មោះ USB មុនទាញយក Installer។');
         return;
       }
       const assignmentBatchId = crypto.randomUUID();
@@ -329,17 +683,17 @@ const PcSync = () => {
     try {
       setIsProcessing(true);
       if (!syncSettings.labName.trim() || !syncSettings.usbLabel.trim()) {
-        alert('សូមកំណត់ឈ្មោះ Lab និងឈ្មោះ USB ជាមុន។');
+        showToast('error', 'សូមកំណត់ឈ្មោះ Lab និងឈ្មោះ USB ជាមុន។');
         return;
       }
 
       if (mode === 'SELECTED' && selectedStudents.length === 0) {
-        alert('សូមធីកជ្រើសសិស្សយ៉ាងហោចណាស់ម្នាក់។');
+        showToast('error', 'សូមធីកជ្រើសសិស្សយ៉ាងហោចណាស់ម្នាក់។');
         return;
       }
 
       if (mode === 'FULL' && selectedDesk === 'UNASSIGNED') {
-        alert('សិស្សដែលមិនទាន់មានតុ មិនអាច Sync ទៅ PC បានទេ។');
+        showToast('error', 'សិស្សដែលមិនទាន់មានតុ មិនអាច Sync ទៅ PC បានទេ។');
         return;
       }
 
@@ -367,7 +721,7 @@ const PcSync = () => {
       if (isDownloadOnly || !('showDirectoryPicker' in window)) {
         downloadTextFile(syncScript, 'GlobalSync.ps1');
         downloadTextFile(getSyncRunnerScript(), '2_Sync_PC_Now.cmd');
-        alert(summary + '\n\nសូមដាក់ GlobalSync.ps1 ក្នុង ICTLabSync និង 2_Sync_PC_Now.cmd នៅ USB Root។ Pending រក្សាទុករហូតអ្នកនាំចូលលទ្ធផលពី PC។');
+        showToast('success', `${summary} | រួចរាល់! សូមដាក់ GlobalSync.ps1 ក្នុង ICTLabSync និង 2_Sync_PC_Now.cmd នៅ USB Root`);
         return;
       }
 
@@ -388,11 +742,11 @@ const PcSync = () => {
       await runnerWritable.write(getSyncRunnerScript());
       await runnerWritable.close();
 
-      alert('បានសរសេរ USB រួច៖ ' + summary + '\nPending រក្សាទុករហូតអ្នកនាំចូលលទ្ធផលពី PC។');
+      showToast('success', 'បានសរសេរ USB រួច៖ ' + summary);
     } catch (error: any) {
       if (error.name === 'AbortError') return;
       console.error('USB preparation failed:', error);
-      alert(error?.message || 'មានបញ្ហាក្នុងការបង្កើត Auto Sync USB');
+      showToast('error', error?.message || 'មានបញ្ហាក្នុងការបង្កើត Auto Sync USB');
     } finally {
       setIsProcessing(false);
     }
@@ -449,10 +803,10 @@ const PcSync = () => {
         passwordById.has(student.id) ? { ...student, password: passwordById.get(student.id) } : student
       )));
       await fetchData();
-      alert(`បង្កើតលេខសម្ងាត់ជូនសិស្សចំនួន ${updates.length} នាក់ជោគជ័យ!`);
+      showToast('success', `បង្កើតលេខសម្ងាត់ជូនសិស្សចំនួន ${updates.length} នាក់ជោគជ័យ!`);
     } catch (error) {
       console.error('Bulk password generation failed:', error);
-      alert('បរាជ័យក្នុងការបង្កើតលេខសម្ងាត់');
+      showToast('error', 'បរាជ័យក្នុងការបង្កើតលេខសម្ងាត់');
     } finally {
       setIsProcessing(false);
     }
@@ -469,17 +823,51 @@ const PcSync = () => {
         const receipt = JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
         receiptTaskIds(receipt, currentTasks, syncSettings.labId, activeYear).forEach(id => completed.add(id));
       }
-      for (const id of completed) await db.delete('pcSyncTasks', id);
+      const completedIds = Array.from(completed);
+      if (completedIds.length > 0) {
+        const updatedTasks = currentTasks
+          .filter(t => completed.has(t.id))
+          .map(t => ({ ...t, status: 'COMPLETED' as const }));
+        await db.putMany('pcSyncTasks', updatedTasks);
+      }
       await fetchData();
-      alert('បានបញ្ជាក់ Pending ដែល Sync ជោគជ័យ៖ ' + completed.size);
+      showToast('success', `បានបញ្ជាក់ Sync ជោគជ័យចំនួន ${completed.size} Tasks (បានផ្លាស់ប្តូរទៅស្ថានភាព COMPLETED)`);
     } catch (error) {
       await fetchData();
-      alert('មិនអាចនាំចូលលទ្ធផលបាន៖ ' + (error instanceof Error ? error.message : String(error)));
+      showToast('error', 'មិនអាចនាំចូលលទ្ធផលបាន៖ ' + (error instanceof Error ? error.message : String(error)));
     } finally { setIsProcessing(false); }
   };
 
   return (
     <div className="flex flex-col w-full pb-16 space-y-5 font-sans animate-in fade-in duration-200">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div 
+          className={`fixed top-5 right-5 z-[9999] px-5 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm font-medium transition-all animate-in fade-in slide-in-from-top-3 ${
+            toastMessage.type === 'success' 
+              ? 'bg-emerald-600 text-white border border-emerald-500 shadow-emerald-500/20' 
+              : toastMessage.type === 'error'
+              ? 'bg-rose-600 text-white border border-rose-500 shadow-rose-500/20'
+              : 'bg-blue-600 text-white border border-blue-500 shadow-blue-500/20'
+          }`}
+        >
+          {toastMessage.type === 'success' ? (
+            <CheckCircle2 size={18} />
+          ) : toastMessage.type === 'error' ? (
+            <AlertTriangle size={18} />
+          ) : (
+            <RefreshCw size={18} />
+          )}
+          <span className="font-khmer">{toastMessage.text}</span>
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            className="ml-2 p-1 rounded-lg hover:bg-white/20 transition cursor-pointer"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
       
       {/* 1. Top Header Banner - Clean Ribbon */}
       <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 rounded-2xl p-4 sm:p-5 text-white shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -554,10 +942,14 @@ const PcSync = () => {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col justify-between">
+        <div 
+          onClick={() => setActiveTab('TASKS')}
+          className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col justify-between cursor-pointer hover:border-indigo-300 hover:shadow-sm transition-all group"
+          title="ចុចដើម្បីមើល និងគ្រប់គ្រងបញ្ជី Tasks ទាំងអស់"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-khmer">រង់ចាំ Sync ទៅ PC</span>
-            <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-khmer group-hover:text-indigo-600 transition-colors">រង់ចាំ Sync ទៅ PC</span>
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
               <RefreshCw size={16} />
             </div>
           </div>
@@ -592,7 +984,7 @@ const PcSync = () => {
       </section>
 
       {/* 3. Modern Workflow Tabs */}
-      <div className="flex p-1 bg-slate-100/90 rounded-xl w-fit border border-slate-200/80">
+      <div className="flex p-1 bg-slate-100/90 rounded-xl w-fit border border-slate-200/80 gap-1 flex-wrap">
         <button
           type="button"
           onClick={() => setActiveTab('SYNC')}
@@ -604,6 +996,24 @@ const PcSync = () => {
         >
           <Usb size={15} />
           <span>ធ្វើបច្ចុប្បន្នភាព USB (ប្រើប្រចាំថ្ងៃ)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('TASKS')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold font-khmer transition-all cursor-pointer ${
+            activeTab === 'TASKS'
+              ? 'bg-white text-blue-700 shadow-xs'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <ListTodo size={15} />
+          <span>គ្រប់គ្រងភារកិច្ច Sync (Tasks CRUD)</span>
+          {pendingTasks.length > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-indigo-100 text-indigo-700">
+              {pendingTasks.length}
+            </span>
+          )}
         </button>
 
         <button
@@ -733,246 +1143,574 @@ const PcSync = () => {
         </section>
       )}
 
-      {/* 6. Roster Table Section */}
-      <section className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        {/* Table Toolbar Header */}
-        <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <h2 className="text-base font-bold text-slate-800 font-khmer">
-              បញ្ជីគណនីសិស្សតាមកុំព្យូទ័រ
-            </h2>
-            <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-bold font-mono">
-              {filteredStudents.length} នាក់
-            </span>
-          </div>
+      {/* 6. Roster Table Section (Only in SYNC tab) */}
+      {activeTab === 'SYNC' && (
+        <section className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+          {/* Table Toolbar Header */}
+          <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <h2 className="text-base font-bold text-slate-800 font-khmer">
+                បញ្ជីគណនីសិស្សតាមកុំព្យូទ័រ
+              </h2>
+              <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-bold font-mono">
+                {filteredStudents.length} នាក់
+              </span>
+            </div>
 
-          <div className="flex items-center gap-2">
-            {scopedMissingPasswords.length > 0 && (
+            <div className="flex items-center gap-2">
+              {scopedMissingPasswords.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleGenerateMissingPasswords}
+                  disabled={isProcessing || isLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold transition cursor-pointer font-khmer disabled:opacity-50"
+                >
+                  <Key size={13} />
+                  <span>បង្កើត Password ស្វ័យប្រវត្តិ ({scopedMissingPasswords.length})</span>
+                </button>
+              )}
               <button
                 type="button"
-                onClick={handleGenerateMissingPasswords}
+                onClick={() => setShowPasswords(!showPasswords)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 transition cursor-pointer font-khmer"
+              >
+                {showPasswords ? <EyeOff size={14} /> : <Eye size={14} />}
+                <span>{showPasswords ? 'លាក់លេខសម្ងាត់' : 'បង្ហាញលេខសម្ងាត់'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="p-4 sm:px-5 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/50 border-b border-slate-100">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+              <input
+                type="text"
+                placeholder="ស្វែងរកតាមឈ្មោះ ឬ Student ID..."
+                className="w-full bg-white rounded-xl border border-slate-200 py-2 pl-9 pr-8 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition font-khmer"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            <div className="relative">
+              <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400">
+                <Cpu size={15} />
+              </div>
+              <select
+                value={selectedDesk}
+                onChange={(e) => {
+                  setSelectedDesk(e.target.value);
+                  setSelectedStudentIds(new Set());
+                }}
+                className="w-full bg-white appearance-none rounded-xl border border-slate-200 py-2 pl-9 pr-8 text-xs font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition cursor-pointer font-khmer"
+              >
+                <option value="ALL">គ្រប់តុ / គ្រប់ PC</option>
+                {deskOptions.map(pc => (
+                  <option key={pc} value={pc}>{pc}</option>
+                ))}
+                <option value="UNASSIGNED">មិនទាន់កំណត់តុ ({unassignedStudents.length})</option>
+              </select>
+            </div>
+
+            <div className="relative">
+              <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400">
+                <Filter size={15} />
+              </div>
+              <select
+                value={selectedClass}
+                onChange={(e) => setSelectedClass(e.target.value)}
+                className="w-full bg-white appearance-none rounded-xl border border-slate-200 py-2 pl-9 pr-8 text-xs font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition cursor-pointer font-khmer"
+              >
+                <option value="ALL">គ្រប់ថ្នាក់ទាំងអស់</option>
+                {sortedClasses.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="px-5 py-3 text-xs font-khmer text-slate-600 bg-blue-50 flex flex-wrap items-center gap-3">
+            <span>CRUD ក្នុង Filter៖ {scopedAssignedCount} នាក់។ Pending មិនត្រូវបានលុបនៅពេលទាញយកទេ។</span>
+            {selectedClass !== 'ALL' && <span>បញ្ជាលុបសិស្សដែលលុបចេញពីបញ្ជីរួច ហើយគ្មានព័ត៌មានថ្នាក់ ត្រូវប្រើ Filter តុ + គ្រប់ថ្នាក់។</span>}
+            <label className="cursor-pointer text-blue-700 font-bold">
+              នាំចូលលទ្ធផលពី USB / ICTLabSync / Receipts
+              <input type="file" accept=".json" multiple className="hidden" disabled={isProcessing || isLoading}
+                onChange={event => { const files = Array.from(event.target.files || []); event.target.value = ''; if (files.length) void importSyncReceipts(files); }} />
+            </label>
+          </div>
+
+          {/* Multi-select Action Bar */}
+          {selectedStudentIds.size > 0 && (
+            <div className="px-5 py-2.5 bg-blue-50/90 border-b border-blue-100 flex items-center justify-between">
+              <span className="text-xs font-bold text-blue-800 font-khmer">
+                បានជ្រើសរើសសិស្សចំនួន {selectedStudentIds.size} នាក់
+              </span>
+              <button
+                type="button"
+                onClick={() => handlePrepareSyncUsb('SELECTED')}
                 disabled={isProcessing || isLoading}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold transition cursor-pointer font-khmer disabled:opacity-50"
+                className="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition shadow-xs cursor-pointer font-khmer"
               >
-                <Key size={13} />
-                <span>បង្កើត Password ស្វ័យប្រវត្តិ ({scopedMissingPasswords.length})</span>
+                Sync តែសិស្សដែលបានជ្រើស ({selectedStudentIds.size})
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setShowPasswords(!showPasswords)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 transition cursor-pointer font-khmer"
-            >
-              {showPasswords ? <EyeOff size={14} /> : <Eye size={14} />}
-              <span>{showPasswords ? 'លាក់លេខសម្ងាត់' : 'បង្ហាញលេខសម្ងាត់'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="p-4 sm:px-5 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/50 border-b border-slate-100">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
-            <input
-              type="text"
-              placeholder="ស្វែងរកតាមឈ្មោះ ឬ Student ID..."
-              className="w-full bg-white rounded-xl border border-slate-200 py-2 pl-9 pr-8 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition font-khmer"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-
-          <div className="relative">
-            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400">
-              <Cpu size={15} />
             </div>
-            <select
-              value={selectedDesk}
-              onChange={(e) => {
-                setSelectedDesk(e.target.value);
-                setSelectedStudentIds(new Set());
-              }}
-              className="w-full bg-white appearance-none rounded-xl border border-slate-200 py-2 pl-9 pr-8 text-xs font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition cursor-pointer font-khmer"
-            >
-              <option value="ALL">គ្រប់តុ / គ្រប់ PC</option>
-              {deskOptions.map(pc => (
-                <option key={pc} value={pc}>{pc}</option>
-              ))}
-              <option value="UNASSIGNED">មិនទាន់កំណត់តុ ({unassignedStudents.length})</option>
-            </select>
-          </div>
+          )}
 
-          <div className="relative">
-            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400">
-              <Filter size={15} />
-            </div>
-            <select
-              value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
-              className="w-full bg-white appearance-none rounded-xl border border-slate-200 py-2 pl-9 pr-8 text-xs font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition cursor-pointer font-khmer"
-            >
-              <option value="ALL">គ្រប់ថ្នាក់ទាំងអស់</option>
-              {sortedClasses.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-        </div>
+          {/* Table Content */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[750px]">
+              <thead className="bg-slate-50/80 text-slate-500 text-xs font-bold uppercase tracking-wider border-b border-slate-200/80">
+                <tr>
+                  <th className="px-4 py-3 w-10 text-center">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleVisibleStudents}
+                      className="rounded border-slate-300 cursor-pointer text-blue-600 focus:ring-blue-500"
+                    />
+                  </th>
+                  <th className="px-4 py-3 font-khmer">កុំព្យូទ័រ (PC)</th>
+                  <th className="px-4 py-3 font-khmer">អត្តលេខ (Windows Username)</th>
+                  <th className="px-4 py-3 font-khmer">ឈ្មោះសិស្ស</th>
+                  <th className="px-4 py-3 font-khmer">ភេទ</th>
+                  <th className="px-4 py-3 font-khmer">ថ្នាក់រៀន</th>
+                  <th className="px-4 py-3 font-khmer">លេខសម្ងាត់</th>
+                  <th className="px-4 py-3 font-khmer text-right">ស្ថានភាព</th>
+                  <th className="px-4 py-3 font-khmer text-center">សកម្មភាព</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredStudents.map((student) => {
+                  const normDesk = normalizePcNumber(student.pcNumber);
+                  const isSelected = selectedStudentIds.has(student.id);
+                  const isReady = !notReadyStudentIds.has(student.id);
 
-        <div className="px-5 py-3 text-xs font-khmer text-slate-600 bg-blue-50 flex flex-wrap items-center gap-3">
-          <span>CRUD ក្នុង Filter៖ {scopedAssignedCount} នាក់។ Pending មិនត្រូវបានលុបនៅពេលទាញយកទេ។</span>
-          {selectedClass !== 'ALL' && <span>បញ្ជាលុបសិស្សដែលលុបចេញពីបញ្ជីរួច ហើយគ្មានព័ត៌មានថ្នាក់ ត្រូវប្រើ Filter តុ + គ្រប់ថ្នាក់។</span>}
-          <label className="cursor-pointer text-blue-700 font-bold">
-            នាំចូលលទ្ធផលពី USB / ICTLabSync / Receipts
-            <input type="file" accept=".json" multiple className="hidden" disabled={isProcessing || isLoading}
-              onChange={event => { const files = Array.from(event.target.files || []); event.target.value = ''; if (files.length) void importSyncReceipts(files); }} />
-          </label>
-        </div>
+                  return (
+                    <tr 
+                      key={student.id} 
+                      className={`hover:bg-slate-50/70 transition-colors ${isSelected ? 'bg-blue-50/40' : ''}`}
+                    >
+                      <td className="px-4 py-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleStudentSelection(student.id)}
+                          disabled={!isReady}
+                          className="rounded border-slate-300 cursor-pointer text-blue-600 focus:ring-blue-500 disabled:opacity-30"
+                        />
+                      </td>
 
-        {/* Multi-select Action Bar */}
-        {selectedStudentIds.size > 0 && (
-          <div className="px-5 py-2.5 bg-blue-50/90 border-b border-blue-100 flex items-center justify-between">
-            <span className="text-xs font-bold text-blue-800 font-khmer">
-              បានជ្រើសរើសសិស្សចំនួន {selectedStudentIds.size} នាក់
-            </span>
-            <button
-              type="button"
-              onClick={() => handlePrepareSyncUsb('SELECTED')}
-              disabled={isProcessing || isLoading}
-              className="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition shadow-xs cursor-pointer font-khmer"
-            >
-              Sync តែសិស្សដែលបានជ្រើស ({selectedStudentIds.size})
-            </button>
-          </div>
-        )}
-
-        {/* Table Content */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[700px]">
-            <thead className="bg-slate-50/80 text-slate-500 text-xs font-bold uppercase tracking-wider border-b border-slate-200/80">
-              <tr>
-                <th className="px-4 py-3 w-10 text-center">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={toggleVisibleStudents}
-                    className="rounded border-slate-300 cursor-pointer text-blue-600 focus:ring-blue-500"
-                  />
-                </th>
-                <th className="px-4 py-3 font-khmer">កុំព្យូទ័រ (PC)</th>
-                <th className="px-4 py-3 font-khmer">អត្តលេខ (Windows Username)</th>
-                <th className="px-4 py-3 font-khmer">ឈ្មោះសិស្ស</th>
-                <th className="px-4 py-3 font-khmer">ភេទ</th>
-                <th className="px-4 py-3 font-khmer">ថ្នាក់រៀន</th>
-                <th className="px-4 py-3 font-khmer">លេខសម្ងាត់</th>
-                <th className="px-4 py-3 font-khmer text-right">ស្ថានភាព</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {filteredStudents.map((student) => {
-                const normDesk = normalizePcNumber(student.pcNumber);
-                const isSelected = selectedStudentIds.has(student.id);
-                const isReady = !notReadyStudentIds.has(student.id);
-
-                return (
-                  <tr 
-                    key={student.id} 
-                    className={`hover:bg-slate-50/70 transition-colors ${isSelected ? 'bg-blue-50/40' : ''}`}
-                  >
-                    <td className="px-4 py-3 text-center">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleStudentSelection(student.id)}
-                        disabled={!isReady}
-                        className="rounded border-slate-300 cursor-pointer text-blue-600 focus:ring-blue-500 disabled:opacity-30"
-                      />
-                    </td>
-
-                    <td className="px-4 py-3 font-mono">
-                      {normDesk ? (
-                        <span className="inline-block px-2.5 py-0.5 rounded-lg bg-blue-50 text-blue-700 font-bold border border-blue-200 text-xs">
-                          {normDesk}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 font-khmer text-[11px]">មិនទាន់មានតុ</span>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3 font-mono font-bold text-slate-800">
-                      {student.studentId}
-                    </td>
-
-                    <td className="px-4 py-3 min-w-[180px]">
-                      <div className="font-bold text-slate-800 font-khmer text-sm leading-normal">
-                        {student.name}
-                      </div>
-                      {student.englishName && (
-                        <div className="text-[11px] text-indigo-600 font-sans font-medium leading-tight">
-                          {student.englishName}
-                        </div>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3 text-slate-600 font-khmer">
-                      {student.gender === 'F' ? 'ស្រី' : 'ប្រុស'}
-                    </td>
-
-                    <td className="px-4 py-3 text-slate-700 font-medium">
-                      {classNameById.get(student.class) || student.class}
-                    </td>
-
-                    <td className="px-4 py-3 font-mono">
-                      {student.password ? (
-                        showPasswords ? (
-                          <span className="text-slate-800 font-bold bg-slate-100 px-2 py-0.5 rounded">
-                            {student.password}
+                      <td className="px-4 py-3 font-mono">
+                        {normDesk ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-lg bg-blue-50 text-blue-700 font-bold border border-blue-200 text-xs">
+                            {normDesk}
                           </span>
                         ) : (
-                          <span className="text-slate-400 tracking-widest font-mono">
-                            ••••••••
-                          </span>
-                        )
-                      ) : (
-                        <span className="text-amber-600 font-bold text-[11px] font-khmer">ខ្វះលេខសម្ងាត់</span>
-                      )}
-                    </td>
+                          <span className="text-slate-400 font-khmer text-[11px]">មិនទាន់មានតុ</span>
+                        )}
+                      </td>
 
-                    <td className="px-4 py-3 text-right">
-                      {isReady ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-[11px] border border-emerald-200 font-khmer">
-                          <CheckCircle2 size={11} /> រួចរាល់
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 font-bold text-[11px] border border-amber-200 font-khmer">
-                          <AlertTriangle size={11} /> ត្រូវកែសម្រួល
-                        </span>
-                      )}
+                      <td className="px-4 py-3 font-mono font-bold text-slate-800">
+                        {student.studentId}
+                      </td>
+
+                      <td className="px-4 py-3 min-w-[180px]">
+                        <div className="font-bold text-slate-800 font-khmer text-sm leading-normal">
+                          {student.name}
+                        </div>
+                        {student.englishName && (
+                          <div className="text-[11px] text-indigo-600 font-sans font-medium leading-tight">
+                            {student.englishName}
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-600 font-khmer">
+                        {student.gender === 'F' ? 'ស្រី' : 'ប្រុស'}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-700 font-medium">
+                        {classNameById.get(student.class) || student.class}
+                      </td>
+
+                      <td className="px-4 py-3 font-mono">
+                        {student.password ? (
+                          showPasswords ? (
+                            <span className="text-slate-800 font-bold bg-slate-100 px-2 py-0.5 rounded">
+                              {student.password}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 tracking-widest font-mono">
+                              ••••••••
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-amber-600 font-bold text-[11px] font-khmer">ខ្វះលេខសម្ងាត់</span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 text-right">
+                        {isReady ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-[11px] border border-emerald-200 font-khmer">
+                            <CheckCircle2 size={11} /> រួចរាល់
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 font-bold text-[11px] border border-amber-200 font-khmer">
+                            <AlertTriangle size={11} /> ត្រូវកែសម្រួល
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 text-center whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditStudent(student)}
+                            title="កែសម្រួល PC & លេខសម្ងាត់"
+                            className="p-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition cursor-pointer"
+                          >
+                            <Edit2 size={13} />
+                          </button>
+                          {normDesk ? (
+                            <button
+                              type="button"
+                              onClick={() => handleUnassignStudent(student)}
+                              title={`ដកចេញពី ${normDesk}`}
+                              className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer"
+                            >
+                              <UserX size={13} />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditStudent(student)}
+                              title="កំណត់តុ/PC"
+                              className="p-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition cursor-pointer"
+                            >
+                              <Plus size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {filteredStudents.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="py-12 text-center text-slate-400 font-khmer text-sm">
+                      មិនមានទិន្នន័យសិស្សត្រូវនឹងលក្ខខណ្ឌស្វែងរកទេ។
                     </td>
                   </tr>
-                );
-              })}
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
-              {filteredStudents.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400 font-khmer text-sm">
-                    មិនមានទិន្នន័យសិស្សត្រូវនឹងលក្ខខណ្ឌស្វែងរកទេ។
-                  </td>
-                </tr>
+      {/* 7. TAB 2: TASKS CRUD (PC SYNC TASKS MANAGEMENT) */}
+      {activeTab === 'TASKS' && (
+        <section className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+          {/* Header */}
+          <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 border border-indigo-100">
+                <ListTodo size={20} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-slate-800 font-khmer">
+                    បញ្ជីភារកិច្ចសមកាលកម្ម PC (PC Sync Tasks)
+                  </h2>
+                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold font-mono">
+                    {filteredTasks.length} Tasks
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 font-khmer mt-0.5">
+                  គ្រប់គ្រង CRUD: បង្កើត (Create), មើល (Read), កែប្រែ (Update) និងលុប (Delete) ភារកិច្ចដែលត្រូវរៀបចំលើ Client PC
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleOpenCreateTask}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition active:scale-[0.98] cursor-pointer font-khmer"
+              >
+                <Plus size={14} />
+                <span>បង្កើត Task ថ្មី</span>
+              </button>
+
+              {allTasks.some(t => t.status === 'COMPLETED') && (
+                <button
+                  type="button"
+                  onClick={handleClearCompletedTasks}
+                  disabled={isProcessing}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 text-xs font-bold transition cursor-pointer font-khmer disabled:opacity-50"
+                  title="លុប Tasks ដែលបាន Sync រួចរាល់"
+                >
+                  <Trash2 size={13} />
+                  <span>សម្អាត Tasks រួចរាល់</span>
+                </button>
               )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </div>
+          </div>
+
+          {/* Filters Bar */}
+          <div className="p-4 sm:px-5 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/50 border-b border-slate-100">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+              <input
+                type="text"
+                placeholder="ស្វែងរកតាម PC, Student ID ឬឈ្មោះ..."
+                className="w-full bg-white rounded-xl border border-slate-200 py-2 pl-9 pr-8 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition font-khmer"
+                value={taskSearchQuery}
+                onChange={(e) => setTaskSearchQuery(e.target.value)}
+              />
+              {taskSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setTaskSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            <div className="relative">
+              <select
+                value={taskStatusFilter}
+                onChange={(e) => setTaskStatusFilter(e.target.value as any)}
+                className="w-full bg-white rounded-xl border border-slate-200 py-2 px-3 text-xs font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition cursor-pointer font-khmer"
+              >
+                <option value="ALL">គ្រប់ស្ថានភាព (All Statuses)</option>
+                <option value="PENDING">រង់ចាំ Sync (PENDING)</option>
+                <option value="COMPLETED">បានជោគជ័យ (COMPLETED)</option>
+              </select>
+            </div>
+
+            <div className="relative">
+              <select
+                value={taskActionFilter}
+                onChange={(e) => setTaskActionFilter(e.target.value as any)}
+                className="w-full bg-white rounded-xl border border-slate-200 py-2 px-3 text-xs font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition cursor-pointer font-khmer"
+              >
+                <option value="ALL">គ្រប់សកម្មភាព (All Actions)</option>
+                <option value="ADD">+ បន្ថែមគណនី (ADD)</option>
+                <option value="UPDATE_PASSWORD">🔑 កែពាក្យសម្ងាត់ (UPDATE_PASSWORD)</option>
+                <option value="REMOVE">- លុបគណនី (REMOVE)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Multi-select Action Bar for Tasks */}
+          {selectedTaskIds.size > 0 && (
+            <div className="px-5 py-2.5 bg-indigo-50/90 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-150">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-indigo-900 font-khmer">
+                  បានជ្រើសរើស {selectedTaskIds.size} ភារកិច្ច (Tasks)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTaskIds(new Set())}
+                  className="text-[11px] text-indigo-600 hover:underline font-khmer cursor-pointer"
+                >
+                  (ដោះការជ្រើសរើស)
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => handleBatchSetStatus('COMPLETED')}
+                  disabled={isProcessing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition cursor-pointer font-khmer disabled:opacity-50"
+                >
+                  <CheckCircle2 size={13} />
+                  <span>កំណត់ថាបានជោគជ័យ ({selectedTaskIds.size})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBatchSetStatus('PENDING')}
+                  disabled={isProcessing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition cursor-pointer font-khmer disabled:opacity-50"
+                >
+                  <Clock size={13} />
+                  <span>កំណត់ថារង់ចាំ Sync ({selectedTaskIds.size})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBatchDeleteTasks}
+                  disabled={isProcessing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition cursor-pointer font-khmer disabled:opacity-50"
+                >
+                  <Trash2 size={13} />
+                  <span>លុប Tasks ដែលបានជ្រើស ({selectedTaskIds.size})</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Tasks Table Content */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[750px]">
+              <thead className="bg-slate-50/80 text-slate-500 text-xs font-bold uppercase tracking-wider border-b border-slate-200/80">
+                <tr>
+                  <th className="px-4 py-3 w-10 text-center">
+                    <input
+                      type="checkbox"
+                      checked={filteredTasks.length > 0 && selectedTaskIds.size === filteredTasks.length}
+                      onChange={toggleAllFilteredTasks}
+                      className="rounded border-slate-300 cursor-pointer text-blue-600 focus:ring-blue-500"
+                    />
+                  </th>
+                  <th className="px-4 py-3 font-khmer">កុំព្យូទ័រ (PC)</th>
+                  <th className="px-4 py-3 font-khmer">សកម្មភាព (Action)</th>
+                  <th className="px-4 py-3 font-khmer">អត្តលេខ (Student ID)</th>
+                  <th className="px-4 py-3 font-khmer">ឈ្មោះសិស្ស</th>
+                  <th className="px-4 py-3 font-khmer">លេខសម្ងាត់</th>
+                  <th className="px-4 py-3 font-khmer">ស្ថានភាព (Status)</th>
+                  <th className="px-4 py-3 font-khmer">កាលបរិច្ឆេទ</th>
+                  <th className="px-4 py-3 font-khmer text-center">សកម្មភាព</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredTasks.map((task) => {
+                  const isPending = task.status === 'PENDING';
+                  const isSelected = selectedTaskIds.has(task.id);
+                  return (
+                    <tr 
+                      key={task.id} 
+                      className={`hover:bg-slate-50/70 transition-colors ${isSelected ? 'bg-indigo-50/40' : ''}`}
+                    >
+                      <td className="px-4 py-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleTaskSelection(task.id)}
+                          className="rounded border-slate-300 cursor-pointer text-blue-600 focus:ring-blue-500"
+                        />
+                      </td>
+
+                      <td className="px-4 py-3 font-mono">
+                        <span className="inline-block px-2.5 py-0.5 rounded-lg bg-blue-50 text-blue-700 font-bold border border-blue-200 text-xs">
+                          {task.pcNumber}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {task.action === 'ADD' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-[11px] border border-emerald-200 font-khmer">
+                            <Plus size={11} /> បន្ថែមគណនី
+                          </span>
+                        )}
+                        {task.action === 'REMOVE' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 font-bold text-[11px] border border-rose-200 font-khmer">
+                            <Trash2 size={11} /> លុបគណនី
+                          </span>
+                        )}
+                        {task.action === 'UPDATE_PASSWORD' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 font-bold text-[11px] border border-amber-200 font-khmer">
+                            <Key size={11} /> កែពាក្យសម្ងាត់
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 font-mono font-bold text-slate-800">
+                        {task.studentId}
+                      </td>
+
+                      <td className="px-4 py-3 font-bold text-slate-800 font-khmer">
+                        {task.studentName}
+                      </td>
+
+                      <td className="px-4 py-3 font-mono">
+                        {task.password ? (
+                          <span className="text-slate-800 font-bold bg-slate-100 px-2 py-0.5 rounded">
+                            {task.password}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-[11px] italic font-khmer">- គ្មាន -</span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {isPending ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-bold text-[11px] border border-indigo-200 font-khmer">
+                            <Clock size={11} /> រង់ចាំ Sync
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-[11px] border border-emerald-200 font-khmer">
+                            <Check size={11} /> ជោគជ័យ
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 text-slate-500 font-mono text-[11px]">
+                        {formatTaskDate(task.createdAt)}
+                      </td>
+
+                      <td className="px-4 py-3 text-center whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditTask(task)}
+                            title="កែសម្រួល Task"
+                            className="p-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition cursor-pointer"
+                          >
+                            <Edit2 size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleTaskStatus(task)}
+                            title={isPending ? "កំណត់ថាបានជោគជ័យ (Mark Completed)" : "កំណត់ថារង់ចាំ (Mark Pending)"}
+                            className={`p-1.5 rounded-lg transition cursor-pointer ${
+                              isPending 
+                                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' 
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                          >
+                            <CheckCircle2 size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTask(task.id)}
+                            title="លុប Task នេះ"
+                            className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {filteredTasks.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="py-12 text-center text-slate-400 font-khmer text-sm">
+                      មិនមានភារកិច្ច Sync ត្រូវនឹងលក្ខខណ្ឌស្វែងរកឡើយ។
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* 7. Advanced Settings Modal */}
       {isSettingsModalOpen && (
@@ -1091,6 +1829,277 @@ const PcSync = () => {
                 រួចរាល់
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Task Create / Edit Modal (CRUD) */}
+      {isTaskModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-slate-800 font-bold">
+                <ListTodo size={18} className="text-blue-600" />
+                <span className="font-khmer">
+                  {editingTask ? 'កែសម្រួលភារកិច្ច Sync' : 'បង្កើតភារកិច្ច Sync ថ្មី'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setIsTaskModalOpen(false); setEditingTask(null); }}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveTask} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 font-khmer mb-1">
+                  កុំព្យូទ័រគោលដៅ (Target PC) *
+                </label>
+                <select
+                  value={taskForm.pcNumber}
+                  onChange={(e) => setTaskForm(prev => ({ ...prev, pcNumber: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                >
+                  {standardPcs.map(pc => (
+                    <option key={pc} value={pc}>{pc}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 font-khmer mb-1">
+                  សកម្មភាព (Action) *
+                </label>
+                <select
+                  value={taskForm.action}
+                  onChange={(e) => setTaskForm(prev => ({ ...prev, action: e.target.value as any }))}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer font-khmer"
+                >
+                  <option value="ADD">+ បន្ថែមគណនីទៅ PC (ADD)</option>
+                  <option value="UPDATE_PASSWORD">🔑 កែប្រែលេខសម្ងាត់លើ PC (UPDATE_PASSWORD)</option>
+                  <option value="REMOVE">- លុបគណនីចេញពី PC (REMOVE)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 font-khmer mb-1">
+                  ជ្រើសរើសសិស្ស ឬបញ្ចូលដោយដៃ
+                </label>
+                <select
+                  onChange={(e) => {
+                    const st = allStudents.find(s => s.id === e.target.value);
+                    if (st) {
+                      setTaskForm(prev => ({
+                        ...prev,
+                        studentId: st.studentId,
+                        studentName: (st.englishName?.trim() || st.name?.trim() || st.studentId).trim(),
+                        password: st.password || prev.password,
+                      }));
+                    }
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600 outline-none mb-2 cursor-pointer font-khmer"
+                >
+                  <option value="">-- ជ្រើសរើសសិស្សពីបញ្ជី (ជម្រើសងាយស្រួល) --</option>
+                  {allStudents.map(st => (
+                    <option key={st.id} value={st.id}>
+                      {st.studentId} - {st.name} ({st.class})
+                    </option>
+                  ))}
+                </select>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 font-khmer mb-0.5">
+                      អត្តលេខ (Username) *
+                    </label>
+                    <input
+                      type="text"
+                      value={taskForm.studentId}
+                      onChange={(e) => setTaskForm(prev => ({ ...prev, studentId: e.target.value.trim() }))}
+                      placeholder="B00123"
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 font-khmer mb-0.5">
+                      ឈ្មោះសិស្ស *
+                    </label>
+                    <input
+                      type="text"
+                      value={taskForm.studentName}
+                      onChange={(e) => setTaskForm(prev => ({ ...prev, studentName: e.target.value }))}
+                      placeholder="ឈ្មោះសិស្ស"
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-khmer outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {taskForm.action !== 'REMOVE' && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-700 font-khmer">
+                      លេខសម្ងាត់ Windows (3 ខ្ទង់)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const rand = Math.floor(100 + Math.random() * 900);
+                        setTaskForm(prev => ({ ...prev, password: String(rand) }));
+                      }}
+                      className="text-[11px] text-blue-600 hover:underline font-khmer font-bold cursor-pointer"
+                    >
+                      បង្កើតចៃដន្យ
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={taskForm.password}
+                    onChange={(e) => setTaskForm(prev => ({ ...prev, password: e.target.value }))}
+                    placeholder="123"
+                    className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 font-khmer mb-1">
+                  ស្ថានភាព (Status)
+                </label>
+                <select
+                  value={taskForm.status}
+                  onChange={(e) => setTaskForm(prev => ({ ...prev, status: e.target.value as any }))}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer font-khmer"
+                >
+                  <option value="PENDING">រង់ចាំ Sync (PENDING)</option>
+                  <option value="COMPLETED">បានជោគជ័យ (COMPLETED)</option>
+                </select>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => { setIsTaskModalOpen(false); setEditingTask(null); }}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50 transition cursor-pointer font-khmer"
+                >
+                  បោះបង់
+                </button>
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="px-5 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition shadow-xs font-khmer cursor-pointer disabled:opacity-50"
+                >
+                  {editingTask ? 'រក្សាទុកការកែប្រែ' : 'បង្កើត Task'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 9. Student PC & Password Quick Edit Modal (CRUD) */}
+      {studentToEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-slate-800 font-bold">
+                <Edit2 size={18} className="text-blue-600" />
+                <span className="font-khmer">ចាត់ចែងតុ PC & លេខសម្ងាត់សិស្ស</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStudentToEdit(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveStudentPcAndPass} className="p-6 space-y-4">
+              <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-100 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-800 font-khmer text-sm">{studentToEdit.name}</span>
+                  <span className="font-mono font-bold text-blue-700">{studentToEdit.studentId}</span>
+                </div>
+                <div className="text-slate-500 font-khmer flex gap-2">
+                  <span>ថ្នាក់៖ <strong>{classNameById.get(studentToEdit.class) || studentToEdit.class}</strong></span>
+                  <span>•</span>
+                  <span>វេន៖ <strong>{studentToEdit.shift}</strong></span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 font-khmer mb-1">
+                  ជ្រើសរើសកុំព្យូទ័រ / តុ (Assigned PC)
+                </label>
+                <select
+                  value={editPcNumber}
+                  onChange={(e) => setEditPcNumber(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                >
+                  <option value="">-- មិនទាន់កំណត់តុ (UNASSIGNED) --</option>
+                  {standardPcs.map(pc => {
+                    const isBroken = brokenPcs.includes(pc);
+                    return (
+                      <option key={pc} value={pc}>
+                        {pc} {isBroken ? '⚠️ (ម៉ាស៊ីនខូច - Broken)' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                <p className="text-[11px] text-slate-500 font-khmer mt-1">
+                  ប្រសិនបើផ្លាស់ប្តូរតុ ប្រព័ន្ធនឹងបង្កើត Task ដើម្បីលុបគណនីពីតុចាស់ និងបង្កើតលើតុថ្មីដោយស្វ័យប្រវត្តិ។
+                </p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-700 font-khmer">
+                    លេខសម្ងាត់ចូល Windows (3 ខ្ទង់)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const rand = Math.floor(100 + Math.random() * 900);
+                      setEditPassword(String(rand));
+                    }}
+                    className="text-[11px] text-blue-600 hover:underline font-khmer font-bold cursor-pointer"
+                  >
+                    បង្កើតចៃដន្យ
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  placeholder="ឧ. 123"
+                  maxLength={10}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-mono outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setStudentToEdit(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50 transition cursor-pointer font-khmer"
+                >
+                  បោះបង់
+                </button>
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="px-5 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition shadow-xs font-khmer cursor-pointer disabled:opacity-50"
+                >
+                  រក្សាទុក
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

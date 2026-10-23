@@ -7,16 +7,9 @@ import { exportToExcel } from '../utils/excel';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { useAuth } from '../contexts/AuthContext';
+import { getLocalDate } from '../utils/date';
 
 type Operation = 'backup' | 'restore' | 'excel' | 'clear' | 'api' | null;
-
-const getLocalDate = () => {
-  const dateObj = new Date();
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const day = String(dateObj.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
 
 const Settings = () => {
   const { activeYear } = useAcademicYear();
@@ -26,8 +19,8 @@ const Settings = () => {
   const [operation, setOperation] = useState<Operation>(null);
   const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
   
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const reloadTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Gemini API Key State
   const [apiKey, setApiKey] = useState(() => {

@@ -11,6 +11,7 @@ import type {
 import { Modal } from '../../components/ui/Modal';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
 import { compareKhmer } from '../../utils/khmerSort';
+import { getLocalDate } from '../../utils/date';
 import './CurriculumLibrary.css';
 
 // Default subject configs
@@ -388,7 +389,7 @@ const CurriculumLibrary = () => {
           id: crypto.randomUUID(),
           classId,
           subjectId,
-          startDate: new Date().toISOString().split('T')[0],
+          startDate: getLocalDate(),
           academicYear: activeYear,
         };
         await db.add('classCurriculums', record);
@@ -424,7 +425,7 @@ const CurriculumLibrary = () => {
             id: crypto.randomUUID(),
             classId: cls.id,
             subjectId: batchTargetSubjectId,
-            startDate: new Date().toISOString().split('T')[0],
+            startDate: getLocalDate(),
             academicYear: activeYear,
           });
         } else if (action === 'remove' && existing) {
@@ -458,7 +459,7 @@ const CurriculumLibrary = () => {
               id: crypto.randomUUID(),
               classId,
               subjectId: sub.id,
-              startDate: new Date().toISOString().split('T')[0],
+              startDate: getLocalDate(),
               academicYear: activeYear,
             });
           }

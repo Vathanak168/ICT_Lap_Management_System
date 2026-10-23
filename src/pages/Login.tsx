@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
+  Info,
   Lock,
   LogIn,
   User
@@ -19,6 +20,8 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [googleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [showForgotModal, setShowForgotModal] = useState(false);
 
   const navigate = useNavigate();
   const { session } = useAuth();
@@ -34,6 +37,7 @@ const Login: React.FC = () => {
     if (e) e.preventDefault();
     setLoading(true);
     setError(null);
+    setInfoMessage(null);
 
     try {
       if (!identifier || !password) {
@@ -44,8 +48,7 @@ const Login: React.FC = () => {
       const isEmail = emailToLogin.includes('@');
 
       if (!isEmail) {
-        // NOTE: Login-by-name inherently has some user enumeration risk.
-        // Using generic error messages to minimize information leakage.
+        // Query profiles by name.
         const { data: matches, error: lookupError } = await supabase
           .from('profiles')
           .select('email, name')
@@ -54,33 +57,52 @@ const Login: React.FC = () => {
         if (lookupError) throw lookupError;
 
         if (!matches || matches.length === 0) {
-          throw new Error('ឈ្មោះ ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ។ សូមពិនិត្យម្តងទៀត។');
+          // Standardized generic error to prevent user enumeration
+          throw new Error('INVALID_CREDENTIALS');
         }
 
         if (matches.length > 1) {
-          throw new Error('មានគណនីច្រើនដែលមានឈ្មោះដូចគ្នា។ សូមប្រើ Email ដើម្បីចូលគណនីជំនួស។');
+          throw new Error('MULTIPLE_ACCOUNTS');
         }
 
         emailToLogin = matches[0].email;
       }
 
-      const { error } = await supabase.auth.signInWithPassword({
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email: emailToLogin,
         password,
       });
 
-      if (error) throw error;
+      if (signInError) throw signInError;
 
       navigate('/');
     } catch (err: any) {
-      setError(err.message || 'បញ្ហាពេលចូលគណនី សូមព្យាយាមម្តងទៀត');
+      const msg = err?.message || '';
+      if (
+        msg === 'INVALID_CREDENTIALS' ||
+        msg.includes('Invalid login credentials') ||
+        msg.includes('invalid_grant') ||
+        msg.includes('User not found')
+      ) {
+        // Unified error message for both wrong username and wrong password
+        setError('ឈ្មោះគណនី/អ៊ីមែល ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ។ សូមពិនិត្យម្តងទៀត។');
+      } else if (msg === 'MULTIPLE_ACCOUNTS' || msg.includes('មានគណនីច្រើន')) {
+        setError('មានគណនីច្រើនដែលមានឈ្មោះដូចគ្នា។ សូមប្រើ Email ដើម្បីចូលគណនីជំនួស។');
+      } else if (msg.includes('Email not confirmed')) {
+        setError('អ៊ីមែលនេះមិនទាន់បានបញ្ជាក់ (Confirm) នៅឡើយទេ។ សូមពិនិត្យប្រអប់សំបុត្ររបស់អ្នក។');
+      } else if (msg.includes('សូមបំពេញ')) {
+        setError(msg);
+      } else {
+        setError('មានបញ្ហាក្នុងការភ្ជាប់ទៅកាន់ប្រព័ន្ធ សូមព្យាយាមម្តងទៀតនៅពេលបន្តិចក្រោយ។');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGoogleLogin = async () => {
-    setError('មុខងារនេះកំពុងស្ថិតក្នុងការអភិវឌ្ឍន៍។ សូមអភ័យទោស!');
+  const handleGoogleLogin = () => {
+    setError(null);
+    setInfoMessage('មុខងារចូលគណនីជាមួយ Google (SSO) កំពុងស្ថិតក្នុងការអភិវឌ្ឍន៍ និងគ្រោងដាក់ឱ្យប្រើប្រាស់ក្នុងពេលឆាប់ៗនេះ។');
   };
 
   const isBusy = loading || googleLoading;
@@ -149,6 +171,15 @@ const Login: React.FC = () => {
               <AlertCircle size={18} className="mt-0.5 shrink-0 text-red-500" />
               <p className="text-[13px] font-medium leading-relaxed text-red-700">
                 {error}
+              </p>
+            </div>
+          )}
+
+          {infoMessage && (
+            <div className="w-full mb-6 flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50/70 px-4 py-3 shadow-[inset_2px_2px_5px_#bfdbfe,inset_-2px_-2px_5px_#ffffff]">
+              <Info size={18} className="mt-0.5 shrink-0 text-blue-600" />
+              <p className="text-[13px] font-medium leading-relaxed text-blue-800">
+                {infoMessage}
               </p>
             </div>
           )}
@@ -226,9 +257,13 @@ const Login: React.FC = () => {
                   ចងចាំខ្ញុំ
                 </span>
               </label>
-              <a href="#" className="text-sm font-bold text-[#1E3C72] hover:underline">
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(true)}
+                className="text-sm font-bold text-[#1E3C72] hover:underline cursor-pointer bg-transparent border-none p-0"
+              >
                 ភ្លេចពាក្យសម្ងាត់?
-              </a>
+              </button>
             </div>
 
             {/* Sign In Button */}
@@ -258,8 +293,11 @@ const Login: React.FC = () => {
 
             {/* Google Button */}
             <button
+              type="button"
               onClick={handleGoogleLogin}
               disabled={isBusy}
+              aria-label="ចូលគណនីជាមួយ Google (ឆាប់ៗនេះ)"
+              title="មុខងារចូលគណនីជាមួយ Google នឹងបើកដំណើរការឆាប់ៗនេះ"
               className="w-full h-14 rounded-2xl flex items-center justify-center gap-3 font-bold text-[15px] text-slate-700 transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed"
               style={{
                 backgroundColor: '#E6EBF5',
@@ -277,6 +315,7 @@ const Login: React.FC = () => {
                     <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
                   </svg>
                   <span>ចូលគណនីជាមួយ Google</span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">ឆាប់ៗនេះ</span>
                 </>
               )}
             </button>
@@ -291,6 +330,32 @@ const Login: React.FC = () => {
           </div>
         </div>
 
+        {/* Forgot Password Modal */}
+        {showForgotModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+            <div 
+              className="bg-[#E6EBF5] rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-white/60 text-slate-800 flex flex-col"
+              style={{
+                boxShadow: '16px 16px 32px #c4c8d1, -16px -16px 32px #ffffff'
+              }}
+            >
+              <h3 className="text-lg font-bold text-[#1E3C72] mb-3 flex items-center gap-2">
+                <Lock size={20} />
+                <span>ជំនួយការភ្លេចពាក្យសម្ងាត់</span>
+              </h3>
+              <p className="text-sm text-slate-600 leading-relaxed mb-6 font-medium">
+                ដើម្បីសុវត្ថិភាពទិន្នន័យប្រព័ន្ធ ប្រសិនបើលោកអ្នកភ្លេចពាក្យសម្ងាត់ ឬមិនអាចចូលគណនីបាន សូមទាក់ទងមកកាន់ <strong>អ្នកគ្រប់គ្រងប្រព័ន្ធ (Admin)</strong> ឬ <strong>ការិយាល័យ IT</strong> ដើម្បីស្នើសុំកំណត់ពាក្យសម្ងាត់ថ្មី។
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(false)}
+                className="w-full py-3.5 rounded-2xl bg-[#0044CC] hover:bg-[#0038b3] text-white font-bold text-sm shadow-md transition-all cursor-pointer"
+              >
+                យល់ព្រម
+              </button>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

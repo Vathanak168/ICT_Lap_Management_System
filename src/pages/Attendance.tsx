@@ -32,6 +32,7 @@ import { Button } from '../components/ui/Button';
 import { useLanguage } from '../contexts/LanguageContext';
 import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
 import { exportToExcel } from '../utils/excel';
+import { getLocalDate } from '../utils/date';
 
 type AttendanceStatus = 'P' | 'A' | 'E' | 'L' | null;
 
@@ -50,13 +51,6 @@ interface StudentAttendanceSummary {
     noBook: boolean;
   }>;
 }
-
-const getLocalDate = (dateObj: Date = new Date()) => {
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const day = String(dateObj.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
 
 const formatDateDisplay = (dateStr: string) => {
   if (!dateStr) return '';
@@ -357,12 +351,21 @@ const Attendance = () => {
     };
   }, [activeTab, selectedClass, activeYear]);
 
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const showToast = (type: 'success' | 'error', text: string) => {
     setToastMessage({ type, text });
-    setTimeout(() => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => {
       setToastMessage(null);
     }, 4000);
   };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   // Tab change handler with unsaved changes guard
   const handleTabChange = (newTab: 'DAILY' | 'SUMMARY') => {

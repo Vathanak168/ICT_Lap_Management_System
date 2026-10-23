@@ -165,18 +165,93 @@ export const queuePcSyncTask = async (
   academicYear: string,
   password?: string | null,
 ) => {
-  const task: PcSyncTask = {
-    id: crypto.randomUUID(),
-    pcNumber,
-    studentId: student.studentId,
-    studentName: student.name,
-    action,
-    password: password !== undefined ? password : (student.password || null),
-    status: 'PENDING',
-    createdAt: new Date().toISOString(),
-    academicYear,
-  };
+  const normPc = (pcNumber || '').trim().toUpperCase().replace(/^(?:PC[-_ ]?)?(\d+)$/, (_, n) => 'PC-' + n.replace(/^0+(?=\d)/, '').padStart(2, '0'));
+  const finalPassword = password !== undefined ? password : (student.password || null);
+  const studentDisplayName = (student.englishName?.trim() || student.name?.trim() || student.studentId).trim();
+  const studentId = student.studentId?.trim();
+
+  if (!normPc || !studentId || !academicYear) return;
+
   try {
+    const allTasks: PcSyncTask[] = await db.getAll('pcSyncTasks', academicYear).catch(() => [] as PcSyncTask[]);
+    const studentTasks = (allTasks || []).filter(
+      t => t.studentId?.trim().toLowerCase() === studentId.toLowerCase() &&
+           (t.pcNumber || '').trim().toUpperCase().replace(/^(?:PC[-_ ]?)?(\d+)$/, (_, n) => 'PC-' + n.replace(/^0+(?=\d)/, '').padStart(2, '0')) === normPc
+    );
+    const pendingTasks = studentTasks.filter(t => t.status === 'PENDING');
+    const hasCompletedOnThisPc = studentTasks.some(t => t.status === 'COMPLETED');
+
+    if (action === 'ADD') {
+      const pendingRemove = pendingTasks.find(t => t.action === 'REMOVE');
+      if (pendingRemove) {
+        await db.delete('pcSyncTasks', pendingRemove.id);
+      }
+      const pendingAdd = pendingTasks.find(t => t.action === 'ADD');
+      if (pendingAdd) {
+        await db.put('pcSyncTasks', {
+          ...pendingAdd,
+          studentName: studentDisplayName,
+          password: finalPassword,
+        });
+        return;
+      }
+      const pendingUpdate = pendingTasks.find(t => t.action === 'UPDATE_PASSWORD');
+      if (pendingUpdate) {
+        await db.put('pcSyncTasks', {
+          ...pendingUpdate,
+          action: 'ADD',
+          studentName: studentDisplayName,
+          password: finalPassword,
+        });
+        return;
+      }
+    } else if (action === 'UPDATE_PASSWORD') {
+      const pendingAdd = pendingTasks.find(t => t.action === 'ADD');
+      if (pendingAdd) {
+        await db.put('pcSyncTasks', {
+          ...pendingAdd,
+          studentName: studentDisplayName,
+          password: finalPassword,
+        });
+        return;
+      }
+      const pendingUpdate = pendingTasks.find(t => t.action === 'UPDATE_PASSWORD');
+      if (pendingUpdate) {
+        await db.put('pcSyncTasks', {
+          ...pendingUpdate,
+          studentName: studentDisplayName,
+          password: finalPassword,
+        });
+        return;
+      }
+    } else if (action === 'REMOVE') {
+      const pendingAdd = pendingTasks.find(t => t.action === 'ADD');
+      const pendingUpdate = pendingTasks.find(t => t.action === 'UPDATE_PASSWORD');
+      
+      if (pendingAdd) await db.delete('pcSyncTasks', pendingAdd.id);
+      if (pendingUpdate) await db.delete('pcSyncTasks', pendingUpdate.id);
+
+      if (!hasCompletedOnThisPc && (pendingAdd || pendingUpdate)) {
+        return;
+      }
+
+      const existingRemove = pendingTasks.find(t => t.action === 'REMOVE');
+      if (existingRemove) {
+        return;
+      }
+    }
+
+    const task: PcSyncTask = {
+      id: crypto.randomUUID(),
+      pcNumber: normPc,
+      studentId,
+      studentName: studentDisplayName,
+      action,
+      password: finalPassword,
+      status: 'PENDING',
+      createdAt: new Date().toISOString(),
+      academicYear,
+    };
     await db.put('pcSyncTasks', task);
   } catch (error) {
     console.warn('Failed to queue PC Sync task:', error);
@@ -1040,6 +1115,11 @@ export class SupabaseDBAdapter {
   readonly objectStoreNames = Object.assign([...STORE_NAMES], {
     contains: (name: string): name is StoreName => STORE_NAMES.includes(name as StoreName),
   });
+
+  supportsAcademicYear(storeNameInput: string): boolean {
+    if (!STORE_NAMES.includes(storeNameInput as StoreName)) return false;
+    return Boolean(storeSchemas[storeNameInput as StoreName]?.academicYear);
+  }
 
   async ensureBranchFetched(): Promise<void> {
     const userId = await this.getAuthenticatedUserId();

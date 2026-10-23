@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Save, Download, Lock, Unlock, Edit, X, Globe, Languages, Settings, Award } from 'lucide-react';
+import { Save, Download, Lock, Unlock, Edit, X, Globe, Languages, Settings, Award, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { initDB } from '../store/db';
 import type { Student, ClassRecord, GradeRecord } from '../store/db';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -30,6 +30,22 @@ const Gradebook = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = (type: 'success' | 'error', text: string) => {
+    setToastMessage({ type, text });
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 4500);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
   
   const { language, toggleLanguage } = useLanguage();
   const { activeYear } = useAcademicYear();
@@ -145,7 +161,6 @@ const Gradebook = () => {
       updated.adjustment = autoAdj === 0 ? null : autoAdj;
       updated.pointsBalance = updated.effectiveBank - autoAdj;
       if (autoAdj !== 0 && (!updated.adjustmentNote || updated.adjustmentNote === 'ទាញពីស្តុក')) {
-         // @ts-ignore - pointsNote exists on Student
          updated.adjustmentNote = updated.pointsNote ? `ទាញពីស្តុក៖ ${updated.pointsNote}` : 'ទាញពីស្តុក';
       } else if (autoAdj === 0 && updated.adjustmentNote.includes('ទាញពីស្តុក')) {
          updated.adjustmentNote = '';
@@ -356,7 +371,7 @@ const Gradebook = () => {
     try {
       const db = await initDB();
 
-      // Group scores by classId to save one GradeRecord per class
+      // 1. Group scores by classId to save one GradeRecord per class
       const scoresByClass: Record<string, Record<string, {
         practice: number | null;
         book: number | null;
@@ -365,75 +380,163 @@ const Gradebook = () => {
         adjustmentNote: string;
       }>> = {};
       
+      const savingStudentIds = new Set<string>();
       allScopeStudents.forEach(s => {
         if (!scoresByClass[s.class]) {
           scoresByClass[s.class] = {};
         }
-        // Preserve nulls (empty boxes) instead of casting to 0!
+        savingStudentIds.add(s.id);
         scoresByClass[s.class][s.id] = {
           practice: s.practice,
           book: s.book,
           exam: s.exam,
           adjustment: s.adjustment,
-          adjustmentNote: s.adjustmentNote
+          adjustmentNote: s.adjustmentNote || ''
         };
       });
 
       const classIdsToSave = Object.keys(scoresByClass);
+      if (classIdsToSave.length === 0) {
+        setIsSaving(false);
+        return;
+      }
 
-      // Fetch existing grade records for each class being saved using class_id index
-      const existingGrades = await Promise.all(
-        classIdsToSave.map(async cid => {
-          try {
-            const records = await db.getAllFromIndex('grades', 'class_id', cid, targetYear);
-            return records.find(g => g.month === currentMonth && g.type === currentGradeType) || null;
-          } catch {
-            return null;
+      // 2. Fetch all monthly grade records for the active branch & academic year
+      // This is crucial to detect duplicate records or cross-class student score collisions!
+      let monthlyGrades: GradeRecord[] = [];
+      try {
+        const allYearGrades = await db.getAll('grades', targetYear);
+        monthlyGrades = allYearGrades.filter(
+          g => g.month === currentMonth && g.type === currentGradeType
+        );
+      } catch (fetchErr) {
+        console.warn('Could not fetch all grades for year, falling back to class index:', fetchErr);
+        const fallbackRecords = await Promise.all(
+          classIdsToSave.map(cid => 
+            db.getAllFromIndex('grades', 'class_id', cid, targetYear).catch(() => [])
+          )
+        );
+        monthlyGrades = fallbackRecords.flat().filter(
+          g => g.month === currentMonth && g.type === currentGradeType
+        );
+      }
+
+      // 3. Prevent DUPLICATE_MONTHLY_STUDENT_SCORE:
+      // If any of the students being saved are currently recorded in other class records for this same month,
+      // remove them from those other class records!
+      const otherClassRecords = monthlyGrades.filter(g => !classIdsToSave.includes(g.classId));
+      for (const otherRecord of otherClassRecords) {
+        let hasConflict = false;
+        if (otherRecord.scores) {
+          for (const sid of savingStudentIds) {
+            if (Object.prototype.hasOwnProperty.call(otherRecord.scores, sid)) {
+              delete otherRecord.scores[sid];
+              hasConflict = true;
+            }
           }
-        })
-      );
+        }
+        if (hasConflict) {
+          console.warn(`Cleaned up conflicting student scores from old class record (${otherRecord.classId})`);
+          try {
+            await db.put('grades', otherRecord);
+          } catch (putErr) {
+            console.warn(`Failed to clean up old class record ${otherRecord.id}:`, putErr);
+          }
+        }
+      }
 
-      const recordsToSave: GradeRecord[] = classIdsToSave.map((cid, index) => {
-        const existingRecord = existingGrades[index];
-        const existingScores = existingRecord?.scores || {};
-        const newScoresForClass = scoresByClass[cid];
-        
-        // Merge the new scores into the existing scores to avoid overwriting absent students
-        const mergedScores = { ...existingScores, ...newScoresForClass };
-        
-        return {
-          id: existingRecord?.id || crypto.randomUUID(), 
+      // 4. For each class being saved:
+      // Check for duplicate records for the same classId, and merge them
+      const recordsToSave: GradeRecord[] = [];
+
+      for (const cid of classIdsToSave) {
+        const matchingRecords = monthlyGrades.filter(g => g.classId === cid);
+        let primaryRecord: GradeRecord;
+
+        if (matchingRecords.length > 0) {
+          primaryRecord = matchingRecords[0];
+          // If there are duplicate records for this same class and month, merge into primary and delete extras!
+          if (matchingRecords.length > 1) {
+            console.warn(`Found ${matchingRecords.length} duplicate records for class ${cid}. Merging into ${primaryRecord.id}...`);
+            for (let i = 1; i < matchingRecords.length; i++) {
+              const dup = matchingRecords[i];
+              primaryRecord.scores = { ...dup.scores, ...primaryRecord.scores };
+              try {
+                await db.delete('grades', dup.id);
+              } catch (delErr) {
+                console.warn(`Could not delete duplicate grade record ${dup.id}:`, delErr);
+              }
+            }
+          }
+        } else {
+          primaryRecord = {
+            id: crypto.randomUUID(),
+            classId: cid,
+            shift: classes.find(c => c.id === cid)?.shift || 'Morning',
+            academicYear: targetYear,
+            month: currentMonth,
+            type: 'Monthly',
+            scores: {}
+          };
+        }
+
+        // Clean out any scores in primaryRecord for students that belong to other classes in this save batch
+        const existingScores = { ...(primaryRecord.scores || {}) };
+        for (const otherCid of classIdsToSave) {
+          if (otherCid !== cid) {
+            for (const otherSid of Object.keys(scoresByClass[otherCid])) {
+              delete existingScores[otherSid];
+            }
+          }
+        }
+
+        // Merge the new scores
+        const mergedScores = { ...existingScores, ...scoresByClass[cid] };
+
+        recordsToSave.push({
+          id: primaryRecord.id,
           classId: cid,
-          shift: classes.find(c => c.id === cid)?.shift || existingRecord?.shift || 'Morning',
+          shift: classes.find(c => c.id === cid)?.shift || primaryRecord.shift || 'Morning',
           academicYear: targetYear,
           month: currentMonth,
           type: 'Monthly',
           scores: mergedScores as any
-        };
-      });
+        });
+      }
 
       // Confirm that the user hasn't switched year/class during the async operation
       if (activeYear !== targetYear || selectedClass !== targetClass) {
         console.warn('Year or class changed during save operation, but saving correct target context.');
       }
 
+      // 5. Save all prepared grade records
       await db.putMany('grades', recordsToSave);
       
-      // Also update student point balances in the students table
+      // 6. Also update student point balances in the students table
       const studentsToUpdate = allScopeStudents.filter(s => s.pointsBalance !== s.originalPointsBalance);
       if (studentsToUpdate.length > 0) {
         for (const s of studentsToUpdate) {
-          await db.update('students', s.id, { pointsBalance: s.pointsBalance });
+          try {
+            await db.update('students', s.id, { pointsBalance: s.pointsBalance });
+          } catch (studentErr) {
+            console.warn(`Could not update student points balance for ${s.id}:`, studentErr);
+          }
         }
         // Update original balance so we don't save twice if they click save again
         setAllScopeStudents(prev => prev.map(p => ({...p, originalPointsBalance: p.pointsBalance})));
       }
       setHasChanges(false);
       
-      alert(language === 'KH' ? 'រក្សាទុកជោគជ័យ!' : 'Saved successfully!');
-    } catch (error) {
+      showToast('success', language === 'KH' ? 'រក្សាទុកទិន្នន័យពិន្ទុជោគជ័យ!' : 'Grade data saved successfully!');
+    } catch (error: any) {
       console.error('Failed to save grades:', error);
-      alert(language === 'KH' ? 'មានបញ្ហាក្នុងការរក្សាទុក!' : 'Failed to save!');
+      const errMsg = error?.message || String(error);
+      showToast(
+        'error',
+        language === 'KH' 
+          ? `មានបញ្ហាក្នុងការរក្សាទុក៖ ${errMsg}` 
+          : `Failed to save grades: ${errMsg}`
+      );
     } finally {
       setIsSaving(false);
     }
@@ -443,7 +546,7 @@ const Gradebook = () => {
     if (!bankStudentId || !bankPoints.trim()) return;
     const addedPoints = Number(bankPoints.trim());
     if (!Number.isFinite(addedPoints)) {
-      alert(language === 'KH' ? 'សូមបញ្ចូលចំនួនពិន្ទុជាលេខត្រឹមត្រូវ!' : 'Please enter a valid numeric points value!');
+      showToast('error', language === 'KH' ? 'សូមបញ្ចូលចំនួនពិន្ទុជាលេខត្រឹមត្រូវ!' : 'Please enter a valid numeric points value!');
       return;
     }
 
@@ -482,10 +585,10 @@ const Gradebook = () => {
         return calculateRanks(newArray);
       });
       
-      alert(language === 'KH' ? 'បញ្ចូលពិន្ទុទៅធនាគារជោគជ័យ!' : 'Added to Bank successfully!');
-    } catch(err) {
+      showToast('success', language === 'KH' ? 'បញ្ចូលពិន្ទុទៅធនាគារជោគជ័យ!' : 'Added to Bank successfully!');
+    } catch(err: any) {
       console.error(err);
-      alert(language === 'KH' ? 'មានបញ្ហាពេលរក្សាទុក!' : 'Failed to save to Bank!');
+      showToast('error', language === 'KH' ? `មានបញ្ហាពេលរក្សាទុក៖ ${err?.message || ''}` : `Failed to save to Bank: ${err?.message || ''}`);
     } finally {
       setIsSaving(false);
     }
@@ -493,13 +596,13 @@ const Gradebook = () => {
 
   const handleSaveConfig = async () => {
     if (role !== 'admin') {
-      alert(language === 'KH' ? 'មានតែគណនី Admin ប៉ុណ្ណោះដែលអាចកែប្រែការកំណត់ពិន្ទុរួមរបស់សាលាបាន!' : 'Only Admin accounts can modify school-wide grade configuration!');
+      showToast('error', language === 'KH' ? 'មានតែគណនី Admin ប៉ុណ្ណោះដែលអាចកែប្រែការកំណត់ពិន្ទុរួមរបស់សាលាបាន!' : 'Only Admin accounts can modify school-wide grade configuration!');
       return;
     }
 
     const sum = (tempConfig.practice || 0) + (tempConfig.book || 0) + (tempConfig.exam || 0);
     if (sum !== 50) {
-      alert(language === 'KH' ? 'ពិន្ទុសរុបអតិបរមាត្រូវតែស្មើ ៥០ គត់!' : 'Total max score must be exactly 50!');
+      showToast('error', language === 'KH' ? 'ពិន្ទុសរុបអតិបរមាត្រូវតែស្មើ ៥០ គត់!' : 'Total max score must be exactly 50!');
       return;
     }
     
@@ -513,10 +616,10 @@ const Gradebook = () => {
       setAllScopeStudents(prev => calculateRanks(prev.map(s => recalculateRow(s, tempConfig))));
       
       setShowSettingsModal(false);
-      alert(language === 'KH' ? 'រក្សាទុកការកំណត់ជោគជ័យ!' : 'Settings saved!');
-    } catch(err) {
+      showToast('success', language === 'KH' ? 'រក្សាទុកការកំណត់ជោគជ័យ!' : 'Settings saved!');
+    } catch(err: any) {
       console.error(err);
-      alert(language === 'KH' ? 'មានបញ្ហាពេលរក្សាទុកការកំណត់!' : 'Failed to save settings!');
+      showToast('error', language === 'KH' ? `មានបញ្ហាពេលរក្សាទុកការកំណត់៖ ${err?.message || ''}` : `Failed to save settings: ${err?.message || ''}`);
     } finally {
       setIsSaving(false);
     }
@@ -546,6 +649,19 @@ const Gradebook = () => {
         `}
       </style>
       <div className="gradebook-container flex flex-col w-full pb-16 print:p-0 relative space-y-3.5">
+        {/* Toast Notification */}
+        {toastMessage && (
+          <div 
+            className={`fixed top-5 right-5 z-[9999] px-5 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm font-medium transition-all animate-in fade-in slide-in-from-top-3 ${
+              toastMessage.type === 'success' 
+                ? 'bg-emerald-600 text-white border border-emerald-500 shadow-emerald-500/20' 
+                : 'bg-rose-600 text-white border border-rose-500 shadow-rose-500/20'
+            }`}
+          >
+            {toastMessage.type === 'success' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+            <span className="font-khmer">{toastMessage.text}</span>
+          </div>
+        )}
         
       {/* Header Banner - Clean & Modern Ribbon */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 p-4 sm:p-5 rounded-2xl text-white shadow-xs print:hidden">
@@ -740,11 +856,11 @@ const Gradebook = () => {
                         }
                         return s;
                       }));
-                      alert(language === 'KH' ? `បានបកប្រែឈ្មោះសិស្សចំនួន ${translatedCount} នាក់ជោគជ័យ!` : `Translated ${translatedCount} students successfully!`);
+                      showToast('success', language === 'KH' ? `បានបកប្រែឈ្មោះសិស្សចំនួន ${translatedCount} នាក់ជោគជ័យ!` : `Translated ${translatedCount} students successfully!`);
                     }
                   } catch (error) {
                     console.error('Translation failed:', error);
-                    alert(language === 'KH' ? 'មានកំហុសពេលបកប្រែ' : 'Error translating');
+                    showToast('error', language === 'KH' ? 'មានកំហុសពេលបកប្រែ' : 'Error translating');
                   } finally {
                     setIsTranslating(false);
                   }

@@ -31,15 +31,9 @@ import type {
 } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { useAuth } from '../contexts/AuthContext';
+import { getLocalDate } from '../utils/date';
 
 const BRAND_BLUE = '#2a5298';
-
-const getLocalDate = (dateObj: Date = new Date()) => {
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const day = String(dateObj.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
 
 const formatKhmerDate = (dateObj: Date = new Date()) => {
   const days = ['អាទិត្យ', 'ចន្ទ', 'អង្គារ', 'ពុធ', 'ព្រហស្បតិ៍', 'សុក្រ', 'សៅរ៍'];

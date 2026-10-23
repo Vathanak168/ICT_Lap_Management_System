@@ -1,4 +1,5 @@
 import { initDB } from '../../../store/db';
+import { getLocalDate } from '../../../utils/date';
 
 export const handleLessonPlanAction = async (action: string, data: any, activeYear: string) => {
   const db = await initDB();
@@ -22,7 +23,7 @@ export const handleLessonPlanAction = async (action: string, data: any, activeYe
       exercises: data.exercises || '',
       status: data.status || 'Planned',
       academicYear: activeYear,
-      completedDate: data.status === 'Completed' ? new Date().toISOString().split('T')[0] : null
+      completedDate: data.status === 'Completed' ? getLocalDate() : null
     };
     
     await db.add('lessonPlans', newPlan);
@@ -46,7 +47,7 @@ export const handleLessonPlanAction = async (action: string, data: any, activeYe
     if (data.status !== undefined) {
       updates.status = data.status;
       if (data.status === 'Completed' && planToUpdate.status !== 'Completed') {
-        updates.completedDate = new Date().toISOString().split('T')[0];
+        updates.completedDate = getLocalDate();
       } else if (data.status === 'Planned') {
         updates.completedDate = null;
       }

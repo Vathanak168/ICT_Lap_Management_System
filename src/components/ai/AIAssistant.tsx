@@ -7,11 +7,18 @@ import { handleAction } from '../../lib/ai/actions';
 import { useAcademicYear } from '../../contexts/AcademicYearContext';
 import { useAuth } from '../../contexts/AuthContext';
 
+export interface AIPendingAction {
+  action: string;
+  data?: Record<string, unknown>;
+  preview?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 type Message = {
   id: string;
   sender: 'ai' | 'user';
   text: string;
-  pendingActions?: any[];
+  pendingActions?: AIPendingAction[];
 };
 
 const renderInlineText = (text: string): ReactNode[] => text
@@ -72,7 +79,7 @@ const approvalMeta = (action: string) => {
   return { title: titles[action] || 'ការផ្លាស់ប្តូរទិន្នន័យ', icon: FileText, tone: 'gray' };
 };
 
-const approvalFields = (action: any): Array<{ label: string; value: ReactNode }> => {
+const approvalFields = (action: AIPendingAction): Array<{ label: string; value: ReactNode }> => {
   const data = { ...action?.data, ...action?.preview };
   const labels: Record<string, string> = {
     name: action.action === 'ADD_SUBJECT' ? 'មុខវិជ្ជា' : 'ឈ្មោះ',
@@ -105,7 +112,7 @@ const approvalFields = (action: any): Array<{ label: string; value: ReactNode }>
     });
 };
 
-const ApprovalListItem = ({ action, index }: { action: any; index: number }) => {
+const ApprovalListItem = ({ action, index }: { action: AIPendingAction; index: number }) => {
   const meta = approvalMeta(action?.action || '');
   const Icon = meta.icon;
   const fields = approvalFields(action);
@@ -426,7 +433,7 @@ ${message}`;
     }
   };
 
-const handleApproveAllActions = async (msgId: string, actions: any[]) => {
+const handleApproveAllActions = async (msgId: string, actions: AIPendingAction[]) => {
     if (processingActionId === msgId) return;
     setProcessingActionId(msgId);
     

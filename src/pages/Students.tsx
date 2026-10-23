@@ -18,7 +18,7 @@ import {
   AlertTriangle,
   FileSpreadsheet,
 } from 'lucide-react';
-import { initDB } from '../store/db';
+import { initDB, queuePcSyncTask } from '../store/db';
 import type { Student, ClassRecord } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Button } from '../components/ui/Button';
@@ -27,33 +27,6 @@ import { Modal } from '../components/ui/Modal';
 import { translateKhmerToEnglish, translateKhmerNamesBatch } from '../utils/khmerTranslator';
 import { useLanguage } from '../contexts/LanguageContext';
 import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
-
-const addPcSyncTask = async (
-  db: any,
-  pcNumber: string,
-  studentId: string,
-  studentName: string,
-  action: 'ADD' | 'REMOVE' | 'UPDATE_PASSWORD',
-  password?: string | null,
-  academicYear?: string
-) => {
-  const newTask = {
-    id: crypto.randomUUID(),
-    pcNumber,
-    studentId,
-    studentName,
-    action,
-    password: password || null,
-    status: 'PENDING',
-    createdAt: new Date().toISOString(),
-    academicYear: academicYear || '2026-2027'
-  };
-  try {
-    await db.put('pcSyncTasks', newTask);
-  } catch (error) {
-    console.error('Failed to create PC Sync Task. Did you run the SQL migration?', error);
-  }
-};
 
 const Students = () => {
   const [students, setStudents] = useState<Student[]>([]);
@@ -78,13 +51,21 @@ const Students = () => {
   const { activeYear } = useAcademicYear();
   
   const loadRequestRef = useRef(0);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = (type: 'success' | 'error', text: string) => {
     setToastMessage({ type, text });
-    setTimeout(() => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => {
       setToastMessage(null);
     }, 4000);
   };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!activeYear) {
@@ -276,7 +257,7 @@ const Students = () => {
         }
         
         if (studentToDelete && studentToDelete.pcNumber) {
-          await addPcSyncTask(db, studentToDelete.pcNumber, studentToDelete.studentId, studentToDelete.name, 'REMOVE', null, targetYear);
+          await queuePcSyncTask(db, studentToDelete, studentToDelete.pcNumber, 'REMOVE', targetYear, null);
         }
 
         await db.delete('students', id);
@@ -305,7 +286,7 @@ const Students = () => {
         });
         
         if (student.pcNumber) {
-          await addPcSyncTask(db, student.pcNumber, student.studentId, student.name, 'REMOVE', null, targetYear);
+          await queuePcSyncTask(db, student, student.pcNumber, 'REMOVE', targetYear, null);
         }
         
         showToast('success', `បាន Reset Password របស់សិស្ស "${student.name}" ជោគជ័យ!`);
