@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Download, RefreshCw, ShieldAlert, Cpu, Search, Key, Filter, Usb, 
   Settings2, CheckCircle2, AlertTriangle, X, Eye, EyeOff, Laptop,
-  Edit2, Trash2, Plus, ListTodo, UserX, Check, Clock
+  Edit2, Trash2, Plus, ListTodo, UserX, Check, Clock, Sparkles
 } from 'lucide-react';
 import { initDB, queuePcSyncTask } from '../store/db';
 import type { Student, ClassRecord, PcSyncTask, PCIssue } from '../store/db';
@@ -187,7 +187,9 @@ const PcSync = () => {
       ]);
 
       setRosterStudents(studentsData);
-      const activeStudents = studentsData.filter(student => student.status === 'Active');
+      const activeStudents = studentsData.filter(
+        student => student.status === 'Active' || student.status === 'ResetRequired'
+      );
       const passwordById = new Map<string, string>();
       activeStudents.forEach(student => {
         if (student.password) passwordById.set(student.id, student.password);
@@ -198,7 +200,7 @@ const PcSync = () => {
           .from('students')
           .select('id,password')
           .eq('academic_year', activeYear)
-          .eq('status', 'Active');
+          .in('status', ['Active', 'ResetRequired']);
 
         if (credentialError) {
           console.warn('Failed to load PC Sync credentials from Supabase (offline?):', credentialError);
@@ -299,23 +301,35 @@ const PcSync = () => {
       const studentNameTrimmed = taskForm.studentName.trim();
       const passwordTrimmed = taskForm.password.trim();
 
-      const taskRecord: PcSyncTask = {
-        id: editingTask ? editingTask.id : crypto.randomUUID(),
-        pcNumber: normPc,
-        studentId: studentIdTrimmed,
-        studentName: studentNameTrimmed,
-        action: taskForm.action,
-        password: passwordTrimmed || null,
-        status: taskForm.status,
-        createdAt: editingTask ? editingTask.createdAt : new Date().toISOString(),
-        academicYear: activeYear,
-      };
-      await db.put('pcSyncTasks', taskRecord);
-
       // Auto-sync with Student record if studentId matches
       const matchedStudent = allStudents.find(
         s => s.studentId.trim().toLowerCase() === studentIdTrimmed.toLowerCase()
       );
+
+      if (!editingTask && taskForm.status === 'PENDING' && matchedStudent) {
+        await queuePcSyncTask(
+          db,
+          { ...matchedStudent, name: studentNameTrimmed },
+          normPc,
+          taskForm.action,
+          activeYear,
+          passwordTrimmed || null
+        );
+      } else {
+        const taskRecord: PcSyncTask = {
+          id: editingTask ? editingTask.id : crypto.randomUUID(),
+          pcNumber: normPc,
+          studentId: studentIdTrimmed,
+          studentName: studentNameTrimmed,
+          action: taskForm.action,
+          password: passwordTrimmed || null,
+          status: taskForm.status,
+          createdAt: editingTask ? editingTask.createdAt : new Date().toISOString(),
+          academicYear: activeYear,
+        };
+        await db.put('pcSyncTasks', taskRecord);
+      }
+
       if (matchedStudent) {
         let studentChanged = false;
         const updatedStudent = { ...matchedStudent };
@@ -535,6 +549,195 @@ const PcSync = () => {
     }
   };
 
+  const generateUniqueCode3 = (existingPasswords: Set<string>): string => {
+    for (let attempt = 0; attempt < 1500; attempt++) {
+      const randomValue = crypto.getRandomValues(new Uint32Array(1))[0];
+      const candidate = String(100 + (randomValue % 900));
+      if (!existingPasswords.has(candidate)) {
+        existingPasswords.add(candidate);
+        return candidate;
+      }
+    }
+    return String(Math.floor(100 + Math.random() * 900));
+  };
+
+  const handleInlineChangePc = async (student: Student, nextPcRaw: string) => {
+    if (!activeYear) return;
+    const oldPc = normalizePcNumber(student.pcNumber);
+    const newPc = nextPcRaw ? normalizePcNumber(nextPcRaw) : '';
+    if (oldPc === newPc) return;
+
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const usedPasswords = new Set(allStudents.map(s => s.password).filter(Boolean) as string[]);
+      const finalPass = newPc
+        ? (student.password?.trim() || generateUniqueCode3(usedPasswords))
+        : student.password;
+
+      const updatedStudent: Student = {
+        ...student,
+        status: 'Active',
+        pcNumber: newPc || undefined,
+        password: finalPass || undefined,
+      };
+
+      await db.put('students', updatedStudent);
+
+      if (oldPc) {
+        await queuePcSyncTask(db, student, oldPc, 'REMOVE', activeYear, null);
+      }
+      if (newPc) {
+        await queuePcSyncTask(db, updatedStudent, newPc, 'ADD', activeYear, finalPass || null);
+      }
+
+      await fetchData();
+      showToast(
+        'success',
+        newPc
+          ? `បានដាក់សិស្ស "${student.name}" នៅតុ ${newPc} (🔑 ${finalPass}) ជោគជ័យ`
+          : `បានដកសិស្ស "${student.name}" ចេញពីតុ ${oldPc} ជោគជ័យ`
+      );
+    } catch (err: any) {
+      console.error('Inline PC change failed:', err);
+      showToast('error', 'បរាជ័យក្នុងការប្តូរតុ PC៖ ' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleInlineQuickPassword = async (student: Student) => {
+    if (!activeYear) return;
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const usedPasswords = new Set(allStudents.map(s => s.password).filter(Boolean) as string[]);
+      const newPass = generateUniqueCode3(usedPasswords);
+      const normPc = normalizePcNumber(student.pcNumber);
+
+      const updatedStudent: Student = {
+        ...student,
+        status: 'Active',
+        password: newPass,
+      };
+      await db.put('students', updatedStudent);
+
+      if (normPc) {
+        await queuePcSyncTask(db, updatedStudent, normPc, 'UPDATE_PASSWORD', activeYear, newPass);
+      }
+
+      await fetchData();
+      showToast('success', `បានបង្កើតលេខសម្ងាត់ថ្មី (${newPass}) ជូនសិស្ស "${student.name}" ជោគជ័យ`);
+    } catch (err: any) {
+      console.error('Quick password generation failed:', err);
+      showToast('error', 'បរាជ័យក្នុងការបង្កើតលេខសម្ងាត់៖ ' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleAutoAssignUnassignedPcs = async () => {
+    if (!activeYear || scopedUnassignedStudents.length === 0) return;
+    if (
+      !window.confirm(
+        `តើអ្នកចង់ចាត់តាំងតុកុំព្យូទ័រ និងលេខសម្ងាត់ស្វ័យប្រវត្តិជូនសិស្សមិនទាន់មានតុទាំង ${scopedUnassignedStudents.length} នាក់មែនទេ?`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const brokenSet = new Set(brokenPcs);
+      const usedPasswords = new Set(allStudents.map(s => s.password).filter(Boolean) as string[]);
+
+      // Track occupied PCs per class so students in the same class get distinct PCs
+      const occupiedByClass = new Map<string, Set<string>>();
+      allStudents.forEach(s => {
+        const pc = normalizePcNumber(s.pcNumber);
+        if (!pc) return;
+        const cId = s.class || '__DEFAULT__';
+        if (!occupiedByClass.has(cId)) occupiedByClass.set(cId, new Set());
+        occupiedByClass.get(cId)!.add(pc);
+      });
+
+      const updates: Student[] = [];
+      for (const student of scopedUnassignedStudents) {
+        const cId = student.class || '__DEFAULT__';
+        if (!occupiedByClass.has(cId)) occupiedByClass.set(cId, new Set());
+        const occupied = occupiedByClass.get(cId)!;
+
+        let chosenPc = '';
+        for (const pc of standardPcs) {
+          if (!brokenSet.has(pc) && !occupied.has(pc)) {
+            chosenPc = pc;
+            break;
+          }
+        }
+        if (!chosenPc) {
+          chosenPc = standardPcs.find(pc => !occupied.has(pc)) || 'PC-01';
+        }
+        occupied.add(chosenPc);
+
+        const pwd = student.password?.trim() || generateUniqueCode3(usedPasswords);
+        updates.push({
+          ...student,
+          status: 'Active',
+          pcNumber: chosenPc,
+          password: pwd,
+        });
+      }
+
+      await db.putMany('students', updates);
+      for (const updated of updates) {
+        await queuePcSyncTask(db, updated, updated.pcNumber!, 'ADD', activeYear, updated.password || null);
+      }
+
+      await fetchData();
+      showToast('success', `បានចាត់តាំងតុ PC និងលេខសម្ងាត់ស្វ័យប្រវត្តិជូនសិស្ស ${updates.length} នាក់ជោគជ័យ!`);
+    } catch (err: any) {
+      console.error('Auto-assign PCs failed:', err);
+      showToast('error', 'បរាជ័យក្នុងការចាត់តាំងតុស្វ័យប្រវត្តិ៖ ' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleBulkUnassignSelected = async () => {
+    if (!activeYear || selectedStudents.length === 0) return;
+    const assignedSelected = selectedStudents.filter(s => normalizePcNumber(s.pcNumber));
+    if (assignedSelected.length === 0) return;
+    if (
+      !window.confirm(
+        `តើអ្នកប្រាកដជាចង់ដកតុ PC របស់សិស្សទាំង ${assignedSelected.length} នាក់ដែលបានជ្រើសមែនទេ?`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      const db = await initDB();
+      const updates: Student[] = assignedSelected.map(s => ({ ...s, pcNumber: undefined }));
+      await db.putMany('students', updates);
+      for (const s of assignedSelected) {
+        const oldPc = normalizePcNumber(s.pcNumber);
+        if (oldPc) {
+          await queuePcSyncTask(db, s, oldPc, 'REMOVE', activeYear, null);
+        }
+      }
+      setSelectedStudentIds(new Set());
+      await fetchData();
+      showToast('success', `បានដកតុសិស្សចំនួន ${assignedSelected.length} នាក់ជោគជ័យ`);
+    } catch (err: any) {
+      console.error('Bulk unassign failed:', err);
+      showToast('error', 'បរាជ័យក្នុងការដកតុរួមគ្នា៖ ' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const formatTaskDate = (isoStr?: string) => {
     if (!isoStr) return '';
     try {
@@ -560,6 +763,7 @@ const PcSync = () => {
   }, [allStudents, searchQuery, selectedClass, selectedDesk]);
 
   const scopedMissingPasswords = filteredStudents.filter(student => !student.password);
+  const scopedUnassignedStudents = filteredStudents.filter(student => !normalizePcNumber(student.pcNumber));
   const scopedAssignedCount = filteredStudents.filter(student => normalizePcNumber(student.pcNumber)).length;
   useEffect(() => { setSelectedStudentIds(new Set()); }, [selectedClass, selectedDesk, searchQuery, activeYear]);
 
@@ -752,55 +956,31 @@ const PcSync = () => {
     }
   };
 
-  const queuePasswordSync = async (db: any, student: Student, password: string) => {
-    const normPc = normalizePcNumber(student.pcNumber);
-    if (!normPc || !activeYear) return;
-    const task: PcSyncTask = {
-      id: crypto.randomUUID(),
-      pcNumber: normPc,
-      studentId: student.studentId,
-      studentName: (student.englishName?.trim() || student.name?.trim() || student.studentId).trim(),
-      action: 'UPDATE_PASSWORD',
-      password,
-      status: 'PENDING',
-      createdAt: new Date().toISOString(),
-      academicYear: activeYear,
-    };
-    try {
-      await db.put('pcSyncTasks', task);
-    } catch (error) {
-      console.warn('Failed to queue password sync:', error);
-    }
-  };
-
   const handleGenerateMissingPasswords = async () => {
-    if (scopedMissingPasswords.length === 0) return;
+    if (scopedMissingPasswords.length === 0 || !activeYear) return;
     if (!window.confirm(`បង្កើត Password ស្វ័យប្រវត្តិសម្រាប់សិស្សទាំង ${scopedMissingPasswords.length} នាក់?`)) return;
 
     try {
       setIsProcessing(true);
       const db = await initDB();
-      const existing = new Set(allStudents.map(student => student.password).filter(Boolean));
+      const existing = new Set(allStudents.map(student => student.password).filter(Boolean) as string[]);
       const updates: Student[] = [];
 
       for (const student of scopedMissingPasswords) {
-        let password = '';
-        let attempts = 0;
-        do {
-          const randomValue = crypto.getRandomValues(new Uint32Array(1))[0];
-          password = String(100 + (randomValue % 900));
-          attempts++;
-          if (attempts > 2000) break;
-        } while (existing.has(password));
-        existing.add(password);
-        updates.push({ ...student, password });
+        const password = generateUniqueCode3(existing);
+        updates.push({ ...student, status: 'Active', password });
       }
 
       await db.putMany('students', updates);
-      await Promise.all(updates.map(student => queuePasswordSync(db, student, student.password!)));
+      for (const student of updates) {
+        const normPc = normalizePcNumber(student.pcNumber);
+        if (normPc && student.password) {
+          await queuePcSyncTask(db, student, normPc, 'UPDATE_PASSWORD', activeYear, student.password);
+        }
+      }
       const passwordById = new Map(updates.map(student => [student.id, student.password]));
       setAllStudents(previous => previous.map(student => (
-        passwordById.has(student.id) ? { ...student, password: passwordById.get(student.id) } : student
+        passwordById.has(student.id) ? { ...student, status: 'Active', password: passwordById.get(student.id) } : student
       )));
       await fetchData();
       showToast('success', `បង្កើតលេខសម្ងាត់ជូនសិស្សចំនួន ${updates.length} នាក់ជោគជ័យ!`);
@@ -1157,7 +1337,19 @@ const PcSync = () => {
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {scopedUnassignedStudents.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleAutoAssignUnassignedPcs}
+                  disabled={isProcessing || isLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold transition cursor-pointer font-khmer disabled:opacity-50"
+                  title="ចាត់តាំងតុកុំព្យូទ័រ និងលេខសម្ងាត់ ៣ ខ្ទង់ស្វ័យប្រវត្តិសម្រាប់សិស្សមិនទាន់មានតុ"
+                >
+                  <Sparkles size={13} />
+                  <span>ចាត់តាំងតុស្វ័យប្រវត្តិ ({scopedUnassignedStudents.length})</span>
+                </button>
+              )}
               {scopedMissingPasswords.length > 0 && (
                 <button
                   type="button"
@@ -1251,18 +1443,29 @@ const PcSync = () => {
 
           {/* Multi-select Action Bar */}
           {selectedStudentIds.size > 0 && (
-            <div className="px-5 py-2.5 bg-blue-50/90 border-b border-blue-100 flex items-center justify-between">
+            <div className="px-5 py-2.5 bg-blue-50/90 border-b border-blue-100 flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-bold text-blue-800 font-khmer">
                 បានជ្រើសរើសសិស្សចំនួន {selectedStudentIds.size} នាក់
               </span>
-              <button
-                type="button"
-                onClick={() => handlePrepareSyncUsb('SELECTED')}
-                disabled={isProcessing || isLoading}
-                className="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition shadow-xs cursor-pointer font-khmer"
-              >
-                Sync តែសិស្សដែលបានជ្រើស ({selectedStudentIds.size})
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleBulkUnassignSelected()}
+                  disabled={isProcessing || isLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold hover:bg-rose-100 transition cursor-pointer font-khmer"
+                >
+                  <UserX size={13} />
+                  <span>ដកតុរួមគ្នា</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handlePrepareSyncUsb('SELECTED')}
+                  disabled={isProcessing || isLoading}
+                  className="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition shadow-xs cursor-pointer font-khmer"
+                >
+                  Sync តែសិស្សដែលបានជ្រើស ({selectedStudentIds.size})
+                </button>
+              </div>
             </div>
           )}
 
@@ -1311,13 +1514,22 @@ const PcSync = () => {
                       </td>
 
                       <td className="px-4 py-3 font-mono">
-                        {normDesk ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-lg bg-blue-50 text-blue-700 font-bold border border-blue-200 text-xs">
-                            {normDesk}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 font-khmer text-[11px]">មិនទាន់មានតុ</span>
-                        )}
+                        <select
+                          value={normDesk || ''}
+                          disabled={isProcessing || isLoading}
+                          onChange={(e) => void handleInlineChangePc(student, e.target.value)}
+                          className={`rounded-lg border px-2 py-1 text-xs font-bold outline-none transition cursor-pointer ${
+                            normDesk
+                              ? 'bg-blue-50 text-blue-700 border-blue-200 hover:border-blue-400 font-mono'
+                              : 'bg-amber-50/70 text-amber-700 border-amber-200 hover:border-amber-400 font-khmer'
+                          }`}
+                          title="ប្តូរតុ PC ភ្លាមៗ (1-Click Inline Edit)"
+                        >
+                          <option value="">មិនទាន់មានតុ</option>
+                          {standardPcs.map(pc => (
+                            <option key={pc} value={pc}>{pc}</option>
+                          ))}
+                        </select>
                       </td>
 
                       <td className="px-4 py-3 font-mono font-bold text-slate-800">
@@ -1344,19 +1556,30 @@ const PcSync = () => {
                       </td>
 
                       <td className="px-4 py-3 font-mono">
-                        {student.password ? (
-                          showPasswords ? (
-                            <span className="text-slate-800 font-bold bg-slate-100 px-2 py-0.5 rounded">
-                              {student.password}
-                            </span>
+                        <div className="inline-flex items-center gap-1.5">
+                          {student.password ? (
+                            showPasswords ? (
+                              <span className="text-slate-800 font-bold bg-slate-100 px-2 py-0.5 rounded">
+                                {student.password}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 tracking-widest font-mono">
+                                ••••••••
+                              </span>
+                            )
                           ) : (
-                            <span className="text-slate-400 tracking-widest font-mono">
-                              ••••••••
-                            </span>
-                          )
-                        ) : (
-                          <span className="text-amber-600 font-bold text-[11px] font-khmer">ខ្វះលេខសម្ងាត់</span>
-                        )}
+                            <span className="text-amber-600 font-bold text-[11px] font-khmer">ខ្វះលេខសម្ងាត់</span>
+                          )}
+                          <button
+                            type="button"
+                            disabled={isProcessing || isLoading}
+                            onClick={() => void handleInlineQuickPassword(student)}
+                            title="បង្កើត/ប្តូរលេខសម្ងាត់ ៣ ខ្ទង់ភ្លាមៗ (1-Click)"
+                            className="p-1 rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200/80 transition cursor-pointer"
+                          >
+                            <Key size={11} />
+                          </button>
+                        </div>
                       </td>
 
                       <td className="px-4 py-3 text-right">

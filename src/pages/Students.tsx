@@ -17,9 +17,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   FileSpreadsheet,
+  Sparkles,
 } from 'lucide-react';
 import { initDB, queuePcSyncTask } from '../store/db';
 import type { Student, ClassRecord } from '../store/db';
+import { normalizePcNumber } from '../lib/pcSyncPlan';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -27,6 +29,7 @@ import { Modal } from '../components/ui/Modal';
 import { translateKhmerToEnglish, translateKhmerNamesBatch } from '../utils/khmerTranslator';
 import { useLanguage } from '../contexts/LanguageContext';
 import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
+import { findSeatConflict, haveSameGrade } from '../utils/studentPlacement';
 
 const Students = () => {
   const [students, setStudents] = useState<Student[]>([]);
@@ -122,6 +125,30 @@ const Students = () => {
     }
   };
 
+  const generateUnique3DigitPassword = (classId?: string): string => {
+    const scope = classId ? students.filter(s => s.class === classId) : students;
+    const used = new Set(scope.map(s => (s.password || '').trim()).filter(Boolean));
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const candidate = Math.floor(100 + Math.random() * 900).toString();
+      if (!used.has(candidate)) return candidate;
+    }
+    return Math.floor(100 + Math.random() * 900).toString();
+  };
+
+  const findNextAvailablePc = (classId?: string): string => {
+    const targetClassId = classId || currentStudent.class;
+    const occupied = new Set(
+      students
+        .filter(s => s.class === targetClassId && s.id !== currentStudent.id && s.pcNumber)
+        .map(s => normalizePcNumber(s.pcNumber || ''))
+    );
+    for (let i = 1; i <= 60; i++) {
+      const candidate = `PC-${String(i).padStart(2, '0')}`;
+      if (!occupied.has(candidate)) return candidate;
+    }
+    return 'PC-01';
+  };
+
   const handleSave = async () => {
     if (!currentStudent.name?.trim() || !currentStudent.studentId?.trim() || !currentStudent.class) {
       showToast('error', 'សូមបំពេញព័ត៌មានចាំបាច់ (អត្តលេខ, ឈ្មោះ, ថ្នាក់)');
@@ -131,6 +158,15 @@ const Students = () => {
     if (!activeYear) return;
     const targetYear = activeYear;
     
+    const normalizedPc = normalizePcNumber(currentStudent.pcNumber || '') || undefined;
+    const rawPwd = (currentStudent.password || '').trim();
+    const finalPassword = rawPwd || (normalizedPc ? generateUnique3DigitPassword(currentStudent.class) : undefined);
+
+    if (finalPassword && !/^\d{3}$/.test(finalPassword)) {
+      showToast('error', 'លេខសម្ងាត់ត្រូវតែជាលេខ ៣ ខ្ទង់ (ឧ. 123)');
+      return;
+    }
+
     const db = await initDB();
     const allStudentsForYear = await db.getAll('students', targetYear);
     const isDuplicate = allStudentsForYear.some(
@@ -146,19 +182,74 @@ const Students = () => {
     setIsSaving(true);
     try {
       if (currentStudent.id) {
-        // Edit mode: Use partial update to prevent overwriting PC, Password, etc.
-        await db.update('students', currentStudent.id, {
+        const oldStudent = allStudentsForYear.find(s => s.id === currentStudent.id);
+        const classChanged = Boolean(oldStudent && oldStudent.class !== currentStudent.class);
+        if (classChanged && oldStudent) {
+          const sourceClass = classes.find(c => c.id === oldStudent.class);
+          const targetClass = classes.find(c => c.id === currentStudent.class);
+          if (sourceClass && targetClass && !haveSameGrade(sourceClass, targetClass)) {
+            showToast('error', 'មិនអាចផ្ទេរសិស្សឆ្លងកម្រិតថ្នាក់បានទេ (ត្រូវមានកម្រិតថ្នាក់ដូចគ្នា)!');
+            setIsSaving(false);
+            return;
+          }
+          if (oldStudent.isShiftSwitching) {
+            const altClass = classes.find(c => c.id === oldStudent.alternateClassId);
+            if (!altClass || altClass.id === currentStudent.class || (targetClass && altClass.shift === targetClass.shift)) {
+              showToast('error', 'សិស្សនេះកំពុងជាប់ស្ថានភាពប្តូរវេន! សូមដកឬកែថ្នាក់ប្តូរវេនជាមុនសិន។');
+              setIsSaving(false);
+              return;
+            }
+          }
+        }
+
+        const oldPc = normalizePcNumber(oldStudent?.pcNumber || '') || undefined;
+        const oldPwd = (oldStudent?.password || '').trim() || undefined;
+        const nextStatus = finalPassword && currentStudent.status === 'ResetRequired'
+          ? 'Active'
+          : (currentStudent.status || 'Active');
+
+        if (normalizedPc && nextStatus === 'Active') {
+          const conflict = findSeatConflict(allStudentsForYear, currentStudent.class, normalizedPc, currentStudent.id);
+          if (conflict) {
+            showToast('error', `តុ ${normalizedPc} នៅថ្នាក់ថ្មីមានសិស្ស "${conflict.name}" អង្គុយរួចហើយ! សូមជ្រើសតុផ្សេង ឬដោះលេខតុចេញសិន។`);
+            setIsSaving(false);
+            return;
+          }
+        }
+
+        const updatedFields = {
           studentId: currentStudent.studentId.trim(),
           name: currentStudent.name.trim(),
           englishName: (currentStudent.englishName || '').trim(),
-          gender: currentStudent.gender,
+          gender: (currentStudent.gender || 'M') as 'M' | 'F',
           class: currentStudent.class,
-          shift: currentStudent.shift,
-          status: currentStudent.status
-        });
+          shift: currentStudent.shift || 'Morning',
+          status: nextStatus as Student['status'],
+          pcNumber: normalizedPc ? normalizedPc : (null as any),
+          password: finalPassword ? finalPassword : (null as any)
+        };
+        await db.update('students', currentStudent.id, updatedFields);
+
+        const updatedStudentObj: Student = {
+          ...(oldStudent as Student),
+          ...updatedFields,
+          pcNumber: normalizedPc,
+          password: finalPassword
+        };
+
+        if (oldPc && oldPc !== normalizedPc && oldStudent) {
+          await queuePcSyncTask(db, oldStudent, oldPc, 'REMOVE', targetYear, null);
+        }
+        if (normalizedPc) {
+          if (oldPc !== normalizedPc || oldStudent?.name !== updatedFields.name || oldStudent?.studentId !== updatedFields.studentId) {
+            await queuePcSyncTask(db, updatedStudentObj, normalizedPc, 'ADD', targetYear, finalPassword || null);
+          } else if (finalPassword && oldPwd !== finalPassword) {
+            await queuePcSyncTask(db, updatedStudentObj, normalizedPc, 'UPDATE_PASSWORD', targetYear, finalPassword);
+          }
+        }
+
         showToast('success', `បានកែប្រែទិន្នន័យសិស្ស ${currentStudent.name} ជោគជ័យ!`);
       } else {
-        // Add mode: Use full put
         const newStudent: Student = {
           ...(currentStudent as Student),
           id: crypto.randomUUID(),
@@ -166,16 +257,20 @@ const Students = () => {
           studentId: currentStudent.studentId.trim(),
           name: currentStudent.name.trim(),
           englishName: (currentStudent.englishName || '').trim(),
-          pcNumber: undefined,
-          password: undefined,
+          pcNumber: normalizedPc,
+          password: finalPassword,
           isShiftSwitching: false,
           alternateClassId: ''
         };
         await db.put('students', newStudent);
-        showToast('success', `បានបន្ថែមសិស្ស ${newStudent.name} ដោយជោគជ័យ!`);
+        if (normalizedPc) {
+          await queuePcSyncTask(db, newStudent, normalizedPc, 'ADD', targetYear, finalPassword || null);
+        }
+        showToast('success', `បានបន្ថែមសិស្ស ${newStudent.name}${normalizedPc ? ` (${normalizedPc} • 🔑 ${finalPassword})` : ''} ដោយជោគជ័យ!`);
       }
       
       setShowModal(false);
+      window.dispatchEvent(new Event('appDataChanged'));
       await fetchData(targetYear);
     } catch (error: any) {
       console.error('Failed to save student:', error);
@@ -276,27 +371,46 @@ const Students = () => {
     if (!activeYear) return;
     const targetYear = activeYear;
 
-    if (window.confirm(`តើអ្នកចង់ Reset Password របស់សិស្ស "${student.name}" មែនទេ?`)) {
-      setIsSaving(true);
-      try {
-        const db = await initDB();
-        await db.update('students', student.id, { 
-          status: 'ResetRequired', 
-          password: null as any
-        });
-        
-        if (student.pcNumber) {
-          await queuePcSyncTask(db, student, student.pcNumber, 'REMOVE', targetYear, null);
-        }
-        
-        showToast('success', `បាន Reset Password របស់សិស្ស "${student.name}" ជោគជ័យ!`);
-        await fetchData(targetYear);
-      } catch (error) {
-        console.error('Failed to reset password:', error);
-        showToast('error', 'បរាជ័យក្នុងការ Reset Password');
-      } finally {
-        setIsSaving(false);
+    const suggestedPwd = generateUnique3DigitPassword(student.class);
+    const nextPwd = window.prompt(
+      `ប្តូរលេខសម្ងាត់ថ្មី (៣ ខ្ទង់) សម្រាប់សិស្ស "${student.name}" (${student.studentId}):\n(រក្សាគណនី និងឯកសារសិស្សនៅដដែល ដោយមិនលុប User ចោលទេ)`,
+      suggestedPwd
+    );
+    if (nextPwd === null) return;
+
+    const cleanPwd = nextPwd.trim();
+    if (!/^\d{3}$/.test(cleanPwd)) {
+      showToast('error', 'លេខសម្ងាត់ថ្មីត្រូវតែជាលេខ ៣ ខ្ទង់ (ឧ. 123)');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const db = await initDB();
+      await db.update('students', student.id, { 
+        status: 'Active', 
+        password: cleanPwd
+      });
+      
+      if (student.pcNumber) {
+        await queuePcSyncTask(
+          db,
+          { ...student, status: 'Active', password: cleanPwd },
+          student.pcNumber,
+          'UPDATE_PASSWORD',
+          targetYear,
+          cleanPwd
+        );
       }
+      
+      window.dispatchEvent(new Event('appDataChanged'));
+      showToast('success', `បានប្តូរលេខសម្ងាត់ថ្មី (${cleanPwd}) សម្រាប់សិស្ស "${student.name}" ជោគជ័យ!`);
+      await fetchData(targetYear);
+    } catch (error) {
+      console.error('Failed to reset password:', error);
+      showToast('error', 'បរាជ័យក្នុងការប្តូរលេខសម្ងាត់');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -404,7 +518,8 @@ const Students = () => {
               type="button"
               disabled={!activeYear || isProcessing || isSaving || classes.length === 0}
               onClick={() => {
-                const initialClass = classes.length > 0 ? classes[0] : null;
+                const targetClsId = filterClass !== 'All' ? filterClass : (classes[0]?.id || '');
+                const initialClass = classes.find(c => c.id === targetClsId) || classes[0] || null;
                 setCurrentStudent({
                   studentId: '', 
                   name: '', 
@@ -412,7 +527,9 @@ const Students = () => {
                   gender: 'M', 
                   class: initialClass?.id || '', 
                   shift: initialClass?.shift || 'Morning', 
-                  status: 'Active'
+                  status: 'Active',
+                  pcNumber: '',
+                  password: ''
                 });
                 setShowModal(true);
               }}
@@ -686,13 +803,34 @@ const Students = () => {
                       </div>
                     </td>
 
-                    {/* PC Number */}
+                    {/* PC Number & Password */}
                     <td className="px-5 py-3.5 text-center">
                       {student.pcNumber ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-blue-50 text-primary border border-blue-200/70 shadow-2xs">
-                          <Monitor size={12} />
-                          <span>{student.pcNumber}</span>
-                        </span>
+                        <div className="inline-flex items-center gap-1.5 flex-wrap justify-center">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-blue-50 text-primary border border-blue-200/70 shadow-2xs">
+                            <Monitor size={12} />
+                            <span>{student.pcNumber}</span>
+                          </span>
+                          {student.password ? (
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-mono font-bold bg-amber-50 text-amber-800 border border-amber-200/70 shadow-2xs"
+                              title="លេខសម្ងាត់ Windows ៣ ខ្ទង់"
+                            >
+                              <KeyRound size={10} className="text-amber-600" />
+                              <span>{student.password}</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void handleResetPassword(student)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 cursor-pointer"
+                              title="ចុចដើម្បីកំណត់លេខសម្ងាត់ ៣ ខ្ទង់"
+                            >
+                              <KeyRound size={10} />
+                              <span>កំណត់កូដ</span>
+                            </button>
+                          )}
+                        </div>
                       ) : (
                         <span className="text-xs text-secondary-text/50">—</span>
                       )}
@@ -892,6 +1030,90 @@ const Students = () => {
             </select>
           </div>
 
+          {/* PC Number & 3-Digit Password (1-Step Lab Account Setup) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-2xl bg-blue-50/50 border border-blue-200/60">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold text-blue-950 uppercase tracking-wider">
+                  តុកុំព្យូទ័រ (PC)
+                </label>
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => {
+                    const freePc = findNextAvailablePc(currentStudent.class);
+                    const autoPwd = (currentStudent.password || '').trim() || generateUnique3DigitPassword(currentStudent.class);
+                    setCurrentStudent({ ...currentStudent, pcNumber: freePc, password: autoPwd });
+                  }}
+                  className="text-[11px] font-bold text-blue-700 hover:text-blue-900 flex items-center gap-1 cursor-pointer"
+                  title="ជ្រើសរើសតុទំនេរ និងបង្កើតលេខកូដស្វ័យប្រវត្តិ"
+                >
+                  <Sparkles size={12} />
+                  <span>ជ្រើសតុទំនេរ</span>
+                </button>
+              </div>
+              <select
+                className="block w-full rounded-xl border border-border bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 text-sm py-2.5 px-3 font-bold transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
+                value={normalizePcNumber(currentStudent.pcNumber || '') || ''}
+                onChange={(e) => {
+                  const nextPc = e.target.value;
+                  const nextPwd = nextPc && !(currentStudent.password || '').trim()
+                    ? generateUnique3DigitPassword(currentStudent.class)
+                    : currentStudent.password;
+                  setCurrentStudent({ ...currentStudent, pcNumber: nextPc || undefined, password: nextPwd });
+                }}
+                disabled={isSaving}
+              >
+                <option value="">មិនទាន់កំណត់តុ (Unassigned)</option>
+                {Array.from({ length: 60 }, (_, idx) => {
+                  const pcCode = `PC-${String(idx + 1).padStart(2, '0')}`;
+                  const occupant = students.find(
+                    s => s.class === currentStudent.class && s.id !== currentStudent.id && normalizePcNumber(s.pcNumber || '') === pcCode
+                  );
+                  return (
+                    <option key={pcCode} value={pcCode}>
+                      {pcCode}{occupant ? ` (មាន៖ ${occupant.name})` : ' (ទំនេរ)'}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold text-blue-950 uppercase tracking-wider">
+                  លេខសម្ងាត់ (៣ ខ្ទង់)
+                </label>
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => {
+                    setCurrentStudent({
+                      ...currentStudent,
+                      password: generateUnique3DigitPassword(currentStudent.class)
+                    });
+                  }}
+                  className="text-[11px] font-bold text-amber-700 hover:text-amber-900 flex items-center gap-1 cursor-pointer"
+                  title="បង្កើតលេខសម្ងាត់ ៣ ខ្ទង់ស្វ័យប្រវត្តិ"
+                >
+                  <KeyRound size={12} />
+                  <span>បង្កើតស្វ័យប្រវត្តិ</span>
+                </button>
+              </div>
+              <Input
+                value={currentStudent.password || ''}
+                maxLength={3}
+                onChange={(e) => {
+                  const digitsOnly = e.target.value.replace(/\D/g, '').slice(0, 3);
+                  setCurrentStudent({ ...currentStudent, password: digitsOnly });
+                }}
+                placeholder="ឧ. 123"
+                disabled={isSaving}
+                className="rounded-xl font-mono font-bold tracking-widest text-center bg-white"
+              />
+            </div>
+          </div>
+
           {/* Status Select */}
           <div>
             <label className="block text-xs font-bold text-secondary-text uppercase tracking-wider mb-1.5">
@@ -951,8 +1173,11 @@ const Students = () => {
                 <strong className="text-main-text">{getClassName(selectedDetailStudent.class)} ({translateShift(selectedDetailStudent.shift)})</strong>
               </div>
               <div className="p-3 rounded-xl bg-background border border-border/70">
-                <span className="text-secondary-text block mb-1">កុំព្យូទ័រអង្គុយ</span>
-                <strong className="text-main-text">{selectedDetailStudent.pcNumber || 'មិនទាន់មានតុ'}</strong>
+                <span className="text-secondary-text block mb-1">កុំព្យូទ័រអង្គុយ & លេខសម្ងាត់</span>
+                <strong className="text-main-text">
+                  {selectedDetailStudent.pcNumber || 'មិនទាន់មានតុ'}
+                  {selectedDetailStudent.password ? ` • 🔑 ${selectedDetailStudent.password}` : ''}
+                </strong>
               </div>
               <div className="p-3 rounded-xl bg-background border border-border/70">
                 <span className="text-secondary-text block mb-1">ស្ថានភាពគណនី</span>

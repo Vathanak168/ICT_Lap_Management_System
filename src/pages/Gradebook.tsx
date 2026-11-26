@@ -1,13 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { Save, Download, Lock, Unlock, Edit, X, Globe, Languages, Settings, Award, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { initDB } from '../store/db';
-import type { Student, ClassRecord, GradeRecord } from '../store/db';
+import type { Student, ClassRecord } from '../store/db';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import './Gradebook.css';
 import { translateKhmerToEnglish } from '../utils/khmerTranslator';
 import { useAuth } from '../contexts/AuthContext';
 import { compareKhmer, compareStudentsByKhmerName } from '../utils/khmerSort';
+import {
+  buildGradebookSavePlan,
+  selectGradebookScopeStudents,
+} from '../lib/gradebookPlan';
 
 interface StudentRow extends Student {
   practice: number | null;
@@ -20,6 +24,9 @@ interface StudentRow extends Student {
   effectiveBank: number;
   total: number;
   rank: number;
+  gradeClassId: string;
+  isHistoricalOnly?: boolean;
+  historicalReason?: 'transferred' | 'inactive';
 }
 
 const Gradebook = () => {
@@ -93,11 +100,12 @@ const Gradebook = () => {
   const [bankNote, setBankNote] = useState('');
 
   const calculateRanks = (rows: StudentRow[]): StudentRow[] => {
-    // Group rows by class so each class has its own isolated ranking 1, 2, 3...
+    // Group rows by gradeClassId so each class has its own isolated ranking 1, 2, 3...
     const byClass: Record<string, StudentRow[]> = {};
     for (const row of rows) {
-      if (!byClass[row.class]) byClass[row.class] = [];
-      byClass[row.class].push({ ...row });
+      const groupKey = row.gradeClassId || row.class;
+      if (!byClass[groupKey]) byClass[groupKey] = [];
+      byClass[groupKey].push({ ...row });
     }
 
     const allRanked: StudentRow[] = [];
@@ -141,6 +149,12 @@ const Gradebook = () => {
     const actualExam = config.exam > 0 ? (updated.exam || 0) : 0;
     const rawBase = actualPractice + actualBook + actualExam;
     const currentMax = (config.practice || 0) + (config.book || 0) + (config.exam || 0);
+
+    if (updated.isHistoricalOnly) {
+      const savedAdj = updated.adjustment || 0;
+      updated.total = hasAnyScore ? Math.min(currentMax, Math.max(0, rawBase + savedAdj)) : 0;
+      return updated;
+    }
     
     let autoAdj = 0;
     if (hasAnyScore) {
@@ -239,7 +253,11 @@ const Gradebook = () => {
     const loadData = async () => {
       try {
         const db = await initDB();
-        const allClasses = await db.getAll('classes', activeYear);
+        const [allClasses, allYearStudents, allYearGrades] = await Promise.all([
+          db.getAll('classes', activeYear),
+          db.getAll('students', activeYear),
+          db.getAll('grades', activeYear),
+        ]);
         const targetClass = selectedClass;
         const currentClassObj = allClasses.find(c => c.id === targetClass);
         
@@ -248,38 +266,28 @@ const Gradebook = () => {
           classesToFetch = Array.from(new Set([targetClass, ...currentClassObj.linkedClassIds]));
         }
 
-        // Load students concurrently. FIXED: use 'class' index instead of 'class_id' for students table
-        const studentGroups = await Promise.all(
-          classesToFetch.map(cid => db.getAllFromIndex('students', 'class', cid, activeYear))
-        );
-        const studentsToFetch = studentGroups.flat().filter(s => s.status === 'Active');
-        studentsToFetch.sort(compareStudentsByKhmerName);
+        const {
+          activeStudents,
+          historicalRowsMeta,
+          scoresLookup,
+        } = selectGradebookScopeStudents({
+          allYearStudents,
+          allYearGrades,
+          classesToFetch,
+          month: currentMonth,
+          gradeType: currentGradeType,
+        });
 
-        // Load grades concurrently
-        const gradeRecords = await Promise.all(
-          classesToFetch.map(cid => db.getAllFromIndex('grades', 'class_id', cid, activeYear))
-        );
-        const allGrades = gradeRecords.flat().filter(g => g.month === currentMonth && g.type === currentGradeType);
+        const studentsToFetch = [...activeStudents].sort(compareStudentsByKhmerName);
 
         if (requestId !== loadDataRequestRef.current) return;
 
-        // Build a lookup dictionary for fast access — preserve first-seen values per student
-        const scoresLookup: Record<string, {
-          practice?: number | null;
-          book?: number | null;
-          exam?: number | null;
-          adjustment?: number | null;
-          adjustmentNote?: string;
-        }> = {};
-        allGrades.forEach(g => {
-          for (const [studentId, scores] of Object.entries(g.scores || {})) {
-            if (!scoresLookup[studentId]) {
-              scoresLookup[studentId] = scores as any;
-            }
-          }
-        });
-
-        const rows: StudentRow[] = studentsToFetch.map((s) => {
+        const buildRow = (
+          s: Student,
+          gradeClassId: string,
+          isHistoricalOnly = false,
+          historicalReason?: 'transferred' | 'inactive'
+        ): StudentRow => {
           const sScores = scoresLookup[s.id] || {};
           const adjustment = sScores.adjustment ?? null;
           const adjustmentNote = sScores.adjustmentNote ?? '';
@@ -304,10 +312,20 @@ const Gradebook = () => {
             originalPointsBalance: currentBank,
             effectiveBank,
             total: 0,
-            rank: 0
+            rank: 0,
+            gradeClassId,
+            isHistoricalOnly,
+            historicalReason,
           };
           return recalculateRow(row, gradeConfig);
-        });
+        };
+
+        const rows: StudentRow[] = [
+          ...studentsToFetch.map(s => buildRow(s, s.class, false)),
+          ...historicalRowsMeta.map(({ student: s, gradeClassId, reason }) =>
+            buildRow(s, gradeClassId, true, reason)
+          ),
+        ];
         
         setAllScopeStudents(calculateRanks(rows));
         setHasChanges(false);
@@ -366,154 +384,65 @@ const Gradebook = () => {
     // Lock the context of the save operation
     const targetYear = activeYear;
     const targetClass = selectedClass;
+    const targetMonth = currentMonth;
     
     setIsSaving(true);
     try {
       const db = await initDB();
 
-      // 1. Group scores by classId to save one GradeRecord per class
-      const scoresByClass: Record<string, Record<string, {
-        practice: number | null;
-        book: number | null;
-        exam: number | null;
-        adjustment: number | null;
-        adjustmentNote: string;
-      }>> = {};
-      
-      const savingStudentIds = new Set<string>();
-      allScopeStudents.forEach(s => {
-        if (!scoresByClass[s.class]) {
-          scoresByClass[s.class] = {};
-        }
-        savingStudentIds.add(s.id);
-        scoresByClass[s.class][s.id] = {
-          practice: s.practice,
-          book: s.book,
-          exam: s.exam,
-          adjustment: s.adjustment,
-          adjustmentNote: s.adjustmentNote || ''
-        };
-      });
-
-      const classIdsToSave = Object.keys(scoresByClass);
-      if (classIdsToSave.length === 0) {
+      const editableStudents = allScopeStudents.filter(s => !s.isHistoricalOnly);
+      if (editableStudents.length === 0) {
         setIsSaving(false);
         return;
       }
 
-      // 2. Fetch all monthly grade records for the active branch & academic year
-      // This is crucial to detect duplicate records or cross-class student score collisions!
-      let monthlyGrades: GradeRecord[] = [];
-      try {
-        const allYearGrades = await db.getAll('grades', targetYear);
-        monthlyGrades = allYearGrades.filter(
-          g => g.month === currentMonth && g.type === currentGradeType
-        );
-      } catch (fetchErr) {
-        console.warn('Could not fetch all grades for year, falling back to class index:', fetchErr);
-        const fallbackRecords = await Promise.all(
-          classIdsToSave.map(cid => 
-            db.getAllFromIndex('grades', 'class_id', cid, targetYear).catch(() => [])
-          )
-        );
-        monthlyGrades = fallbackRecords.flat().filter(
-          g => g.month === currentMonth && g.type === currentGradeType
-        );
-      }
+      const [allYearGrades, allYearStudents] = await Promise.all([
+        db.getAll('grades', targetYear),
+        db.getAll('students', targetYear),
+      ]);
 
-      // 3. Prevent DUPLICATE_MONTHLY_STUDENT_SCORE:
-      // If any of the students being saved are currently recorded in other class records for this same month,
-      // remove them from those other class records!
-      const otherClassRecords = monthlyGrades.filter(g => !classIdsToSave.includes(g.classId));
-      for (const otherRecord of otherClassRecords) {
-        let hasConflict = false;
-        if (otherRecord.scores) {
-          for (const sid of savingStudentIds) {
-            if (Object.prototype.hasOwnProperty.call(otherRecord.scores, sid)) {
-              delete otherRecord.scores[sid];
-              hasConflict = true;
-            }
-          }
-        }
-        if (hasConflict) {
-          console.warn(`Cleaned up conflicting student scores from old class record (${otherRecord.classId})`);
-          try {
-            await db.put('grades', otherRecord);
-          } catch (putErr) {
-            console.warn(`Failed to clean up old class record ${otherRecord.id}:`, putErr);
-          }
-        }
-      }
-
-      // 4. For each class being saved:
-      // Check for duplicate records for the same classId, and merge them
-      const recordsToSave: GradeRecord[] = [];
-
-      for (const cid of classIdsToSave) {
-        const matchingRecords = monthlyGrades.filter(g => g.classId === cid);
-        let primaryRecord: GradeRecord;
-
-        if (matchingRecords.length > 0) {
-          primaryRecord = matchingRecords[0];
-          // If there are duplicate records for this same class and month, merge into primary and delete extras!
-          if (matchingRecords.length > 1) {
-            console.warn(`Found ${matchingRecords.length} duplicate records for class ${cid}. Merging into ${primaryRecord.id}...`);
-            for (let i = 1; i < matchingRecords.length; i++) {
-              const dup = matchingRecords[i];
-              primaryRecord.scores = { ...dup.scores, ...primaryRecord.scores };
-              try {
-                await db.delete('grades', dup.id);
-              } catch (delErr) {
-                console.warn(`Could not delete duplicate grade record ${dup.id}:`, delErr);
-              }
-            }
-          }
-        } else {
-          primaryRecord = {
-            id: crypto.randomUUID(),
-            classId: cid,
-            shift: classes.find(c => c.id === cid)?.shift || 'Morning',
-            academicYear: targetYear,
-            month: currentMonth,
-            type: 'Monthly',
-            scores: {}
-          };
-        }
-
-        // Clean out any scores in primaryRecord for students that belong to other classes in this save batch
-        const existingScores = { ...(primaryRecord.scores || {}) };
-        for (const otherCid of classIdsToSave) {
-          if (otherCid !== cid) {
-            for (const otherSid of Object.keys(scoresByClass[otherCid])) {
-              delete existingScores[otherSid];
-            }
-          }
-        }
-
-        // Merge the new scores
-        const mergedScores = { ...existingScores, ...scoresByClass[cid] };
-
-        recordsToSave.push({
-          id: primaryRecord.id,
-          classId: cid,
-          shift: classes.find(c => c.id === cid)?.shift || primaryRecord.shift || 'Morning',
-          academicYear: targetYear,
-          month: currentMonth,
-          type: 'Monthly',
-          scores: mergedScores as any
-        });
-      }
+      const {
+        otherClassCleanups,
+        duplicateIdsToDelete,
+        preCleanOps,
+        recordsToSave,
+      } = buildGradebookSavePlan({
+        editableStudents,
+        allYearGrades,
+        allYearStudents,
+        classes,
+        academicYear: targetYear,
+        month: targetMonth,
+        gradeType: currentGradeType,
+      });
 
       // Confirm that the user hasn't switched year/class during the async operation
       if (activeYear !== targetYear || selectedClass !== targetClass) {
         console.warn('Year or class changed during save operation, but saving correct target context.');
       }
 
-      // 5. Save all prepared grade records
-      await db.putMany('grades', recordsToSave);
+      // Pass 0: clean conflicting/invalid keys from other classes before saving current scope
+      for (const cleanupRecord of otherClassCleanups) {
+        await db.put('grades', cleanupRecord);
+      }
+
+      // Delete merged duplicate grade records for classes in scope
+      for (const dupId of duplicateIdsToDelete) {
+        await db.delete('grades', dupId);
+      }
+
+      // Pass 1: strip transferred/stale keys from existing in-scope DB rows before adding them elsewhere
+      for (const preCleanRecord of preCleanOps) {
+        await db.put('grades', preCleanRecord);
+      }
+
+      // Pass 2: save final prepared grade records sequentially so each row commits cleanly
+      for (const record of recordsToSave) {
+        await db.put('grades', record);
+      }
       
-      // 6. Also update student point balances in the students table
-      const studentsToUpdate = allScopeStudents.filter(s => s.pointsBalance !== s.originalPointsBalance);
+      // 7. Also update student point balances in the students table (active in-scope students only)
+      const studentsToUpdate = editableStudents.filter(s => s.pointsBalance !== s.originalPointsBalance);
       if (studentsToUpdate.length > 0) {
         for (const s of studentsToUpdate) {
           try {
@@ -625,7 +554,8 @@ const Gradebook = () => {
     }
   };
 
-  const displayedStudents = allScopeStudents.filter(s => s.class === (selectedClass || classes[0]?.id));
+  const displayedStudents = allScopeStudents.filter(s => s.gradeClassId === (selectedClass || classes[0]?.id));
+  const editableDisplayedStudents = displayedStudents.filter(s => !s.isHistoricalOnly);
   const gradedStudents = displayedStudents.filter(s => s.practice !== null || s.book !== null || s.exam !== null);
   const gradedStudentsCount = gradedStudents.length;
   const averageScore = gradedStudentsCount > 0 
@@ -889,14 +819,14 @@ const Gradebook = () => {
               type="button"
               className="inline-flex items-center gap-1.5 rounded-xl bg-amber-50 hover:bg-amber-600 text-amber-800 hover:text-white border border-amber-200/80 px-3.5 py-2.5 text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer" 
               onClick={() => {
-                if (displayedStudents.length > 0) {
-                  setBankStudentId(displayedStudents[0].id);
+                if (editableDisplayedStudents.length > 0) {
+                  setBankStudentId(editableDisplayedStudents[0].id);
                   setBankPoints('');
                   setBankNote('');
                   setShowBankModal(true);
                 }
               }}
-              disabled={isLoading || isSaving || displayedStudents.length === 0}
+              disabled={isLoading || isSaving || editableDisplayedStudents.length === 0}
             >
               <Edit size={14} />
               <span>ពិន្ទុបន្ថែម</span>
@@ -976,6 +906,11 @@ const Gradebook = () => {
                     <td className="border-b border-r border-border print:border-black px-2 py-1.5 print:py-1 text-center text-secondary-text print:text-black text-xs print:text-base">{index + 1}</td>
                     <td className="border-b border-r border-border print:border-black px-3.5 py-1.5 print:py-1 font-medium print:font-semibold min-w-[180px] leading-normal text-xs print:text-base">
                       {language === 'KH' ? student.name : (student.englishName || student.name)}
+                      {student.isHistoricalOnly && (
+                        <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 print:hidden">
+                          {student.historicalReason === 'transferred' ? 'បានប្តូរថ្នាក់' : 'អសកម្ម'}
+                        </span>
+                      )}
                       {showAdjustment && student.adjustment !== null && student.adjustment !== 0 && (
                         <span className="text-blue-500 font-bold ml-2 text-xs">
                           ({student.adjustment > 0 ? `+${student.adjustment}` : student.adjustment})
@@ -988,30 +923,30 @@ const Gradebook = () => {
                     {showPractice && gradeConfig.practice > 0 && <td className="border-b border-r border-border print:border-black p-0 relative">
                       <input 
                         type="number" 
-                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold" 
+                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold disabled:opacity-60" 
                         value={student.practice ?? ''} 
                         onChange={(e) => handleGradeChange(student.id, 'practice', e.target.value)}
-                        disabled={isLocked || isLoading}
+                        disabled={isLocked || isLoading || Boolean(student.isHistoricalOnly)}
                         min="0" max={gradeConfig.practice}
                       />
                     </td>}
                     {showBook && gradeConfig.book > 0 && <td className="border-b border-r border-border print:border-black p-0 relative">
                       <input 
                         type="number" 
-                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold" 
+                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold disabled:opacity-60" 
                         value={student.book ?? ''} 
                         onChange={(e) => handleGradeChange(student.id, 'book', e.target.value)}
-                        disabled={isLocked || isLoading}
+                        disabled={isLocked || isLoading || Boolean(student.isHistoricalOnly)}
                         min="0" max={gradeConfig.book}
                       />
                     </td>}
                     {showExam && gradeConfig.exam > 0 && <td className="border-b border-r border-border print:border-black p-0 relative">
                       <input 
                         type="number" 
-                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold" 
+                        className="w-full h-full min-h-[36px] p-1 text-center bg-transparent outline-none focus:bg-white focus:ring-2 focus:ring-inset focus:ring-primary print:text-black print:min-h-0 print:h-[30px] font-khmer text-xs sm:text-sm print:text-base print:font-medium font-semibold disabled:opacity-60" 
                         value={student.exam ?? ''} 
                         onChange={(e) => handleGradeChange(student.id, 'exam', e.target.value)}
-                        disabled={isLocked || isLoading}
+                        disabled={isLocked || isLoading || Boolean(student.isHistoricalOnly)}
                         min="0" max={gradeConfig.exam}
                       />
                     </td>}
@@ -1141,7 +1076,7 @@ const Gradebook = () => {
                     value={bankStudentId}
                     onChange={(e) => setBankStudentId(e.target.value)}
                   >
-                    {displayedStudents.map(s => (
+                    {editableDisplayedStudents.map(s => (
                       <option key={s.id} value={s.id}>
                         {language === 'KH' ? s.name : (s.englishName || s.name)}
                       </option>

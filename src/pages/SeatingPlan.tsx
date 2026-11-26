@@ -245,43 +245,20 @@ const SeatingPlan = () => {
         });
       }
 
-      // Auto-heal any students assigned to desks that no longer exist in this room layout
+      // Preserve all assigned student PCs in the desk list without mutating DB on page load
       const gridPcSet = new Set(pcNumbersList);
-      const orphanedStudents = activeStudents.filter(s => s.pcNumber && !gridPcSet.has(s.pcNumber));
-      if (orphanedStudents.length > 0) {
-        db.putMany('students', orphanedStudents.map(s => ({ ...s, pcNumber: null }))).catch(err => {
-          console.warn('Failed to auto-heal orphaned students:', err);
-        });
-        activeStudents.forEach(s => {
-          if (s.pcNumber && !gridPcSet.has(s.pcNumber)) {
-            s.pcNumber = undefined;
-          }
-        });
-      }
+      activeStudents.forEach(s => {
+        if (s.pcNumber && !gridPcSet.has(s.pcNumber)) {
+          gridPcSet.add(s.pcNumber);
+          pcNumbersList.push(s.pcNumber);
+        }
+      });
 
       const issuePcNumbers = new Set(
         issueRows
           .filter(issue => isPcIssueActive(issue.status))
           .map(issue => issue.pcNumber)
       );
-
-      // Auto-heal / unassign any active student assigned to a broken PC in the ICT lab
-      const brokenAssignedStudents = activeStudents.filter(s => s.pcNumber && issuePcNumbers.has(s.pcNumber));
-      if (brokenAssignedStudents.length > 0) {
-        const studentUpdates: any[] = [];
-        const syncPromises: Promise<any>[] = [];
-        for (const s of brokenAssignedStudents) {
-          syncPromises.push(queuePcSyncTask(db, s, s.pcNumber!, 'REMOVE', targetYear));
-          studentUpdates.push({ ...s, pcNumber: null });
-        }
-        db.putMany('students', studentUpdates).catch(err => console.warn('Failed to unassign students on broken PCs:', err));
-        Promise.all(syncPromises).catch(err => console.warn('Failed sync task:', err));
-        activeStudents.forEach(s => {
-          if (s.pcNumber && issuePcNumbers.has(s.pcNumber)) {
-            s.pcNumber = undefined;
-          }
-        });
-      }
 
       setStudents(activeStudents);
       setPcIssues(issueRows);

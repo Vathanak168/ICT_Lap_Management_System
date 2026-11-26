@@ -13,7 +13,7 @@ import {
   Sparkles,
   Printer
 } from 'lucide-react';
-import { initDB, queuePcSyncTask } from '../store/db';
+import { initDB } from '../store/db';
 import type { Student, ClassRecord } from '../store/db';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -210,12 +210,9 @@ const ShiftSwitching = () => {
           shift: targetClass.shift
         };
 
-        // If there was a PC conflict with a student in the target class, clear PC and queue REMOVE task
+        // Do not queue a destructive REMOVE task on shift switch so the student's Windows account & files remain intact
         if (hasPcConflict) {
           updates.pcNumber = null as any;
-          if (student.pcNumber) {
-            await queuePcSyncTask(db, student, student.pcNumber, 'REMOVE', targetYear);
-          }
         }
 
         // Clean up student from old class seating plans

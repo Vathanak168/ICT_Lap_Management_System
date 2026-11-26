@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizePcNumber, receiptTaskIds, buildSyncPlan } from '../src/lib/pcSyncPlan.ts';
+import { getSetupScript, getGlobalSyncScript } from '../src/lib/scripts/labScripts.ts';
 
 // Mock in-memory database simulating db.put, db.get, db.getAll, db.delete, db.deleteMany
 class MockDb {
@@ -332,4 +333,69 @@ test('Physical PC Removal - Once synced, moving student queues real REMOVE task 
 
   const pc02Task = pendingTasks.find(t => t.pcNumber === 'PC-02');
   assert.equal(pc02Task.action, 'ADD', 'Must queue ADD on new PC');
+});
+
+test('Non-Destructive Password Reset - Resetting password queues UPDATE_PASSWORD (never REMOVE) and preserves account', async () => {
+  const db = new MockDb();
+  const year = '2026-2027';
+  const student = { id: 's1', studentId: 'B001', name: 'Kim', password: '123', pcNumber: 'PC-01', status: 'Active', class: '8A', academicYear: year };
+  await db.put('students', student);
+
+  // Simulate already synced account on PC-01
+  await db.put('pcSyncTasks', {
+    id: 't-init',
+    pcNumber: 'PC-01',
+    studentId: 'B001',
+    studentName: 'Kim',
+    action: 'ADD',
+    password: '123',
+    status: 'COMPLETED',
+    academicYear: year,
+  });
+
+  // Reset password to '789' using non-destructive flow
+  const resetStudent = { ...student, status: 'Active', password: '789' };
+  await db.put('students', resetStudent);
+  await queuePcSyncTask(db, resetStudent, resetStudent.pcNumber, 'UPDATE_PASSWORD', year, '789');
+
+  const pendingTasks = (await db.getAll('pcSyncTasks', year)).filter(t => t.status === 'PENDING');
+  assert.equal(pendingTasks.length, 1);
+  assert.equal(pendingTasks[0].action, 'UPDATE_PASSWORD', 'Password reset must queue UPDATE_PASSWORD, never REMOVE');
+  assert.equal(pendingTasks[0].password, '789');
+
+  // Verify buildSyncPlan keeps student in accounts and NOT in removeStudentIds
+  const plan = buildSyncPlan([resetStudent], pendingTasks, { selectedClass: 'ALL', selectedDesk: 'ALL', searchQuery: '' }, 'PENDING');
+  assert.equal(plan.targets.length, 1);
+  assert.equal(plan.targets[0].removeStudentIds.length, 0, 'Reset password must never add student to removeStudentIds');
+  assert.equal(plan.targets[0].accounts.length, 1);
+  assert.equal(plan.targets[0].accounts[0].password, '789');
+});
+
+test('Persistent Student Data Vault - Setup & GlobalSync scripts redirect folders to D:\\ICTLab_StudentData and back up profiles before removal', () => {
+  const encode = obj => Buffer.from(JSON.stringify(obj)).toString('base64');
+  const setupScript = getSetupScript(encode({
+    version: 3,
+    labId: 'lab-1',
+    labName: 'ICT Lab',
+    usbLabel: 'ICTADMIN',
+    syncToken: 'token-1',
+    syncFolderName: 'ICTLabSync',
+    brokenPcs: [],
+    policies: { blockBrowserGames: true },
+  }));
+  const globalSyncScript = getGlobalSyncScript(encode({
+    version: 3,
+    payloadId: '0b157d46-b0b5-42cf-a5fb-695bd3153749',
+    labId: 'lab-1',
+    academicYear: '2026-2027',
+    mode: 'DELTA',
+    deleteMissingUsers: false,
+    targets: [],
+  }), 'token-1');
+
+  assert.match(setupScript, /ICTLab_StudentData/, 'Setup script must initialize ICTLab_StudentData vault');
+  assert.match(setupScript, /User Shell Folders/, 'LogonScript must redirect User Shell Folders to Student Vault');
+  assert.match(setupScript, /powercfg\.exe \/h off/, 'Setup script must reclaim hibernation space when C: is low');
+  assert.match(globalSyncScript, /Save-ICTUserProfileToVault/, 'GlobalSync must preserve profile files to vault before removal');
+  assert.match(globalSyncScript, /Initialize-ICTStudentVault/, 'GlobalSync must initialize student vault on account creation');
 });

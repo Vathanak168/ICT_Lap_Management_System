@@ -1,5 +1,5 @@
-import { initDB } from '../../../store/db';
-import type { ClassRecord, PcSyncTask, Student } from '../../../store/db';
+import { initDB, queuePcSyncTask } from '../../../store/db';
+import type { ClassRecord, Student } from '../../../store/db';
 import { haveSameGrade } from '../../../utils/studentPlacement';
 
 const resolveClass = async (
@@ -19,32 +19,6 @@ const resolveClass = async (
     throw new Error(`រកមិនឃើញថ្នាក់ "${classReference}" ក្នុងឆ្នាំសិក្សា ${academicYear} ទេ`);
   }
   return classRecord;
-};
-
-const queuePcSyncTask = async (
-  db: any,
-  student: Student,
-  action: PcSyncTask['action'],
-  academicYear: string,
-) => {
-  if (!student.pcNumber) return;
-  const task: PcSyncTask = {
-    id: crypto.randomUUID(),
-    pcNumber: student.pcNumber,
-    studentId: student.studentId,
-    studentName: student.name,
-    action,
-    password: null,
-    status: 'PENDING',
-    createdAt: new Date().toISOString(),
-    branch: '',
-    academicYear,
-  };
-  try {
-    await db.put('pcSyncTasks', task);
-  } catch (error) {
-    console.error('Failed to queue PC Sync task:', error);
-  }
 };
 
 export const handleStudentAction = async (action: string, data: any, activeYear: string) => {
@@ -127,9 +101,11 @@ export const handleStudentAction = async (action: string, data: any, activeYear:
     if (studentToUpdate.pcNumber) {
       await queuePcSyncTask(
         db,
-        { ...studentToUpdate, name: updateData.name },
+        { ...studentToUpdate, name: updateData.name } as Student,
+        studentToUpdate.pcNumber,
         classChanged ? 'REMOVE' : 'ADD',
         targetYear,
+        classChanged ? null : (studentToUpdate.password ?? null),
       );
     }
     return true;
@@ -145,23 +121,14 @@ export const handleStudentAction = async (action: string, data: any, activeYear:
     
     // Add PC sync task if assigned
     if (studentToDelete.pcNumber) {
-      try {
-        const newTask = {
-          id: crypto.randomUUID(),
-          pcNumber: studentToDelete.pcNumber,
-          studentId: studentToDelete.studentId,
-          studentName: studentToDelete.name,
-          action: 'REMOVE' as const,
-          password: null,
-          status: 'PENDING' as const,
-          createdAt: new Date().toISOString(),
-          branch: '', 
-          academicYear: studentToDelete.academicYear || targetYear
-        };
-        await db.put('pcSyncTasks', newTask);
-      } catch (err) {
-        console.error('Failed to create pc sync task', err);
-      }
+      await queuePcSyncTask(
+        db,
+        studentToDelete,
+        studentToDelete.pcNumber,
+        'REMOVE',
+        studentToDelete.academicYear || targetYear,
+        null,
+      );
     }
 
     // Cascade: clean attendance records
@@ -208,6 +175,19 @@ export const handleStudentAction = async (action: string, data: any, activeYear:
       console.warn('Failed to clean book tracking for deleted student:', err);
     }
     
+    // Cascade: clean grade scores so no orphaned student UUID triggers INVALID_GRADE_STUDENT_KEY
+    try {
+      const allGrades = await db.getAll('grades', targetYear);
+      for (const grade of allGrades) {
+        if (grade.scores && Object.prototype.hasOwnProperty.call(grade.scores, id)) {
+          const { [id]: _, ...cleanScores } = grade.scores;
+          await db.update('grades', grade.id, { scores: cleanScores });
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to clean grades for deleted student:', err);
+    }
+
     await db.delete('students', studentToDelete.id);
     return true;
   }

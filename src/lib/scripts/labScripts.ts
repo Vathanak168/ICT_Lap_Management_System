@@ -807,8 +807,28 @@ try {
     Write-Host "       Note: Game policy configuration encountered non-fatal notice: $($_.Exception.Message)" -ForegroundColor DarkGray
 }
 
-# 4.1 Install Logon Script for USB Blocking and Game Restrictions
-Write-Host "[5/7] Configuring Student USB Blocking & Offline Game Lockdown..." -ForegroundColor Yellow
+# 4.1 Free Up Critical OS Disk Space & Initialize Student Data Vault on D: Drive
+Write-Host "[5/7] Optimizing C: Disk Space & Configuring Student Data Vault..." -ForegroundColor Yellow
+try {
+    $OsDisk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$env:SystemDrive'" -ErrorAction SilentlyContinue
+    if ($null -ne $OsDisk -and ($OsDisk.FreeSpace / 1GB) -lt 15) {
+        Write-Host ("       Low disk space detected on {0} ({1:N2} GB free). Reclaiming space..." -f $env:SystemDrive, ($OsDisk.FreeSpace / 1GB)) -ForegroundColor Cyan
+        & powercfg.exe /h off *>$null
+        Get-ChildItem -Path "$env:SystemDrive\" -Filter "rtr*.tmp" -File -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Path "$env:WINDIR\Temp" -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} catch { }
+
+try {
+    $VaultBase = if (Test-Path -LiteralPath "D:\") { "D:\ICTLab_StudentData" } else { "C:\ICTLab_StudentData" }
+    if (-not (Test-Path -LiteralPath $VaultBase)) {
+        New-Item -ItemType Directory -Path $VaultBase -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    & icacls.exe "$VaultBase" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(RX)" *>$null
+    Write-Host "       Student Data Vault ready at: $VaultBase" -ForegroundColor Green
+} catch { }
+
+# 4.2 Install Logon Script for USB Blocking, Game Restrictions & D: Drive Folder Redirection
 $LogonScriptPath = "$ICTRoot\\LogonScript.ps1"
 $LogonScriptCode = @'
 $StudentGroup = "ICTLabStudents"
@@ -832,12 +852,59 @@ if (-not $IsStudent) {
     } catch { }
 }
 
-$RegistryPath = "HKCU:\\SOFTWARE\\Policies\\Microsoft\\Windows\\RemovableStorageDevices"
-$ExplorerPolicyPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer"
-$DisallowRunPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\DisallowRun"
+$RegistryPath = "HKCU:\SOFTWARE\Policies\Microsoft\Windows\RemovableStorageDevices"
+$ExplorerPolicyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+$DisallowRunPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun"
 
 if ($IsStudent) {
-    # 1. Block USB Flash drives
+    # 1. Redirect Student Desktop, Documents, Downloads, Pictures to Persistent Vault (D:\ICTLab_StudentData\<Username>)
+    try {
+        $VaultRoot = if (Test-Path -LiteralPath "D:\") { "D:\ICTLab_StudentData" } else { "C:\ICTLab_StudentData" }
+        $StudentVault = Join-Path $VaultRoot $env:USERNAME
+        $SubFolders = @("Desktop", "Documents", "Downloads", "Pictures")
+        foreach ($Sub in $SubFolders) {
+            $TargetDir = Join-Path $StudentVault $Sub
+            if (-not (Test-Path -LiteralPath $TargetDir)) {
+                New-Item -ItemType Directory -Path $TargetDir -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+            # Migrate any files currently in C:\Users\<Username>\<Sub> before redirection
+            $LocalDir = Join-Path $env:USERPROFILE $Sub
+            if ((Test-Path -LiteralPath $LocalDir) -and ($LocalDir -ne $TargetDir)) {
+                Get-ChildItem -LiteralPath $LocalDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                    $DestItem = Join-Path $TargetDir $_.Name
+                    if (-not (Test-Path -LiteralPath $DestItem)) {
+                        Move-Item -LiteralPath $_.FullName -Destination $TargetDir -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+        }
+
+        $UserShellPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+        $ShellPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+        $FolderMap = @{
+            "Desktop"                              = (Join-Path $StudentVault "Desktop")
+            "Personal"                             = (Join-Path $StudentVault "Documents")
+            "{374DE290-123F-4565-9164-39C4925E467B}" = (Join-Path $StudentVault "Downloads")
+            "My Pictures"                          = (Join-Path $StudentVault "Pictures")
+        }
+        foreach ($Key in $FolderMap.Keys) {
+            $Val = $FolderMap[$Key]
+            Set-ItemProperty -LiteralPath $UserShellPath -Name $Key -Value $Val -Type ExpandString -Force -ErrorAction SilentlyContinue
+            Set-ItemProperty -LiteralPath $ShellPath -Name $Key -Value $Val -Type String -Force -ErrorAction SilentlyContinue
+        }
+
+        # Create quick-access shortcut on Student Desktop pointing to their Vault folder
+        $DesktopShortcut = Join-Path (Join-Path $StudentVault "Desktop") "ឯកសាររបស់ខ្ញុំ ($env:USERNAME).lnk"
+        if (-not (Test-Path -LiteralPath $DesktopShortcut)) {
+            $WshShell = New-Object -ComObject WScript.Shell
+            $Shortcut = $WshShell.CreateShortcut($DesktopShortcut)
+            $Shortcut.TargetPath = $StudentVault
+            $Shortcut.Description = "ទីតាំងរក្សាទុកឯកសារសុវត្ថិភាពរបស់សិស្ស $env:USERNAME"
+            $Shortcut.Save()
+        }
+    } catch { }
+
+    # 2. Block USB Flash drives
     try {
         if (-not (Test-Path -LiteralPath $RegistryPath)) {
             New-Item -Path $RegistryPath -Force -ErrorAction SilentlyContinue | Out-Null
@@ -845,7 +912,7 @@ if ($IsStudent) {
         Set-ItemProperty -LiteralPath $RegistryPath -Name "Deny_All" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
     } catch { }
 
-    # 2. Block offline card games executables (Solitaire, Spider, FreeCell, Hearts, Minesweeper)
+    # 3. Block offline card games executables (Solitaire, Spider, FreeCell, Hearts, Minesweeper)
     try {
         if (-not (Test-Path -LiteralPath $ExplorerPolicyPath)) {
             New-Item -Path $ExplorerPolicyPath -Force -ErrorAction SilentlyContinue | Out-Null
@@ -863,7 +930,7 @@ if ($IsStudent) {
         }
     } catch { }
 
-    # 3. Terminate any running offline card game processes
+    # 4. Terminate any running offline card game processes
     try {
         Get-Process -Name sol, spider, freecell, mshearts, winmine, Solitaire, FreeCell, SpiderSolitaire -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     } catch { }
@@ -1337,7 +1404,7 @@ if ([string]::IsNullOrWhiteSpace($UsbDrive)) {
         if ($null -ne $Candidate) { $UsbDrive = [string]$Candidate.DeviceID }
     } catch { }
 }
-if (-not [string]::IsNullOrWhiteSpace($UsbDrive) -and $UsbDrive -match '^([A-Za-z]:)') {
+if (-not [string]::IsNullOrWhiteSpace($UsbDrive) -and $UsbDrive -match '^([A-Za-z]:)\\\\?$') {
     $UsbDrive = $Matches[1]
 }
 
@@ -1530,9 +1597,73 @@ $RemovedCount = 0
 $FailCount = 0
 $SkippedCount = 0
 
+$IsProductionLabRun = ($LogDirectory -ieq (Join-Path $env:ProgramData "ICTLab\\Logs"))
+
+function Get-ICTStudentVaultRoot {
+    if (Test-Path -LiteralPath "D:\\") { return "D:\\ICTLab_StudentData" }
+    return "C:\\ICTLab_StudentData"
+}
+
+function Save-ICTUserProfileToVault {
+    param([string]$Username)
+    if (-not $IsProductionLabRun -or [string]::IsNullOrWhiteSpace($Username)) { return }
+    try {
+        $ProfileDir = "C:\\Users\\$Username"
+        if (-not (Test-Path -LiteralPath $ProfileDir)) { return }
+        $VaultRoot = Get-ICTStudentVaultRoot
+        $StudentVault = Join-Path $VaultRoot $Username
+        foreach ($Sub in @("Desktop", "Documents", "Downloads", "Pictures")) {
+            $SourceDir = Join-Path $ProfileDir $Sub
+            $TargetDir = Join-Path $StudentVault $Sub
+            if ((Test-Path -LiteralPath $SourceDir) -and ($SourceDir -ne $TargetDir)) {
+                New-Item -ItemType Directory -Path $TargetDir -Force -ErrorAction SilentlyContinue | Out-Null
+                Get-ChildItem -LiteralPath $SourceDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                    $DestPath = Join-Path $TargetDir $_.Name
+                    if (-not (Test-Path -LiteralPath $DestPath)) {
+                        Copy-Item -LiteralPath $_.FullName -Destination $TargetDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+        }
+    } catch { }
+}
+
+function Initialize-ICTStudentVault {
+    param([string]$Username)
+    if (-not $IsProductionLabRun -or [string]::IsNullOrWhiteSpace($Username)) { return }
+    try {
+        $VaultRoot = Get-ICTStudentVaultRoot
+        if (-not (Test-Path -LiteralPath $VaultRoot)) {
+            New-Item -ItemType Directory -Path $VaultRoot -Force -ErrorAction SilentlyContinue | Out-Null
+            & icacls.exe "$VaultRoot" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(RX)" *>$null
+        }
+        $StudentVault = Join-Path $VaultRoot $Username
+        foreach ($Sub in @("Desktop", "Documents", "Downloads", "Pictures")) {
+            $SubDir = Join-Path $StudentVault $Sub
+            if (-not (Test-Path -LiteralPath $SubDir)) {
+                New-Item -ItemType Directory -Path $SubDir -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+        }
+        & icacls.exe "$StudentVault" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "$($Username):(OI)(CI)M" *>$null
+    } catch { }
+}
+
+if ($IsProductionLabRun) {
+    try {
+        $OsDisk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$env:SystemDrive'" -ErrorAction SilentlyContinue
+        if ($null -ne $OsDisk -and ($OsDisk.FreeSpace / 1GB) -lt 10) {
+            & powercfg.exe /h off *>$null
+            Get-ChildItem -Path "$env:SystemDrive\\" -Filter "rtr*.tmp" -File -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+}
+
 function Remove-ICTUserProfile {
     param([string]$Username, [string]$Sid)
+    if (-not $IsProductionLabRun) { return }
     try {
+        # Always preserve student files in D:\ICTLab_StudentData\<Username> before removing local profile stub
+        Save-ICTUserProfileToVault -Username $Username
         if (-not [string]::IsNullOrWhiteSpace($Sid)) {
             $Profile = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
                 Where-Object { [string]$_.SID -eq $Sid } | Select-Object -First 1
@@ -1641,10 +1772,12 @@ foreach ($Student in $ExpectedStudents) {
         $User = Get-LocalUser -Name $StudentId -ErrorAction SilentlyContinue
 
         if ($null -eq $User) {
+            Remove-ICTUserProfile -Username $StudentId -Sid ""
             New-LocalUser -Name $StudentId -Password $SecurePass -FullName $StudentName -Description $ManagedMarker -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
             Ensure-ICTGroupMember -Group $GroupName -Username $StudentId
             Ensure-ICTGroupMember -Group $BuiltinUsersGroup -Username $StudentId
             Enable-LocalUser -Name $StudentId -ErrorAction Stop
+            Initialize-ICTStudentVault -Username $StudentId
             Set-ICTLoginScreenUserVisibility -Username $StudentId -Visible $true
             Write-SyncLog "[CREATE] $StudentId ($StudentName)"
             Write-SyncLog "[LOGIN] $StudentId enabled, added to built-in Users, and registered for the Windows sign-in screen. Sign out or restart to refresh LogonUI."
@@ -1656,6 +1789,8 @@ foreach ($Student in $ExpectedStudents) {
             Ensure-ICTGroupMember -Group $GroupName -Username $StudentId
             Ensure-ICTGroupMember -Group $BuiltinUsersGroup -Username $StudentId
             Enable-LocalUser -Name $StudentId -ErrorAction Stop
+            Save-ICTUserProfileToVault -Username $StudentId
+            Initialize-ICTStudentVault -Username $StudentId
             Set-ICTLoginScreenUserVisibility -Username $StudentId -Visible $true
             Write-SyncLog "[UPDATE] $StudentId ($StudentName)"
             Write-SyncLog "[LOGIN] $StudentId enabled, added to built-in Users, and registered for the Windows sign-in screen."
